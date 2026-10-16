@@ -1,6 +1,20 @@
-# 鶴読み Tsuruyomi
+<p align="center">
+  <img src="docs/assets/tsuruyomi-icon.png" width="160" height="160" alt="Tsuruyomi Logo">
+</p>
 
-> **Tsuruyomi (鶴読み)** is an ultra-fast, lightweight, native Go backend replacement for [Suwayomi-Server](https://github.com/Suwayomi/Suwayomi-Server) (Tachidesk). It provides 100% API compatibility with the Tachidesk ecosystem, bundled WebUI, native OPDS 1.2 catalog support with page streaming (OPDS-PSE), and high-speed native Go extensions—all while consuming a fraction of the system resources.
+<h1 align="center">鶴読み Tsuruyomi</h1>
+
+<p align="center">
+  <b>Ultra-fast, lightweight native Go backend replacement for Suwayomi-Server (Tachidesk) with OPDS 1.2</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/devil1210/tsuruyomi/releases"><img src="https://img.shields.io/badge/version-v1.0.0-rose?style=flat-square" alt="Version"></a>
+  <a href="https://golang.org"><img src="https://img.shields.io/badge/go-1.24+-00ADD8?style=flat-square&logo=go" alt="Go"></a>
+  <a href="https://github.com/devil1210/tsuruyomi/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="License"></a>
+  <img src="https://img.shields.io/badge/OPDS-1.2%20%2B%20PSE-emerald?style=flat-square" alt="OPDS 1.2">
+  <img src="https://img.shields.io/badge/RAM-~45MB-crimson?style=flat-square" alt="RAM ~45MB">
+</p>
 
 ---
 
