@@ -1,0 +1,3690 @@
+package handlers
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gofiber/fiber/v2"
+
+	"tsuruyomi/internal/config"
+	"tsuruyomi/internal/database"
+	"tsuruyomi/internal/models"
+	"tsuruyomi/internal/sources"
+	"tsuruyomi/internal/util"
+)
+
+// NativeGoExtensionPackages lists extension package names implemented natively in Go
+var NativeGoExtensionPackages = map[string]bool{
+	"eu.kanade.tachiyomi.extension.es.mangamx":              true, // MangaOni
+	"eu.kanade.tachiyomi.extension.es.lectormangalat":        true, // LectorManga.lat
+	"eu.kanade.tachiyomi.extension.all.mangadex":             true, // MangaDex
+	"eu.kanade.tachiyomi.extension.es.uchuujinprojects":      true, // Uchuujin Projects
+	"eu.kanade.tachiyomi.extension.es.shadowmanga":           true, // Shadow Manga
+	"eu.kanade.tachiyomi.extension.es.manhwaweb":             true, // ManhwaWeb
+	"eu.kanade.tachiyomi.extension.es.submanhwa":             true, // Submanhwa
+	"eu.kanade.tachiyomi.extension.es.mangasnosekai":         true, // Mangas No Sekai
+	"eu.kanade.tachiyomi.extension.es.ravenmanga":            true, // RavenManga
+	"eu.kanade.tachiyomi.extension.es.leermanhwas":           true, // LeerManhwas
+	"eu.kanade.tachiyomi.extension.es.bokugentranslation":     true, // BokugenTranslation
+	"eu.kanade.tachiyomi.extension.es.apollcomics":           true, // ApollComics
+	"eu.kanade.tachiyomi.extension.es.dragontranslation":     true, // DragonTranslation
+	"eu.kanade.tachiyomi.extension.es.dragontranslationorg":  true, // DragonTranslation.org
+	"eu.kanade.tachiyomi.extension.es.cerberuseries":         true, // Cerberus Series
+	"eu.kanade.tachiyomi.extension.es.cerberusseries":        true, // Cerberus Series (alias)
+	"eu.kanade.tachiyomi.extension.es.manhwalatino":          true, // Manhwa-Latino
+	"eu.kanade.tachiyomi.extension.es.hadesnofansub":         true, // Hades no Fansub
+	"eu.kanade.tachiyomi.extension.es.begatranslation":        true, // Bega Translation
+	"eu.kanade.tachiyomi.source.local":                      true, // Local source
+}
+
+// NativeExtInfo holds basic display metadata for native Go extensions
+type NativeExtInfo struct {
+	Name string
+	Lang string
+}
+
+var NativeGoExtensionInfo = map[string]NativeExtInfo{
+	"eu.kanade.tachiyomi.extension.es.mangamx":             {Name: "MangaOni", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.lectormangalat":       {Name: "LectorManga.lat", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.all.mangadex":            {Name: "MangaDex", Lang: "all"},
+	"eu.kanade.tachiyomi.extension.es.uchuujinprojects":     {Name: "Uchuujin Projects", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.shadowmanga":          {Name: "Shadow Manga", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.manhwaweb":            {Name: "ManhwaWeb", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.submanhwa":            {Name: "Submanhwa", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.mangasnosekai":        {Name: "Mangas No Sekai", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.ravenmanga":           {Name: "RavenManga", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.leermanhwas":          {Name: "LeerManhwas", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.bokugentranslation":    {Name: "BokugenTranslation", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.apollcomics":          {Name: "ApollComics", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.dragontranslation":    {Name: "DragonTranslation", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.dragontranslationorg": {Name: "DragonTranslation.org", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.cerberuseries":        {Name: "Cerberus Series", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.cerberusseries":       {Name: "Cerberus Series", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.manhwalatino":         {Name: "Manhwa-Latino", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.hadesnofansub":        {Name: "Hades no Fansub", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.begatranslation":       {Name: "Bega Translation", Lang: "es"},
+	"eu.kanade.tachiyomi.source.local":                     {Name: "Local Source", Lang: "localsourcelang"},
+}
+
+// GraphQLRequest maps incoming query parameters or POST bodies.
+type GraphQLRequest struct {
+	OperationName string                 `json:"operationName"`
+	Query         string                 `json:"query"`
+	Variables     map[string]interface{} `json:"variables"`
+}
+
+// HandleGraphQL resolves GraphQL calls for Tachidesk-WebUI compatibility.
+func HandleGraphQL(c *fiber.Ctx) error {
+	cfg, _ := c.Locals("config").(*config.Config)
+	webuiVersion := "r1411"
+	fsEnabled := false
+	fsURL := "http://127.0.0.1:8191"
+	fsTimeout := 60
+
+	if cfg != nil {
+		webuiVersion = util.GetWebUIVersion(cfg.Data.RootDir)
+		fsEnabled = cfg.FlareSolverr.Enabled
+		fsURL = cfg.FlareSolverr.URL
+		fsTimeout = cfg.FlareSolverr.Timeout
+	}
+
+	var req GraphQLRequest
+	if c.Method() == fiber.MethodGet {
+		req.OperationName = c.Query("operationName")
+		req.Query = c.Query("query")
+		vars := c.Query("variables")
+		if vars != "" {
+			_ = json.Unmarshal([]byte(vars), &req.Variables)
+		}
+	} else {
+		if err := c.BodyParser(&req); err != nil {
+			req.OperationName = c.Query("operationName")
+			req.Query = c.Query("query")
+			vars := c.Query("variables")
+			if vars != "" {
+				_ = json.Unmarshal([]byte(vars), &req.Variables)
+			}
+		}
+	}
+
+	if req.OperationName == "" && req.Query != "" {
+		fields := strings.Fields(req.Query)
+		for i, f := range fields {
+			if (f == "query" || f == "mutation") && i+1 < len(fields) {
+				op := fields[i+1]
+				if idx := strings.IndexAny(op, "({"); idx != -1 {
+					op = op[:idx]
+				}
+				req.OperationName = strings.TrimSpace(op)
+				break
+			}
+		}
+	}
+
+	log.Printf("GraphQL Dispatcher — Operation: %q, Query: %q, Variables: %v\n", req.OperationName, req.Query, req.Variables)
+
+	var data interface{}
+	switch req.OperationName {
+	case "GET_SERVER_SETTINGS":
+		data = map[string]interface{}{
+			"settings": map[string]interface{}{
+				"ip":                              "0.0.0.0",
+				"port":                            4567,
+				"socksProxyEnabled":               false,
+				"socksProxyVersion":               5,
+				"socksProxyHost":                  "",
+				"socksProxyPort":                  "",
+				"socksProxyUsername":              "",
+				"socksProxyPassword":              "",
+				"webUIFlavor":                     "WEBUI",
+				"initialOpenInBrowserEnabled":     false,
+				"webUIInterface":                  "BROWSER",
+				"electronPath":                    "",
+				"webUIChannel":                    "PREVIEW",
+				"webUIUpdateCheckInterval":        3.0,
+				"downloadAsCbz":                   false,
+				"downloadsPath":                   "",
+				"autoDownloadNewChapters":         false,
+				"excludeEntryWithUnreadChapters":  true,
+				"autoDownloadNewChaptersLimit":    1,
+				"autoDownloadIgnoreReUploads":     false,
+				"downloadConversions":             []interface{}{},
+				"serveConversions":                []interface{}{},
+				"extensionRepos":                  []string{"https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb"},
+				"maxSourcesInParallel":            6,
+				"excludeUnreadChapters":           true,
+				"excludeNotStarted":               true,
+				"excludeCompleted":                true,
+				"globalUpdateInterval":            12.0,
+				"updateMangas":                    false,
+				"authMode":                        "NONE",
+				"authUsername":                    "",
+				"authPassword":                    "",
+				"jwtAudience":                     "suwayomi-server-api",
+				"jwtTokenExpiry":                  "PT5M",
+				"jwtRefreshExpiry":                "PT1440H",
+				"debugLogsEnabled":                true,
+				"systemTrayEnabled":               false,
+				"maxLogFileSize":                  "10mb",
+				"maxLogFiles":                     31,
+				"maxLogFolderSize":                "100mb",
+				"backupPath":                      "",
+				"backupTime":                      "00:00",
+				"backupInterval":                  1,
+				"backupTTL":                       14,
+				"autoBackupIncludeCategories":     true,
+				"autoBackupIncludeChapters":       true,
+				"autoBackupIncludeClientData":     true,
+				"autoBackupIncludeHistory":        true,
+				"autoBackupIncludeManga":          true,
+				"autoBackupIncludeServerSettings": true,
+				"autoBackupIncludeTracking":       true,
+				"localSourcePath":                 "",
+				"flareSolverrEnabled":             fsEnabled,
+				"flareSolverrUrl":                 fsURL,
+				"flareSolverrTimeout":             fsTimeout,
+				"flareSolverrSessionName":         "suwayomi",
+				"flareSolverrSessionTtl":          15,
+				"flareSolverrAsResponseFallback":  true,
+				"opdsUseBinaryFileSizes":          false,
+				"opdsItemsPerPage":                50,
+				"opdsEnablePageReadProgress":      true,
+				"opdsMarkAsReadOnDownload":        false,
+				"opdsShowOnlyUnreadChapters":      false,
+				"opdsShowOnlyDownloadedChapters":  false,
+				"opdsChapterSortOrder":            "DESC",
+				"opdsCbzMimetype":                 "MODERN",
+				"opdsSkipChapterMetadataFeed":     false,
+				"koreaderSyncChecksumMethod":      "BINARY",
+				"koreaderSyncStrategyBackward":    "DISABLED",
+				"koreaderSyncStrategyForward":     "PROMPT",
+				"koreaderSyncPercentageTolerance": 1e-15,
+				"databaseType":                    "POSTGRESQL",
+				"databaseUrl":                     "postgresql://localhost:5432/suwayomi",
+				"databaseUsername":                "postgres",
+				"databasePassword":                "",
+				"useHikariConnectionPool":         true,
+				"kcefEnabled":                     true,
+				"syncInterval":                    "PT0S",
+				"syncYomiEnabled":                 false,
+				"syncYomiHost":                    "",
+				"syncYomiApiKey":                  "",
+				"syncDataManga":                   true,
+				"syncDataChapters":                true,
+				"syncDataTracking":                true,
+				"syncDataHistory":                 true,
+				"syncDataCategories":              true,
+				"__typename":                      "SettingsType",
+			},
+			"koSyncStatus": map[string]interface{}{
+				"serverAddress": "",
+				"username":      "",
+				"isLoggedIn":    false,
+				"__typename":    "KoSyncStatusPayload",
+			},
+		}
+
+	case "GET_ABOUT":
+		nowSec := fmt.Sprintf("%d", time.Now().Unix())
+		nowMilli := fmt.Sprintf("%d", time.Now().UnixMilli())
+		data = map[string]interface{}{
+			"aboutServer": map[string]interface{}{
+				"buildTime": nowSec,
+				"buildType": "Preview",
+				"discord":   "https://discord.gg/suwayomi",
+				"github":    "https://github.com/Suwayomi/Suwayomi-Server",
+				"name":      "Tsuruyomi",
+				"version":   "1.0.0",
+				"platformInfo": map[string]interface{}{
+					"os": map[string]interface{}{
+						"name":       "Alpine Linux",
+						"build":      "v3.24",
+						"version":    "3.24.1",
+						"__typename": "PlatformOs",
+					},
+					"arch":     "x86_64",
+					"headless": true,
+					"jvm": map[string]interface{}{
+						"javaVersion": "N/A (Go Native)",
+						"vmName":      "Tsuruyomi Go Runtime",
+						"vmVendor":    "Go",
+						"vmVersion":   "go1.27.0",
+						"__typename":  "PlatformJvm",
+					},
+					"__typename": "PlatformInfo",
+				},
+				"__typename": "AboutServerPayload",
+			},
+			"aboutWebUI": map[string]interface{}{
+				"channel":         "PREVIEW",
+				"tag":             webuiVersion,
+				"updateTimestamp": nowMilli,
+				"__typename":      "AboutWebUI",
+			},
+		}
+
+	case "GET_WEBUI_UPDATE_STATUS":
+		data = map[string]interface{}{
+			"getWebUIUpdateStatus": map[string]interface{}{
+				"info": map[string]interface{}{
+					"channel":    "PREVIEW",
+					"tag":        webuiVersion,
+					"__typename": "WebUIUpdateInfo",
+				},
+				"progress":   0,
+				"state":      "IDLE",
+				"__typename": "WebUIUpdateStatus",
+			},
+		}
+
+	case "GET_DOWNLOAD_STATUS":
+		data = map[string]interface{}{
+			"downloadStatus": map[string]interface{}{
+				"state":      "STOPPED",
+				"queue":      []interface{}{},
+				"__typename": "DownloadStatus",
+			},
+		}
+
+	case "GET_EXTENSIONS_FETCH":
+		extList := []map[string]interface{}{}
+		if database.DB != nil {
+			rows, err := database.DB.Query(c.Context(), `
+				SELECT name, pkg_name, version_name, version_code, lang, COALESCE(icon_url, ''), is_installed, has_update, is_obsolete, COALESCE(store_index_url, 'https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json'), COALESCE(content_warning, 0), COALESCE(extension_lib, '1.5')
+				FROM suwayomi.extension
+			`)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var name, pkgName, versionName, lang, iconUrl, storeIndexUrl, extLib string
+					var versionCode int64
+					var isInstalled, hasUpdate, isObsolete bool
+					var cwInt int
+					err := rows.Scan(&name, &pkgName, &versionName, &versionCode, &lang, &iconUrl, &isInstalled, &hasUpdate, &isObsolete, &storeIndexUrl, &cwInt, &extLib)
+					if err == nil {
+						if NativeGoExtensionPackages[pkgName] || pkgName == "eu.kanade.tachiyomi.source.local" {
+							isInstalled = true
+							hasUpdate = false
+							isObsolete = false
+							versionName = "1.0-go (Nativa)"
+						}
+						cw := "SAFE"
+						if cwInt > 0 {
+							cw = "NSFW"
+						}
+						storeName := "Keiyoushi"
+						if strings.Contains(storeIndexUrl, "suwayomi") {
+							storeName = "Suwayomi Extension Repo"
+						}
+						extList = append(extList, map[string]interface{}{
+							"pkgName":         pkgName,
+							"name":            name,
+							"lang":            lang,
+							"versionCodeLong": versionCode,
+							"versionName":     versionName,
+							"iconUrl":         "/api/v1/extension/icon/" + pkgName,
+							"storeIndexUrl":   storeIndexUrl,
+							"contentWarning":  cw,
+							"isInstalled":     isInstalled,
+							"isObsolete":      isObsolete,
+							"hasUpdate":       hasUpdate,
+							"extensionLib":    extLib,
+							"extensionStore": map[string]interface{}{
+								"indexUrl":   storeIndexUrl,
+								"name":       storeName,
+								"__typename": "ExtensionStoreType",
+							},
+							"__typename": "ExtensionType",
+						})
+					}
+				}
+			}
+		}
+
+		data = map[string]interface{}{
+			"fetchExtensions": map[string]interface{}{
+				"extensions":      extList,
+				"extensionStores": []interface{}{},
+				"__typename":      "FetchExtensionsResult",
+			},
+		}
+
+	case "CHECK_FOR_SERVER_UPDATES":
+		data = map[string]interface{}{
+			"checkForServerUpdates": []map[string]interface{}{
+				{
+					"channel":    "Preview",
+					"tag":        "1.0.0",
+					"url":        "https://github.com/Suwayomi/Suwayomi-Server",
+					"__typename": "CheckForServerUpdatesPayload",
+				},
+			},
+		}
+
+	case "CHECK_FOR_WEBUI_UPDATE":
+		data = map[string]interface{}{
+			"checkForWebUIUpdate": map[string]interface{}{
+				"channel":         "PREVIEW",
+				"tag":             webuiVersion,
+				"updateAvailable": false,
+				"__typename":      "WebUIUpdateCheck",
+			},
+		}
+
+	case "GET_GLOBAL_METADATAS":
+		nodes := []map[string]interface{}{}
+		if database.DB != nil {
+			rows, err := database.DB.Query(c.Context(), "SELECT meta_key, value FROM suwayomi.globalmeta WHERE user_id = 1")
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var k, v string
+					if err := rows.Scan(&k, &v); err == nil {
+						nodes = append(nodes, map[string]interface{}{
+							"key":        k,
+							"value":      v,
+							"__typename": "GlobalMetaType",
+						})
+					}
+				}
+			}
+		}
+
+		data = map[string]interface{}{
+			"metas": map[string]interface{}{
+				"nodes":      nodes,
+				"totalCount": len(nodes),
+				"pageInfo": map[string]interface{}{
+					"hasNextPage":     false,
+					"hasPreviousPage": false,
+					"startCursor":     nil,
+					"endCursor":       nil,
+					"__typename":      "PageInfo",
+				},
+				"__typename": "GlobalMetaNodeList",
+			},
+		}
+
+	case "GET_CATEGORIES_LIBRARY", "GET_CATEGORIES", "GET_CATEGORIES_BASE", "GET_CATEGORIES_SETTINGS":
+		// Fetch categories dynamically from database
+		nodes := []map[string]interface{}{}
+		cats, err := database.GetCategoryList(c.Context())
+		if err == nil {
+			catMetas := make(map[int64][]map[string]interface{})
+			if database.DB != nil {
+				metaRows, err := database.DB.Query(c.Context(), "SELECT category_ref, meta_key, value FROM suwayomi.categorymeta WHERE user_id = 1")
+				if err == nil {
+					defer metaRows.Close()
+					for metaRows.Next() {
+						var cRef int64
+						var k, v string
+						if err := metaRows.Scan(&cRef, &k, &v); err == nil {
+							catMetas[cRef] = append(catMetas[cRef], map[string]interface{}{
+								"categoryId": cRef,
+								"key":        k,
+								"value":      v,
+								"__typename": "CategoryMetaType",
+							})
+						}
+					}
+				}
+			}
+
+			for _, cat := range cats {
+				// Count mangas in this category
+				var count int
+				if database.DB != nil {
+					if cat.ID == 0 {
+						_ = database.DB.QueryRow(c.Context(), `
+							SELECT COUNT(*) 
+							FROM suwayomi.manga m 
+							INNER JOIN suwayomi.mangauser mu ON m.id = mu.manga 
+							WHERE COALESCE(mu.in_library, false) = true 
+							  AND NOT EXISTS (SELECT 1 FROM suwayomi.categorymanga cm WHERE cm.manga = m.id)
+						`).Scan(&count)
+					} else {
+						_ = database.DB.QueryRow(c.Context(), `
+							SELECT COUNT(*) 
+							FROM suwayomi.categorymanga cm 
+							INNER JOIN suwayomi.mangauser mu ON cm.manga = mu.manga 
+							WHERE cm.category = $1 AND COALESCE(mu.in_library, false) = true
+						`, cat.ID).Scan(&count)
+					}
+				}
+				mList := catMetas[int64(cat.ID)]
+				if mList == nil {
+					mList = []map[string]interface{}{}
+				}
+				nodes = append(nodes, map[string]interface{}{
+					"id":                cat.ID,
+					"name":              cat.Name,
+					"order":             cat.Order,
+					"default":           cat.Default,
+					"includeInUpdate":   cat.IncludeInUpdate != models.Exclude,
+					"includeInDownload": cat.IncludeInDownload != models.Exclude,
+					"mangas": map[string]interface{}{
+						"totalCount": count,
+					},
+					"meta":       mList,
+					"__typename": "CategoryType",
+				})
+			}
+		}
+
+		data = map[string]interface{}{
+			"categories": map[string]interface{}{
+				"nodes":      nodes,
+				"totalCount": len(nodes),
+				"pageInfo": map[string]interface{}{
+					"hasNextPage":     false,
+					"hasPreviousPage": false,
+					"startCursor":     nil,
+					"endCursor":       nil,
+					"__typename":      "PageInfo",
+				},
+				"__typename": "CategoryNodeList",
+			},
+		}
+
+	case "GET_LIBRARY_MANGA_COUNT", "GET_MANGAS_COUNT":
+		// Count total library mangas in database
+		var total int
+		if database.DB != nil {
+			inLib := true
+			var catId int64 = -1
+			var isNullCat bool = false
+
+			if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
+				if v, ok := cond["inLibrary"].(bool); ok {
+					inLib = v
+				}
+				if catIds, ok := cond["categoryIds"].([]interface{}); ok && len(catIds) > 0 {
+					if idF, ok := catIds[0].(float64); ok {
+						catId = int64(idF)
+					}
+				} else if catIdF, ok := cond["categoryIds"].(float64); ok {
+					catId = int64(catIdF)
+				} else if catIdF, ok := cond["categoryId"].(float64); ok {
+					catId = int64(catIdF)
+				}
+			}
+
+			if filterMap, ok := req.Variables["filter"].(map[string]interface{}); ok {
+				if inLibFilter, ok := filterMap["inLibrary"].(map[string]interface{}); ok {
+					if eq, ok := inLibFilter["equalTo"].(bool); ok {
+						inLib = eq
+					}
+				}
+				if catFilter, ok := filterMap["categoryId"].(map[string]interface{}); ok {
+					if isNull, ok := catFilter["isNull"].(bool); ok && isNull {
+						isNullCat = true
+						catId = 0
+					}
+					if inArr, ok := catFilter["in"].([]interface{}); ok && len(inArr) > 0 {
+						if idF, ok := inArr[0].(float64); ok {
+							catId = int64(idF)
+						}
+					}
+					if eq, ok := catFilter["equalTo"].(float64); ok {
+						catId = int64(eq)
+					}
+				}
+			}
+
+			if catId == 0 || isNullCat {
+				_ = database.DB.QueryRow(c.Context(), `
+					SELECT COUNT(*) 
+					FROM suwayomi.manga m 
+					INNER JOIN suwayomi.mangauser mu ON m.id = mu.manga 
+					WHERE COALESCE(mu.in_library, false) = $1 
+					  AND NOT EXISTS (SELECT 1 FROM suwayomi.categorymanga cm WHERE cm.manga = m.id)
+				`, inLib).Scan(&total)
+			} else if catId > 0 {
+				_ = database.DB.QueryRow(c.Context(), `
+					SELECT COUNT(*) 
+					FROM suwayomi.manga m 
+					INNER JOIN suwayomi.mangauser mu ON m.id = mu.manga 
+					INNER JOIN suwayomi.categorymanga cm ON m.id = cm.manga 
+					WHERE COALESCE(mu.in_library, false) = $1 AND cm.category = $2
+				`, inLib, catId).Scan(&total)
+			} else {
+				_ = database.DB.QueryRow(c.Context(), `
+					SELECT COUNT(*) 
+					FROM suwayomi.manga m 
+					INNER JOIN suwayomi.mangauser mu ON m.id = mu.manga 
+					WHERE COALESCE(mu.in_library, false) = $1
+				`, inLib).Scan(&total)
+			}
+		}
+		data = map[string]interface{}{
+			"mangas": map[string]interface{}{
+				"totalCount": total,
+				"__typename": "MangaNodeList",
+			},
+		}
+
+	case "GET_SOURCES_LIST":
+		nodes := []map[string]interface{}{}
+		srcs, err := database.GetSourceList(c.Context())
+		if err == nil {
+			for _, src := range srcs {
+				var srcID int64
+				_, _ = fmt.Sscan(src.ID, &srcID)
+				if !NativeGoExtensionPackages[src.PkgName] && !sources.Has(srcID) {
+					continue
+				}
+
+				cw := src.ContentWarning
+				if cw == "" {
+					cw = "SAFE"
+				}
+				pkgName := src.PkgName
+				iconURL := "/api/v1/extension/icon/" + pkgName
+				if pkgName == "custom.extension" {
+					iconURL = "/api/v1/source/" + src.ID + "/icon"
+				}
+				nodes = append(nodes, map[string]interface{}{
+					"id":             src.ID,
+					"name":           src.Name,
+					"displayName":    src.DisplayName,
+					"lang":           src.Lang,
+					"iconUrl":        iconURL,
+					"contentWarning": cw,
+					"isNsfw":         src.IsNsfw,
+					"isConfigurable": false,
+					"supportsLatest": src.SupportsLatest,
+					"meta":           []interface{}{},
+					"extension": map[string]interface{}{
+						"pkgName":       pkgName,
+						"storeIndexUrl": "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json",
+						"extensionStore": map[string]interface{}{
+							"indexUrl":   "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json",
+							"name":       "Keiyoushi",
+							"__typename": "ExtensionStoreType",
+						},
+						"__typename": "ExtensionType",
+					},
+					"__typename": "SourceType",
+				})
+			}
+		}
+
+		data = map[string]interface{}{
+			"sources": map[string]interface{}{
+				"nodes":      nodes,
+				"__typename": "SourceNodeList",
+			},
+		}
+
+	case "GET_EXTENSIONS":
+		var filterInstalled *bool
+		var filterStoreUrl string
+		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
+			if v, ok := cond["isInstalled"].(bool); ok {
+				filterInstalled = &v
+			}
+			if s, ok := cond["storeIndexUrl"].(string); ok {
+				filterStoreUrl = s
+			}
+		}
+
+		if filterInstalled != nil && !*filterInstalled {
+			// All native Go extensions are built-in/installed, so there are no uninstalled extensions
+			data = map[string]interface{}{
+				"extensions": map[string]interface{}{
+					"nodes":      []interface{}{},
+					"totalCount": 0,
+					"pageInfo": map[string]interface{}{
+						"hasNextPage":     false,
+						"hasPreviousPage": false,
+						"startCursor":     nil,
+						"endCursor":       nil,
+						"__typename":      "PageInfo",
+					},
+					"__typename": "ExtensionNodeList",
+				},
+			}
+			break
+		}
+
+		seen := make(map[string]bool)
+		nodes := []map[string]interface{}{}
+		if database.DB != nil {
+			rows, err := database.DB.Query(c.Context(), `
+				SELECT name, pkg_name, version_name, version_code, lang, COALESCE(icon_url, ''), is_installed, has_update, is_obsolete, COALESCE(store_index_url, 'https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json'), COALESCE(content_warning, 0), COALESCE(extension_lib, '1.5')
+				FROM suwayomi.extension
+			`)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var name, pkgName, versionName, lang, iconUrl, storeIndexUrl, extLib string
+					var versionCode int64
+					var isInstalled, hasUpdate, isObsolete bool
+					var cwInt int
+					err := rows.Scan(&name, &pkgName, &versionName, &versionCode, &lang, &iconUrl, &isInstalled, &hasUpdate, &isObsolete, &storeIndexUrl, &cwInt, &extLib)
+					if err == nil {
+						// Only include extensions ported to Go!
+						if !NativeGoExtensionPackages[pkgName] {
+							continue
+						}
+						seen[pkgName] = true
+
+						isInstalled = true
+						hasUpdate = false
+						isObsolete = false
+						versionName = "1.0-go (Nativa)"
+
+						if filterStoreUrl != "" && storeIndexUrl != filterStoreUrl {
+							continue
+						}
+
+						cw := "SAFE"
+						if cwInt > 0 {
+							cw = "NSFW"
+						}
+
+						storeName := "Keiyoushi"
+						if strings.Contains(storeIndexUrl, "suwayomi") {
+							storeName = "Suwayomi Extension Repo"
+						}
+
+						nodes = append(nodes, map[string]interface{}{
+							"pkgName":         pkgName,
+							"name":            name,
+							"lang":            lang,
+							"versionCodeLong": versionCode,
+							"versionName":     versionName,
+							"iconUrl":         "/api/v1/extension/icon/" + pkgName,
+							"storeIndexUrl":   storeIndexUrl,
+							"contentWarning":  cw,
+							"isInstalled":     isInstalled,
+							"isObsolete":      isObsolete,
+							"hasUpdate":       hasUpdate,
+							"extensionLib":    extLib,
+							"extensionStore": map[string]interface{}{
+								"indexUrl":   storeIndexUrl,
+								"name":       storeName,
+								"__typename": "ExtensionStoreType",
+							},
+							"__typename": "ExtensionType",
+						})
+					}
+				}
+			}
+		}
+
+		// Ensure every native Go extension appears even if not present in suwayomi.extension
+		for pkgName, info := range NativeGoExtensionInfo {
+			if !seen[pkgName] {
+				nodes = append(nodes, map[string]interface{}{
+					"pkgName":         pkgName,
+					"name":            info.Name,
+					"lang":            info.Lang,
+					"versionCodeLong": int64(100),
+					"versionName":     "1.0-go (Nativa)",
+					"iconUrl":         "/api/v1/extension/icon/" + pkgName,
+					"storeIndexUrl":   "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json",
+					"contentWarning":  "SAFE",
+					"isInstalled":     true,
+					"isObsolete":      false,
+					"hasUpdate":       false,
+					"extensionLib":    "1.5",
+					"extensionStore": map[string]interface{}{
+						"indexUrl":   "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json",
+						"name":       "Keiyoushi",
+						"__typename": "ExtensionStoreType",
+					},
+					"__typename": "ExtensionType",
+				})
+			}
+		}
+
+		sort.Slice(nodes, func(i, j int) bool {
+			nameI, _ := nodes[i]["name"].(string)
+			nameJ, _ := nodes[j]["name"].(string)
+			return strings.ToLower(nameI) < strings.ToLower(nameJ)
+		})
+
+		data = map[string]interface{}{
+			"extensions": map[string]interface{}{
+				"nodes":      nodes,
+				"totalCount": len(nodes),
+				"pageInfo": map[string]interface{}{
+					"hasNextPage":     false,
+					"hasPreviousPage": false,
+					"startCursor":     nil,
+					"endCursor":       nil,
+					"__typename":      "PageInfo",
+				},
+				"__typename": "ExtensionNodeList",
+			},
+		}
+
+	case "GET_EXTENSION":
+		var pkgName string
+		if p, ok := req.Variables["pkgName"].(string); ok {
+			pkgName = p
+		}
+		var extMap map[string]interface{}
+		if pkgName != "" && NativeGoExtensionPackages[pkgName] {
+			var name, versionName, lang, iconUrl, storeIndexUrl, extLib string
+			var versionCode int64
+			var isInstalled, hasUpdate, isObsolete bool
+			var cwInt int
+			if database.DB != nil {
+				_ = database.DB.QueryRow(c.Context(), `
+					SELECT name, version_name, version_code, lang, COALESCE(icon_url, ''), is_installed, has_update, is_obsolete, COALESCE(store_index_url, 'https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json'), COALESCE(content_warning, 0), COALESCE(extension_lib, '1.5')
+					FROM suwayomi.extension
+					WHERE pkg_name = $1
+				`, pkgName).Scan(&name, &versionName, &versionCode, &lang, &iconUrl, &isInstalled, &hasUpdate, &isObsolete, &storeIndexUrl, &cwInt, &extLib)
+			}
+			if name == "" {
+				if info, ok := NativeGoExtensionInfo[pkgName]; ok {
+					name = info.Name
+					lang = info.Lang
+				} else {
+					name = pkgName
+					lang = "es"
+				}
+				storeIndexUrl = "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
+				extLib = "1.5"
+			}
+			isInstalled = true
+			hasUpdate = false
+			isObsolete = false
+			versionName = "1.0-go (Nativa)"
+
+			cw := "SAFE"
+			if cwInt > 0 {
+				cw = "NSFW"
+			}
+			storeName := "Keiyoushi"
+			if strings.Contains(storeIndexUrl, "suwayomi") {
+				storeName = "Suwayomi Extension Repo"
+			}
+			extMap = map[string]interface{}{
+				"pkgName":         pkgName,
+				"name":            name,
+				"lang":            lang,
+				"versionCodeLong": versionCode,
+				"versionName":     versionName,
+				"iconUrl":         "/api/v1/extension/icon/" + pkgName,
+				"storeIndexUrl":   storeIndexUrl,
+				"contentWarning":  cw,
+				"isInstalled":     isInstalled,
+				"isObsolete":      isObsolete,
+				"hasUpdate":       hasUpdate,
+				"extensionLib":    extLib,
+				"extensionStore": map[string]interface{}{
+					"indexUrl":   storeIndexUrl,
+					"name":       storeName,
+					"__typename": "ExtensionStoreType",
+				},
+				"__typename": "ExtensionType",
+			}
+		}
+		data = map[string]interface{}{
+			"extension": extMap,
+		}
+
+	case "GET_CHAPTERS_UPDATES":
+		limit := 150
+		if f, ok := req.Variables["first"].(float64); ok && f > 0 {
+			limit = int(f)
+		}
+		offset := 0
+		if o, ok := req.Variables["offset"].(float64); ok && o >= 0 {
+			offset = int(o)
+		}
+
+		chapterNodes, totalCount, maxFetchedAt, err := fetchUpdatesOrHistoryChapters(c.Context(), false, limit, offset)
+		if err != nil {
+			log.Printf("[ERROR] GET_CHAPTERS_UPDATES error: %v", err)
+		}
+
+		maxFetchedAtMillis := maxFetchedAt
+		if maxFetchedAtMillis > 0 && maxFetchedAtMillis < 10000000000 {
+			maxFetchedAtMillis *= 1000
+		}
+
+		data = map[string]interface{}{
+			"lastUpdateTimestamp": map[string]interface{}{
+				"timestamp":  fmt.Sprintf("%d", maxFetchedAtMillis),
+				"__typename": "LastUpdateTimestamp",
+			},
+			"chapters": map[string]interface{}{
+				"nodes":      chapterNodes,
+				"totalCount": totalCount,
+				"pageInfo": map[string]interface{}{
+					"hasNextPage":     offset+len(chapterNodes) < totalCount,
+					"hasPreviousPage": offset > 0,
+					"startCursor":     nil,
+					"endCursor":       nil,
+					"__typename":      "PageInfo",
+				},
+				"__typename": "ChapterNodeList",
+			},
+		}
+
+	case "GET_LAST_UPDATE_TIMESTAMP", "GET_LAST_GLOBAL_UPDATE_TIMESTAMP":
+		var maxFetchedAt int64
+		if database.DB != nil {
+			_ = database.DB.QueryRow(c.Context(), `
+				SELECT COALESCE(MAX(c.fetched_at), 0)
+				FROM suwayomi.chapter c
+				INNER JOIN suwayomi.mangauser mu ON c.manga = mu.manga
+				WHERE COALESCE(mu.in_library, false) = true
+			`).Scan(&maxFetchedAt)
+		}
+		if maxFetchedAt > 0 && maxFetchedAt < 10000000000 {
+			maxFetchedAt *= 1000
+		}
+		data = map[string]interface{}{
+			"lastUpdateTimestamp": map[string]interface{}{
+				"timestamp":  fmt.Sprintf("%d", maxFetchedAt),
+				"__typename": "LastUpdateTimestamp",
+			},
+		}
+
+	case "GET_SYNC_STATUS":
+		data = map[string]interface{}{
+			"lastSyncStatus": map[string]interface{}{
+				"backupRestoreId": nil,
+				"endDate":         nil,
+				"errorMessage":    nil,
+				"startDate":       nil,
+				"state":           "IDLE",
+				"__typename":      "SyncStatus",
+			},
+		}
+
+	case "GET_UPDATE_STATUS", "GET_GLOBAL_UPDATE_SUMMARY":
+		data = map[string]interface{}{
+			"libraryUpdateStatus": map[string]interface{}{
+				"jobsInfo": map[string]interface{}{
+					"isRunning":              false,
+					"totalJobs":              0,
+					"finishedJobs":           0,
+					"skippedCategoriesCount": 0,
+					"skippedMangasCount":     0,
+					"__typename":             "UpdaterJobsInfoType",
+				},
+				"categoryUpdates": []interface{}{},
+				"mangaUpdates":    []interface{}{},
+				"__typename":      "LibraryUpdateStatus",
+			},
+		}
+
+	case "GET_KO_SYNC_STATUS":
+		data = map[string]interface{}{
+			"koSyncStatus": map[string]interface{}{
+				"serverAddress": "",
+				"username":      "",
+				"isLoggedIn":    false,
+				"__typename":    "KoSyncStatusPayload",
+			},
+		}
+
+	case "GET_CHAPTERS_HISTORY":
+		limit := 150
+		if f, ok := req.Variables["first"].(float64); ok && f > 0 {
+			limit = int(f)
+		}
+		offset := 0
+		if o, ok := req.Variables["offset"].(float64); ok && o >= 0 {
+			offset = int(o)
+		}
+
+		chapterNodes, totalCount, _, err := fetchUpdatesOrHistoryChapters(c.Context(), true, limit, offset)
+		if err != nil {
+			log.Printf("[ERROR] GET_CHAPTERS_HISTORY error: %v", err)
+		}
+
+		data = map[string]interface{}{
+			"chapters": map[string]interface{}{
+				"nodes":      chapterNodes,
+				"totalCount": totalCount,
+				"pageInfo": map[string]interface{}{
+					"hasNextPage":     offset+len(chapterNodes) < totalCount,
+					"hasPreviousPage": offset > 0,
+					"startCursor":     nil,
+					"endCursor":       nil,
+					"__typename":      "PageInfo",
+				},
+				"__typename": "ChapterNodeList",
+			},
+		}
+
+	case "UPDATE_GLOBAL_METADATA":
+		updatedMetas := []map[string]interface{}{}
+		deletedMetas := []map[string]interface{}{}
+		if database.DB != nil {
+			// Handle deletions
+			if preDel, ok := req.Variables["preUpdateDeleteInput"].(map[string]interface{}); ok {
+				if keys, ok := preDel["keys"].([]interface{}); ok && len(keys) > 0 {
+					for _, k := range keys {
+						if keyStr, ok := k.(string); ok {
+							_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.globalmeta WHERE user_id = 1 AND meta_key = $1", keyStr)
+							deletedMetas = append(deletedMetas, map[string]interface{}{
+								"key":        keyStr,
+								"value":      "",
+								"__typename": "GlobalMetaType",
+							})
+						}
+					}
+				}
+			}
+
+			// Handle updates
+			if updateInput, ok := req.Variables["updateInput"].(map[string]interface{}); ok {
+				if metas, ok := updateInput["metas"].([]interface{}); ok {
+					for _, m := range metas {
+						if metaMap, ok := m.(map[string]interface{}); ok {
+							k, _ := metaMap["key"].(string)
+							var valStr string
+							if v, ok := metaMap["value"].(string); ok {
+								valStr = v
+							} else {
+								vBytes, _ := json.Marshal(metaMap["value"])
+								valStr = string(vBytes)
+							}
+
+							if k != "" {
+								_, _ = database.DB.Exec(c.Context(), `
+									INSERT INTO suwayomi.globalmeta (user_id, meta_key, value)
+									VALUES (1, $1, $2)
+									ON CONFLICT (user_id, meta_key) DO UPDATE SET value = EXCLUDED.value
+								`, k, valStr)
+
+								updatedMetas = append(updatedMetas, map[string]interface{}{
+									"key":        k,
+									"value":      valStr,
+									"__typename": "GlobalMetaType",
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+
+		data = map[string]interface{}{
+			"preUpdateDeletedMeta": map[string]interface{}{
+				"metas":      deletedMetas,
+				"__typename": "GlobalMetaPayload",
+			},
+			"updatedMeta": map[string]interface{}{
+				"metas":      updatedMetas,
+				"__typename": "GlobalMetaPayload",
+			},
+			"postUpdateDeletedMeta": map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "GlobalMetaPayload",
+			},
+			"migrationMeta": map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "GlobalMetaPayload",
+			},
+		}
+
+	case "UPDATE_MANGA_METADATA":
+		updatedMetas := []map[string]interface{}{}
+		deletedMetas := []map[string]interface{}{}
+		if database.DB != nil {
+			processDeletions := func(delInput map[string]interface{}) {
+				if delInput == nil {
+					return
+				}
+				// 1. Array of items
+				if items, ok := delInput["items"].([]interface{}); ok {
+					for _, item := range items {
+						if itemMap, ok := item.(map[string]interface{}); ok {
+							var mIDs []int64
+							if ids, ok := itemMap["mangaIds"].([]interface{}); ok {
+								for _, idVal := range ids {
+									if idF, ok := idVal.(float64); ok {
+										mIDs = append(mIDs, int64(idF))
+									}
+								}
+							} else if idF, ok := itemMap["mangaId"].(float64); ok {
+								mIDs = append(mIDs, int64(idF))
+							}
+
+							// Keys
+							if keys, ok := itemMap["keys"].([]interface{}); ok {
+								for _, kVal := range keys {
+									if kStr, ok := kVal.(string); ok {
+										for _, mID := range mIDs {
+											_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.mangameta WHERE user_id = 1 AND manga_ref = $1 AND meta_key = $2", mID, kStr)
+											deletedMetas = append(deletedMetas, map[string]interface{}{
+												"mangaId":    mID,
+												"key":        kStr,
+												"value":      "",
+												"__typename": "MangaMetaType",
+											})
+										}
+									}
+								}
+							}
+							// Prefixes
+							if prefixes, ok := itemMap["prefixes"].([]interface{}); ok {
+								for _, pVal := range prefixes {
+									if pStr, ok := pVal.(string); ok {
+										for _, mID := range mIDs {
+											_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.mangameta WHERE user_id = 1 AND manga_ref = $1 AND meta_key LIKE $2 || '%'", mID, pStr)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+				// 2. Direct keys (legacy)
+				var mID int64
+				if idF, ok := delInput["mangaId"].(float64); ok {
+					mID = int64(idF)
+				}
+				if keys, ok := delInput["keys"].([]interface{}); ok && mID > 0 {
+					for _, kVal := range keys {
+						if kStr, ok := kVal.(string); ok {
+							_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.mangameta WHERE user_id = 1 AND manga_ref = $1 AND meta_key = $2", mID, kStr)
+							deletedMetas = append(deletedMetas, map[string]interface{}{
+								"mangaId":    mID,
+								"key":        kStr,
+								"value":      "",
+								"__typename": "MangaMetaType",
+							})
+						}
+					}
+				}
+			}
+
+			if preDel, ok := req.Variables["preUpdateDeleteInput"].(map[string]interface{}); ok {
+				processDeletions(preDel)
+			}
+			if postDel, ok := req.Variables["postUpdateDeleteInput"].(map[string]interface{}); ok {
+				processDeletions(postDel)
+			}
+
+			processUpdates := func(upInput map[string]interface{}) {
+				if upInput == nil {
+					return
+				}
+				// 1. Array of items
+				if items, ok := upInput["items"].([]interface{}); ok {
+					for _, item := range items {
+						if itemMap, ok := item.(map[string]interface{}); ok {
+							var mIDs []int64
+							if ids, ok := itemMap["mangaIds"].([]interface{}); ok {
+								for _, idVal := range ids {
+									if idF, ok := idVal.(float64); ok {
+										mIDs = append(mIDs, int64(idF))
+									}
+								}
+							} else if idF, ok := itemMap["mangaId"].(float64); ok {
+								mIDs = append(mIDs, int64(idF))
+							}
+
+							if metas, ok := itemMap["metas"].([]interface{}); ok {
+								for _, m := range metas {
+									if metaMap, ok := m.(map[string]interface{}); ok {
+										k, _ := metaMap["key"].(string)
+										var valStr string
+										if s, ok := metaMap["value"].(string); ok {
+											valStr = s
+										} else if f, ok := metaMap["value"].(float64); ok {
+											if f == float64(int64(f)) {
+												valStr = fmt.Sprintf("%d", int64(f))
+											} else {
+												valStr = fmt.Sprintf("%g", f)
+											}
+										} else if b, ok := metaMap["value"].(bool); ok {
+											valStr = fmt.Sprintf("%t", b)
+										} else {
+											vBytes, _ := json.Marshal(metaMap["value"])
+											valStr = string(vBytes)
+										}
+
+										if k != "" {
+											for _, mID := range mIDs {
+												_, _ = database.DB.Exec(c.Context(), `
+													INSERT INTO suwayomi.mangameta (user_id, manga_ref, meta_key, value)
+													VALUES (1, $1, $2, $3)
+													ON CONFLICT (user_id, manga_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
+												`, mID, k, valStr)
+
+												updatedMetas = append(updatedMetas, map[string]interface{}{
+													"mangaId":    mID,
+													"key":        k,
+													"value":      valStr,
+													"__typename": "MangaMetaType",
+												})
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+				// 2. Direct updates (legacy)
+				var mID int64
+				if idF, ok := upInput["mangaId"].(float64); ok {
+					mID = int64(idF)
+				}
+				if metas, ok := upInput["metas"].([]interface{}); ok && mID > 0 {
+					for _, m := range metas {
+						if metaMap, ok := m.(map[string]interface{}); ok {
+							k, _ := metaMap["key"].(string)
+							var valStr string
+							if s, ok := metaMap["value"].(string); ok {
+								valStr = s
+							} else {
+								vBytes, _ := json.Marshal(metaMap["value"])
+								valStr = string(vBytes)
+							}
+							if k != "" {
+								_, _ = database.DB.Exec(c.Context(), `
+									INSERT INTO suwayomi.mangameta (user_id, manga_ref, meta_key, value)
+									VALUES (1, $1, $2, $3)
+									ON CONFLICT (user_id, manga_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
+								`, mID, k, valStr)
+
+								updatedMetas = append(updatedMetas, map[string]interface{}{
+									"mangaId":    mID,
+									"key":        k,
+									"value":      valStr,
+									"__typename": "MangaMetaType",
+								})
+							}
+						}
+					}
+				}
+			}
+
+			if upInput, ok := req.Variables["updateInput"].(map[string]interface{}); ok {
+				processUpdates(upInput)
+			}
+		}
+
+		data = map[string]interface{}{
+			"preUpdateDeletedMeta": map[string]interface{}{
+				"metas":      deletedMetas,
+				"__typename": "DeleteMangaMetasPayload",
+			},
+			"updatedMeta": map[string]interface{}{
+				"metas":      updatedMetas,
+				"__typename": "SetMangaMetasPayload",
+			},
+			"postUpdateDeletedMeta": map[string]interface{}{
+				"metas":      deletedMetas,
+				"__typename": "DeleteMangaMetasPayload",
+			},
+			"migrationMeta": map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "SetMangaMetasPayload",
+			},
+		}
+
+	case "UPDATE_CATEGORY_METADATA":
+		updatedMetas := []map[string]interface{}{}
+		deletedMetas := []map[string]interface{}{}
+		if database.DB != nil {
+			processDeletions := func(delInput map[string]interface{}) {
+				if delInput == nil {
+					return
+				}
+				// 1. Array of items
+				if items, ok := delInput["items"].([]interface{}); ok {
+					for _, item := range items {
+						if itemMap, ok := item.(map[string]interface{}); ok {
+							var cIDs []int64
+							if ids, ok := itemMap["categoryIds"].([]interface{}); ok {
+								for _, idVal := range ids {
+									if idF, ok := idVal.(float64); ok {
+										cIDs = append(cIDs, int64(idF))
+									}
+								}
+							} else if idF, ok := itemMap["categoryId"].(float64); ok {
+								cIDs = append(cIDs, int64(idF))
+							}
+
+							// Keys
+							if keys, ok := itemMap["keys"].([]interface{}); ok {
+								for _, kVal := range keys {
+									if kStr, ok := kVal.(string); ok {
+										for _, cID := range cIDs {
+											_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.categorymeta WHERE user_id = 1 AND category_ref = $1 AND meta_key = $2", cID, kStr)
+											deletedMetas = append(deletedMetas, map[string]interface{}{
+												"categoryId": cID,
+												"key":        kStr,
+												"value":      "",
+												"__typename": "CategoryMetaType",
+											})
+										}
+									}
+								}
+							}
+							// Prefixes
+							if prefixes, ok := itemMap["prefixes"].([]interface{}); ok {
+								for _, pVal := range prefixes {
+									if pStr, ok := pVal.(string); ok {
+										for _, cID := range cIDs {
+											_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.categorymeta WHERE user_id = 1 AND category_ref = $1 AND meta_key LIKE $2 || '%'", cID, pStr)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+				// 2. Direct keys (legacy)
+				var cID int64
+				if idF, ok := delInput["categoryId"].(float64); ok {
+					cID = int64(idF)
+				}
+				if keys, ok := delInput["keys"].([]interface{}); ok {
+					for _, kVal := range keys {
+						if kStr, ok := kVal.(string); ok {
+							_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.categorymeta WHERE user_id = 1 AND category_ref = $1 AND meta_key = $2", cID, kStr)
+							deletedMetas = append(deletedMetas, map[string]interface{}{
+								"categoryId": cID,
+								"key":        kStr,
+								"value":      "",
+								"__typename": "CategoryMetaType",
+							})
+						}
+					}
+				}
+			}
+
+			if preDel, ok := req.Variables["preUpdateDeleteInput"].(map[string]interface{}); ok {
+				processDeletions(preDel)
+			}
+			if postDel, ok := req.Variables["postUpdateDeleteInput"].(map[string]interface{}); ok {
+				processDeletions(postDel)
+			}
+
+			processUpdates := func(upInput map[string]interface{}) {
+				if upInput == nil {
+					return
+				}
+				// 1. Array of items
+				if items, ok := upInput["items"].([]interface{}); ok {
+					for _, item := range items {
+						if itemMap, ok := item.(map[string]interface{}); ok {
+							var cIDs []int64
+							if ids, ok := itemMap["categoryIds"].([]interface{}); ok {
+								for _, idVal := range ids {
+									if idF, ok := idVal.(float64); ok {
+										cIDs = append(cIDs, int64(idF))
+									}
+								}
+							} else if idF, ok := itemMap["categoryId"].(float64); ok {
+								cIDs = append(cIDs, int64(idF))
+							}
+
+							if metas, ok := itemMap["metas"].([]interface{}); ok {
+								for _, m := range metas {
+									if metaMap, ok := m.(map[string]interface{}); ok {
+										k, _ := metaMap["key"].(string)
+										var valStr string
+										if s, ok := metaMap["value"].(string); ok {
+											valStr = s
+										} else if f, ok := metaMap["value"].(float64); ok {
+											if f == float64(int64(f)) {
+												valStr = fmt.Sprintf("%d", int64(f))
+											} else {
+												valStr = fmt.Sprintf("%g", f)
+											}
+										} else if b, ok := metaMap["value"].(bool); ok {
+											valStr = fmt.Sprintf("%t", b)
+										} else {
+											vBytes, _ := json.Marshal(metaMap["value"])
+											valStr = string(vBytes)
+										}
+
+										if k != "" {
+											for _, cID := range cIDs {
+												_, _ = database.DB.Exec(c.Context(), `
+													INSERT INTO suwayomi.categorymeta (user_id, category_ref, meta_key, value)
+													VALUES (1, $1, $2, $3)
+													ON CONFLICT (user_id, category_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
+												`, cID, k, valStr)
+
+												updatedMetas = append(updatedMetas, map[string]interface{}{
+													"categoryId": cID,
+													"key":        k,
+													"value":      valStr,
+													"__typename": "CategoryMetaType",
+												})
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+				// 2. Direct updates (legacy)
+				var cID int64
+				if idF, ok := upInput["categoryId"].(float64); ok {
+					cID = int64(idF)
+				}
+				if metas, ok := upInput["metas"].([]interface{}); ok {
+					for _, m := range metas {
+						if metaMap, ok := m.(map[string]interface{}); ok {
+							k, _ := metaMap["key"].(string)
+							var valStr string
+							if s, ok := metaMap["value"].(string); ok {
+								valStr = s
+							} else {
+								vBytes, _ := json.Marshal(metaMap["value"])
+								valStr = string(vBytes)
+							}
+							if k != "" {
+								_, _ = database.DB.Exec(c.Context(), `
+									INSERT INTO suwayomi.categorymeta (user_id, category_ref, meta_key, value)
+									VALUES (1, $1, $2, $3)
+									ON CONFLICT (user_id, category_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
+								`, cID, k, valStr)
+
+								updatedMetas = append(updatedMetas, map[string]interface{}{
+									"categoryId": cID,
+									"key":        k,
+									"value":      valStr,
+									"__typename": "CategoryMetaType",
+								})
+							}
+						}
+					}
+				}
+			}
+
+			if upInput, ok := req.Variables["updateInput"].(map[string]interface{}); ok {
+				processUpdates(upInput)
+			}
+			if migInput, ok := req.Variables["migrateInput"].(map[string]interface{}); ok {
+				processUpdates(migInput)
+			}
+		}
+
+		data = map[string]interface{}{
+			"preUpdateDeletedMeta": map[string]interface{}{
+				"metas":      deletedMetas,
+				"__typename": "DeleteCategoryMetasPayload",
+			},
+			"updatedMeta": map[string]interface{}{
+				"metas":      updatedMetas,
+				"__typename": "SetCategoryMetasPayload",
+			},
+			"postUpdateDeletedMeta": map[string]interface{}{
+				"metas":      deletedMetas,
+				"__typename": "DeleteCategoryMetasPayload",
+			},
+			"migrationMeta": map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "SetCategoryMetasPayload",
+			},
+		}
+
+	case "UPDATE_CHAPTER_METADATA":
+		data = map[string]interface{}{
+			"preUpdateDeletedMeta": map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "DeleteChapterMetasPayload",
+			},
+			"updatedMeta": map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "SetChapterMetasPayload",
+			},
+			"postUpdateDeletedMeta": map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "DeleteChapterMetasPayload",
+			},
+			"migrationMeta": map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "SetChapterMetasPayload",
+			},
+		}
+
+	case "GET_EXTENSION_STORES":
+		stores := []map[string]interface{}{
+			{
+				"name":             "Keiyoushi",
+				"indexUrl":         "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb",
+				"isLegacy":         false,
+				"badgeLabel":       "KEI",
+				"signingKey":       "9add655a78e96c4ec7a53ef89dccb557cb5d767489fac5e785d671a5a75d4da2",
+				"contactWebsite":   "https://keiyoushi.github.io",
+				"contactDiscord":   "https://discord.gg/3FbCpdKbdY",
+				"extensionListUrl": nil,
+				"extensions": map[string]interface{}{
+					"totalCount": 1377,
+				},
+				"__typename": "ExtensionStoreType",
+			},
+			{
+				"name":             "Suwayomi Extension Repo",
+				"indexUrl":         "https://raw.githubusercontent.com/suwayomi/tachiyomi-extension/repo/repo.json",
+				"isLegacy":         true,
+				"badgeLabel":       "Suwayomi",
+				"signingKey":       "263228f0827ca0b66e8aad8eba50d71c0f13927fe6912520f8a05f19667283bc",
+				"contactWebsite":   "https://suwayomi.org/",
+				"contactDiscord":   nil,
+				"extensionListUrl": nil,
+				"extensions": map[string]interface{}{
+					"totalCount": 1,
+				},
+				"__typename": "ExtensionStoreType",
+			},
+		}
+
+		data = map[string]interface{}{
+			"extensionStores": map[string]interface{}{
+				"nodes":      stores,
+				"totalCount": len(stores),
+				"pageInfo": map[string]interface{}{
+					"hasNextPage":     false,
+					"hasPreviousPage": false,
+					"startCursor":     nil,
+					"endCursor":       nil,
+					"__typename":      "PageInfo",
+				},
+				"__typename": "ExtensionStoreNodeList",
+			},
+		}
+
+	case "GET_MIGRATABLE_SOURCES":
+		nodes := []map[string]interface{}{}
+		if database.DB != nil {
+			rows, err := database.DB.Query(c.Context(), `
+				SELECT m.source, COALESCE(s.name, ''), COALESCE(s.lang, 'all')
+				FROM suwayomi.manga m
+				LEFT JOIN suwayomi.mangauser mu ON m.id = mu.manga
+				LEFT JOIN suwayomi.source s ON m.source = s.id
+				WHERE COALESCE(mu.in_library, false) = true
+			`)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var srcID int64
+					var name, lang string
+					if err := rows.Scan(&srcID, &name, &lang); err == nil {
+						sIdStr := fmt.Sprintf("%d", srcID)
+						if name == "" || name == "Source" {
+							if sName := sources.GetSourceName(srcID); sName != "" {
+								name = sName
+							} else {
+								name = sIdStr
+							}
+						}
+						if lang == "" {
+							lang = "all"
+						}
+						nodes = append(nodes, map[string]interface{}{
+							"sourceId": sIdStr,
+							"source": map[string]interface{}{
+								"id":          sIdStr,
+								"name":        name,
+								"displayName": name,
+								"lang":        lang,
+								"iconUrl":     "/api/v1/source/" + sIdStr + "/icon",
+								"__typename":  "SourceType",
+							},
+							"__typename": "MangaType",
+						})
+					}
+				}
+			} else {
+				log.Printf("[ERROR] GET_MIGRATABLE_SOURCES query error: %v", err)
+			}
+		}
+
+		data = map[string]interface{}{
+			"mangas": map[string]interface{}{
+				"nodes":      nodes,
+				"totalCount": len(nodes),
+				"pageInfo": map[string]interface{}{
+					"hasNextPage":     false,
+					"hasPreviousPage": false,
+					"startCursor":     nil,
+					"endCursor":       nil,
+					"__typename":      "PageInfo",
+				},
+				"__typename": "MangaNodeList",
+			},
+		}
+
+	case "GET_SOURCE_MIGRATABLE":
+		var sourceID string
+		if idVal, ok := req.Variables["id"].(string); ok {
+			sourceID = idVal
+		} else if idVal, ok := req.Variables["id"].(float64); ok {
+			sourceID = fmt.Sprintf("%.0f", idVal)
+		}
+
+		var name, lang string
+		if database.DB != nil && sourceID != "" {
+			if idNum, err := strconv.ParseInt(sourceID, 10, 64); err == nil {
+				_ = database.DB.QueryRow(c.Context(), "SELECT COALESCE(name, ''), COALESCE(lang, 'all') FROM suwayomi.source WHERE id = $1", idNum).Scan(&name, &lang)
+			}
+		}
+
+		if name == "" {
+			if idNum, err := strconv.ParseInt(sourceID, 10, 64); err == nil {
+				name = sources.GetSourceName(idNum)
+			}
+			if name == "" {
+				name = sourceID
+			}
+		}
+		if lang == "" {
+			lang = "all"
+		}
+
+		data = map[string]interface{}{
+			"source": map[string]interface{}{
+				"id":          sourceID,
+				"name":        name,
+				"displayName": name,
+				"lang":        lang,
+				"iconUrl":     "/api/v1/source/" + sourceID + "/icon",
+				"__typename":  "SourceType",
+			},
+		}
+
+	case "GET_MIGRATABLE_SOURCE_MANGAS":
+		var sourceID int64
+		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
+			if sId, ok := cond["sourceId"].(string); ok {
+				sourceID, _ = strconv.ParseInt(sId, 10, 64)
+			} else if sId, ok := cond["sourceId"].(float64); ok {
+				sourceID = int64(sId)
+			}
+		}
+
+		trueVal := true
+		var srcPtr *int64
+		if sourceID > 0 {
+			srcPtr = &sourceID
+		}
+
+		nodes, err := fetchMangaGraphQLNodes(c.Context(), MangaGraphQLFilter{
+			SourceID:  srcPtr,
+			InLibrary: &trueVal,
+			OrderBy:   "ORDER BY m.title ASC",
+		})
+		if err != nil {
+			log.Printf("[ERROR] GET_MIGRATABLE_SOURCE_MANGAS error: %v", err)
+			nodes = []map[string]interface{}{}
+		}
+
+		data = map[string]interface{}{
+			"mangas": map[string]interface{}{
+				"nodes":      nodes,
+				"totalCount": len(nodes),
+				"pageInfo": map[string]interface{}{
+					"hasNextPage":     false,
+					"hasPreviousPage": false,
+					"startCursor":     nil,
+					"endCursor":       nil,
+					"__typename":      "PageInfo",
+				},
+				"__typename": "MangaNodeList",
+			},
+		}
+
+	case "GET_MANGA_TO_MIGRATE":
+		var id int64
+		if val, ok := req.Variables["id"].(float64); ok {
+			id = int64(val)
+		} else if s, ok := req.Variables["id"].(string); ok {
+			id, _ = strconv.ParseInt(s, 10, 64)
+		}
+
+		if id <= 0 {
+			data = map[string]interface{}{"manga": nil}
+			break
+		}
+
+		mNodes, _ := fetchMangaGraphQLNodes(c.Context(), MangaGraphQLFilter{
+			MangaIDs: []int64{id},
+		})
+
+		var mangaNode map[string]interface{}
+		if len(mNodes) > 0 {
+			mangaNode = mNodes[0]
+		} else {
+			mangaNode = map[string]interface{}{
+				"id":         id,
+				"title":      "",
+				"inLibrary":  false,
+				"__typename": "MangaType",
+			}
+		}
+
+		cNodes, _ := fetchChapterGraphQLNodes(c.Context(), id)
+		mangaNode["chapters"] = map[string]interface{}{
+			"nodes":      cNodes,
+			"totalCount": len(cNodes),
+			"pageInfo": map[string]interface{}{
+				"hasNextPage":     false,
+				"hasPreviousPage": false,
+				"startCursor":     nil,
+				"endCursor":       nil,
+				"__typename":      "PageInfo",
+			},
+			"__typename": "ChapterNodeList",
+		}
+
+		data = map[string]interface{}{
+			"manga": mangaNode,
+		}
+
+	case "GET_TRACKERS_SETTINGS", "GET_TRACKERS_BIND":
+		trackers := []map[string]interface{}{
+			{
+				"id":                      1,
+				"name":                    "MyAnimeList",
+				"icon":                    "/api/v1/track/1/thumbnail",
+				"isLoggedIn":              false,
+				"authUrl":                 "https://myanimelist.net",
+				"supportsTrackDeletion":   true,
+				"supportsReadingDates":    true,
+				"supportsPrivateTracking": true,
+				"__typename":              "TrackerType",
+			},
+			{
+				"id":                      2,
+				"name":                    "AniList",
+				"icon":                    "/api/v1/track/2/thumbnail",
+				"isLoggedIn":              false,
+				"authUrl":                 "https://anilist.co",
+				"supportsTrackDeletion":   true,
+				"supportsReadingDates":    true,
+				"supportsPrivateTracking": true,
+				"__typename":              "TrackerType",
+			},
+			{
+				"id":                      3,
+				"name":                    "Kitsu",
+				"icon":                    "/api/v1/track/3/thumbnail",
+				"isLoggedIn":              false,
+				"authUrl":                 "https://kitsu.io",
+				"supportsTrackDeletion":   true,
+				"supportsReadingDates":    true,
+				"supportsPrivateTracking": true,
+				"__typename":              "TrackerType",
+			},
+			{
+				"id":                      4,
+				"name":                    "Shikimori",
+				"icon":                    "/api/v1/track/4/thumbnail",
+				"isLoggedIn":              false,
+				"authUrl":                 "https://shikimori.one",
+				"supportsTrackDeletion":   true,
+				"supportsReadingDates":    true,
+				"supportsPrivateTracking": true,
+				"__typename":              "TrackerType",
+			},
+			{
+				"id":                      5,
+				"name":                    "Bangumi",
+				"icon":                    "/api/v1/track/5/thumbnail",
+				"isLoggedIn":              false,
+				"authUrl":                 "https://bgm.tv",
+				"supportsTrackDeletion":   true,
+				"supportsReadingDates":    true,
+				"supportsPrivateTracking": true,
+				"__typename":              "TrackerType",
+			},
+		}
+
+		data = map[string]interface{}{
+			"trackers": map[string]interface{}{
+				"nodes":      trackers,
+				"totalCount": len(trackers),
+				"pageInfo": map[string]interface{}{
+					"hasNextPage":     false,
+					"hasPreviousPage": false,
+					"startCursor":     nil,
+					"endCursor":       nil,
+					"__typename":      "PageInfo",
+				},
+				"__typename": "TrackerNodeList",
+			},
+		}
+
+	case "TRACKER_BIND_TRACK_RECORD":
+		var mangaID int64
+		var trackRecordID int64
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if mVal, ok := input["mangaId"].(float64); ok {
+				mangaID = int64(mVal)
+			}
+			if tVal, ok := input["trackRecordId"].(float64); ok {
+				trackRecordID = int64(tVal)
+			}
+		}
+		data = map[string]interface{}{
+			"bindTrackRecord": map[string]interface{}{
+				"trackRecord": map[string]interface{}{
+					"id":        trackRecordID,
+					"trackerId": 1,
+					"manga": map[string]interface{}{
+						"id": mangaID,
+						"trackRecords": map[string]interface{}{
+							"totalCount": 0,
+							"nodes":      []interface{}{},
+							"__typename": "TrackRecordNodeList",
+						},
+						"__typename": "MangaType",
+					},
+					"__typename": "TrackRecordType",
+				},
+				"__typename": "BindTrackRecordPayload",
+			},
+		}
+
+	case "TRACKER_UNBIND":
+		var recordID int64
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if rVal, ok := input["recordId"].(float64); ok {
+				recordID = int64(rVal)
+			}
+		}
+		data = map[string]interface{}{
+			"unbindTrack": map[string]interface{}{
+				"trackRecord": map[string]interface{}{
+					"id": recordID,
+					"manga": map[string]interface{}{
+						"id": 0,
+						"trackRecords": map[string]interface{}{
+							"totalCount": 0,
+							"nodes":      []interface{}{},
+							"__typename": "TrackRecordNodeList",
+						},
+						"__typename": "MangaType",
+					},
+					"__typename": "TrackRecordType",
+				},
+				"__typename": "UnbindTrackPayload",
+			},
+		}
+
+	case "GET_MANGAS_LIBRARY", "GET_MANGAS":
+		// Check if it's a source catalog search query
+		isCatalogQuery := false
+		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
+			if _, ok := cond["sourceId"]; ok {
+				isCatalogQuery = true
+			}
+		}
+		if !isCatalogQuery && strings.Contains(req.Query, "sourceId:") {
+			isCatalogQuery = true
+		}
+
+		if isCatalogQuery {
+			log.Printf("[DEBUG] GET_MANGAS is a source catalog query. Proxying to Java.")
+			return proxyToJava(c, req, cfg)
+		}
+
+		inLibrary := true // Default to true for library queries
+		var categoryIds []int64
+		var titleSearch string
+
+		// 1. Try parsing from variables condition
+		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
+			if val, ok := cond["inLibrary"].(bool); ok {
+				inLibrary = val
+			}
+			if catIds, ok := cond["categoryIds"].([]interface{}); ok {
+				for _, idVal := range catIds {
+					if idF, ok := idVal.(float64); ok {
+						categoryIds = append(categoryIds, int64(idF))
+					}
+				}
+			} else if catIdF, ok := cond["categoryIds"].(float64); ok {
+				categoryIds = append(categoryIds, int64(catIdF))
+			} else if catIdF, ok := cond["categoryId"].(float64); ok {
+				categoryIds = append(categoryIds, int64(catIdF))
+			}
+		}
+
+		// 2. Try parsing inLibrary from inline query string
+		if strings.Contains(req.Query, "inLibrary: false") {
+			inLibrary = false
+		} else if strings.Contains(req.Query, "inLibrary: true") {
+			inLibrary = true
+		}
+
+		// 3. Try parsing from variables filter
+		if filterMap, ok := req.Variables["filter"].(map[string]interface{}); ok {
+			if inLibFilter, ok := filterMap["inLibrary"].(map[string]interface{}); ok {
+				if eq, ok := inLibFilter["equalTo"].(bool); ok {
+					inLibrary = eq
+				}
+			}
+			if catFilter, ok := filterMap["categoryId"].(map[string]interface{}); ok {
+				if isNull, ok := catFilter["isNull"].(bool); ok && isNull {
+					categoryIds = []int64{0}
+				}
+				if inArr, ok := catFilter["in"].([]interface{}); ok {
+					for _, item := range inArr {
+						if idF, ok := item.(float64); ok {
+							categoryIds = append(categoryIds, int64(idF))
+						}
+					}
+				}
+				if eq, ok := catFilter["equalTo"].(float64); ok {
+					categoryIds = append(categoryIds, int64(eq))
+				}
+			}
+			if titleFilter, ok := filterMap["title"].(map[string]interface{}); ok {
+				for _, v := range titleFilter {
+					if s, ok := v.(string); ok && s != "" {
+						term := strings.Trim(s, "%")
+						if term != "" {
+							titleSearch = term
+						}
+					}
+				}
+			}
+		}
+
+		// 4. Try parsing categoryIds and filters from inline query string
+		if len(categoryIds) == 0 {
+			if strings.Contains(req.Query, "isNull: true") && strings.Contains(req.Query, "categoryId") {
+				categoryIds = []int64{0}
+			} else if idx := strings.Index(req.Query, "category(id:"); idx != -1 {
+				var id int64
+				if _, err := fmt.Sscan(strings.TrimLeft(req.Query[idx+len("category(id:"):], " \t\r\n"), &id); err == nil {
+					categoryIds = []int64{id}
+				}
+			} else if idx := strings.Index(req.Query, "categoryIds:"); idx != -1 {
+				sub := req.Query[idx:]
+				if start := strings.Index(sub, "["); start != -1 {
+					if end := strings.Index(sub[start:], "]"); end != -1 {
+						arrStr := sub[start+1 : start+end]
+						parts := strings.Split(arrStr, ",")
+						for _, part := range parts {
+							part = strings.TrimSpace(part)
+							var id int64
+							if _, err := fmt.Sscan(part, &id); err == nil {
+								categoryIds = append(categoryIds, id)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// 5. Try parsing order from variables
+		var orderByClause string
+		if orderArr, ok := req.Variables["order"].([]interface{}); ok && len(orderArr) > 0 {
+			var orderClauses []string
+			for _, item := range orderArr {
+				if orderMap, ok := item.(map[string]interface{}); ok {
+					by, _ := orderMap["by"].(string)
+					byType, _ := orderMap["byType"].(string)
+					dir := "ASC"
+					if strings.EqualFold(byType, "DESC") {
+						dir = "DESC"
+					}
+					switch strings.ToUpper(by) {
+					case "TITLE":
+						orderClauses = append(orderClauses, fmt.Sprintf("m.title %s", dir))
+					case "IN_LIBRARY_AT":
+						orderClauses = append(orderClauses, fmt.Sprintf("mu.in_library_at %s", dir))
+					case "LAST_FETCHED_AT":
+						orderClauses = append(orderClauses, fmt.Sprintf("m.last_fetched_at %s", dir))
+					case "ID":
+						orderClauses = append(orderClauses, fmt.Sprintf("m.id %s", dir))
+					case "UNREAD", "UNREAD_COUNT", "UNREAD_CHAPTERS":
+						orderClauses = append(orderClauses, fmt.Sprintf("stat.unread_count %s", dir))
+					case "TOTAL_CHAPTERS", "CHAPTERS_COUNT":
+						orderClauses = append(orderClauses, fmt.Sprintf("stat.chapters_count %s", dir))
+					case "LAST_READ", "LAST_READ_AT":
+						orderClauses = append(orderClauses, fmt.Sprintf("stat.max_last_read_at %s", dir))
+					case "LATEST_UPLOAD_DATE", "DATE_UPLOAD", "LATEST_UPLOADED_CHAPTER":
+						orderClauses = append(orderClauses, fmt.Sprintf("stat.max_date_upload %s", dir))
+					}
+				}
+			}
+			if len(orderClauses) > 0 {
+				orderByClause = "ORDER BY " + strings.Join(orderClauses, ", ")
+			}
+		}
+
+		nodes, _ := fetchMangaGraphQLNodes(c.Context(), MangaGraphQLFilter{
+			InLibrary:   &inLibrary,
+			CategoryIDs: categoryIds,
+			TitleSearch: titleSearch,
+			OrderBy:     orderByClause,
+		})
+
+		data = map[string]interface{}{
+			"mangas": map[string]interface{}{
+				"nodes":      nodes,
+				"totalCount": len(nodes),
+				"pageInfo": map[string]interface{}{
+					"hasNextPage":     false,
+					"hasPreviousPage": false,
+					"startCursor":     nil,
+					"endCursor":       nil,
+					"__typename":      "PageInfo",
+				},
+				"__typename": "MangaNodeList",
+			},
+		}
+
+	case "GET_CATEGORY_MANGAS":
+		var categoryId int64
+		if val, ok := req.Variables["id"].(float64); ok {
+			categoryId = int64(val)
+		}
+		inLib := true
+		nodes, _ := fetchMangaGraphQLNodes(c.Context(), MangaGraphQLFilter{
+			InLibrary:   &inLib,
+			CategoryIDs: []int64{categoryId},
+		})
+
+		data = map[string]interface{}{
+			"category": map[string]interface{}{
+				"id": categoryId,
+				"mangas": map[string]interface{}{
+					"nodes":      nodes,
+					"totalCount": len(nodes),
+					"pageInfo": map[string]interface{}{
+						"hasNextPage":     false,
+						"hasPreviousPage": false,
+						"startCursor":     nil,
+						"endCursor":       nil,
+						"__typename":      "PageInfo",
+					},
+					"__typename": "MangaNodeList",
+				},
+				"__typename": "CategoryType",
+			},
+		}
+
+	case "ADD_EXTENSION_STORE":
+		var url string
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			url, _ = input["url"].(string)
+		}
+		data = map[string]interface{}{
+			"addExtensionStore": map[string]interface{}{
+				"extensionStore": map[string]interface{}{
+					"name":             "Custom Store",
+					"indexUrl":         url,
+					"isLegacy":         false,
+					"badgeLabel":       "CUST",
+					"signingKey":       "",
+					"contactWebsite":   "",
+					"contactDiscord":   "",
+					"extensionListUrl": nil,
+					"extensions": map[string]interface{}{
+						"totalCount": 0,
+					},
+					"__typename": "ExtensionStoreType",
+				},
+				"__typename": "AddExtensionStorePayload",
+			},
+		}
+
+	case "REMOVE_EXTENSION_STORE":
+		var url string
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			url, _ = input["url"].(string)
+		}
+		data = map[string]interface{}{
+			"removeExtensionStore": map[string]interface{}{
+				"extensionStore": map[string]interface{}{
+					"name":             "Custom Store",
+					"indexUrl":         url,
+					"isLegacy":         false,
+					"badgeLabel":       "CUST",
+					"signingKey":       "",
+					"contactWebsite":   "",
+					"contactDiscord":   "",
+					"extensionListUrl": nil,
+					"extensions": map[string]interface{}{
+						"totalCount": 0,
+					},
+					"__typename": "ExtensionStoreType",
+				},
+				"__typename": "RemoveExtensionStorePayload",
+			},
+		}
+
+	case "GET_MANGA_SCREEN", "GET_MANGA_META", "GET_MANGA_READER", "GET_MANGA_TRACK_RECORDS", "GET_MANGA_CATEGORIES":
+		var id int64
+		if val, ok := req.Variables["id"].(float64); ok {
+			id = int64(val)
+		} else if s, ok := req.Variables["id"].(string); ok {
+			id, _ = strconv.ParseInt(s, 10, 64)
+		}
+		if id == 0 {
+			if idx := strings.Index(req.Query, "id:"); idx != -1 {
+				sub := req.Query[idx+len("id:"):]
+				_, _ = fmt.Sscan(strings.TrimSpace(sub), &id)
+			}
+		}
+
+		var mangaData map[string]interface{}
+		nodes, err := fetchMangaGraphQLNodes(c.Context(), MangaGraphQLFilter{
+			MangaIDs: []int64{id},
+		})
+		if err == nil && len(nodes) > 0 {
+			mangaData = nodes[0]
+		} else {
+			mangaData = map[string]interface{}{
+				"id":           id,
+				"title":        "",
+				"thumbnailUrl": fmt.Sprintf("/api/v1/manga/%d/thumbnail", id),
+				"genre":        []string{},
+				"source": map[string]interface{}{
+					"id":          "0",
+					"name":        "Source",
+					"displayName": "Source",
+					"lang":        "all",
+					"iconUrl":     "",
+					"__typename":  "SourceType",
+				},
+				"chapters": map[string]interface{}{
+					"totalCount": 0,
+					"__typename": "ChapterNodeList",
+				},
+				"trackRecords": map[string]interface{}{
+					"totalCount": 0,
+					"__typename": "TrackRecordNodeList",
+				},
+				"categories": map[string]interface{}{
+					"totalCount": 0,
+					"nodes":      []interface{}{},
+					"__typename": "CategoryNodeList",
+				},
+				"__typename": "MangaType",
+			}
+		}
+
+		// Query custom metadata for this manga
+		mangaMetaNodes := []map[string]interface{}{}
+		if database.DB != nil && id > 0 {
+			rowsMeta, err := database.DB.Query(c.Context(), "SELECT meta_key, value FROM suwayomi.mangameta WHERE manga_ref = $1 AND user_id = 1", id)
+			if err == nil {
+				defer rowsMeta.Close()
+				for rowsMeta.Next() {
+					var k, v string
+					if err := rowsMeta.Scan(&k, &v); err == nil {
+						mangaMetaNodes = append(mangaMetaNodes, map[string]interface{}{
+							"mangaId":    id,
+							"key":        k,
+							"value":      v,
+							"__typename": "MangaMetaType",
+						})
+					}
+				}
+			}
+		}
+		mangaData["meta"] = mangaMetaNodes
+
+		data = map[string]interface{}{
+			"manga": mangaData,
+		}
+
+	case "GET_CHAPTERS_MANGA", "GET_CHAPTERS_READER":
+		var mangaId int64
+		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
+			if val, ok := cond["mangaId"].(float64); ok {
+				mangaId = int64(val)
+			}
+		}
+		if mangaId == 0 {
+			if filterMap, ok := req.Variables["filter"].(map[string]interface{}); ok {
+				if mFilter, ok := filterMap["mangaId"].(map[string]interface{}); ok {
+					if eq, ok := mFilter["equalTo"].(float64); ok {
+						mangaId = int64(eq)
+					}
+				}
+			}
+		}
+		if mangaId == 0 {
+			if idx := strings.Index(req.Query, "mangaId:"); idx != -1 {
+				sub := req.Query[idx:]
+				var id int64
+				if _, err := fmt.Sscan(strings.TrimLeft(sub[len("mangaId:"):], " \t\r\n"), &id); err == nil {
+					mangaId = id
+				}
+			}
+		}
+
+		nodes, _ := fetchChapterGraphQLNodes(c.Context(), mangaId)
+		// If no chapters found in DB, auto-fetch if source has native handler
+		if len(nodes) == 0 && mangaId > 0 && database.DB != nil {
+			var sourceID int64
+			var mangaURL string
+			if err := database.DB.QueryRow(c.Context(), "SELECT source, url FROM suwayomi.manga WHERE id = $1", mangaId).Scan(&sourceID, &mangaURL); err == nil {
+				if sources.Has(sourceID) {
+					log.Printf("[SOURCES] Auto-fetching chapters for manga %d (source %d, url %s)...", mangaId, sourceID, mangaURL)
+					if _, err := sources.FetchAndSaveMangaChapters(c.Context(), sourceID, mangaId, mangaURL); err == nil {
+						nodes, _ = fetchChapterGraphQLNodes(c.Context(), mangaId)
+					}
+				}
+			}
+		}
+
+		data = map[string]interface{}{
+			"chapters": map[string]interface{}{
+				"nodes":      nodes,
+				"totalCount": len(nodes),
+				"pageInfo": map[string]interface{}{
+					"hasNextPage":     false,
+					"hasPreviousPage": false,
+					"startCursor":     nil,
+					"endCursor":       nil,
+					"__typename":      "PageInfo",
+				},
+				"__typename": "ChapterNodeList",
+			},
+		}
+
+	case "REFRESH_MANGA", "GET_MANGA_TO_MIGRATE_TO_FETCH":
+		var mangaId int64
+		fetchManga := true
+		fetchChapters := true
+
+		if val, ok := req.Variables["id"].(float64); ok {
+			mangaId = int64(val)
+		}
+		if val, ok := req.Variables["fetchManga"].(bool); ok {
+			fetchManga = val
+		}
+		if val, ok := req.Variables["fetchChapters"].(bool); ok {
+			fetchChapters = val
+		}
+		if val, ok := req.Variables["migrateChapters"].(bool); ok {
+			fetchChapters = val
+		}
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if val, ok := input["id"].(float64); ok {
+				mangaId = int64(val)
+			}
+			if val, ok := input["fetchManga"].(bool); ok {
+				fetchManga = val
+			}
+			if val, ok := input["fetchChapters"].(bool); ok {
+				fetchChapters = val
+			}
+		}
+
+		if mangaId > 0 && database.DB != nil {
+			var sourceID int64
+			var mangaURL string
+			if err := database.DB.QueryRow(c.Context(), "SELECT source, url FROM suwayomi.manga WHERE id = $1", mangaId).Scan(&sourceID, &mangaURL); err == nil {
+				if sources.Has(sourceID) {
+					if fetchChapters {
+						log.Printf("[SOURCES] Refreshing chapters for manga %d (source %d, url %s)...", mangaId, sourceID, mangaURL)
+						_, err := sources.FetchAndSaveMangaChapters(c.Context(), sourceID, mangaId, mangaURL)
+						if err != nil {
+							log.Printf("[SOURCES] Error refreshing chapters: %v", err)
+						}
+					}
+				} else if cfg != nil && cfg.Sidecar.Enabled && cfg.Sidecar.BaseURL != "" {
+					return proxyToJava(c, req, cfg)
+				}
+			}
+		}
+
+		payload := map[string]interface{}{
+			"__typename": "FetchMangaAndChaptersPayload",
+		}
+
+		if fetchManga && mangaId > 0 {
+			mNodes, _ := fetchMangaGraphQLNodes(c.Context(), MangaGraphQLFilter{
+				MangaIDs: []int64{mangaId},
+			})
+			if len(mNodes) > 0 {
+				payload["manga"] = mNodes[0]
+			}
+		}
+
+		if fetchChapters && mangaId > 0 {
+			cNodes, _ := fetchChapterGraphQLNodes(c.Context(), mangaId)
+			payload["chapters"] = cNodes
+		} else {
+			payload["chapters"] = []interface{}{}
+		}
+
+		data = map[string]interface{}{
+			"fetchMangaAndChapters": payload,
+		}
+
+	case "GET_CHAPTER_PAGES_FETCH":
+		var chapterID int64
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if cid, ok := input["chapterId"].(float64); ok {
+				chapterID = int64(cid)
+			}
+		}
+		if chapterID == 0 {
+			if idx := strings.Index(req.Query, "chapterId:"); idx != -1 {
+				sub := req.Query[idx:]
+				var id int64
+				if _, err := fmt.Sscan(strings.TrimLeft(sub[len("chapterId:"):], " \t\r\n"), &id); err == nil {
+					chapterID = id
+				}
+			}
+		}
+
+		if chapterID > 0 && database.DB != nil {
+			var mangaID int
+			var sourceOrder int
+			var chapterURL string
+			var mangaURL string
+			var sourceID int64
+
+			query := `
+				SELECT c.manga, c.source_order, c.url, m.source, m.url
+				FROM suwayomi.chapter c
+				INNER JOIN suwayomi.manga m ON c.manga = m.id
+				WHERE c.id = $1
+			`
+			err := database.DB.QueryRow(c.Context(), query, chapterID).Scan(&mangaID, &sourceOrder, &chapterURL, &sourceID, &mangaURL)
+			if err == nil {
+				// If native Go handler exists for this source, execute in pure Go!
+				if sources.Has(sourceID) {
+					pages, err := sources.FetchAndSaveChapterPages(c.Context(), sourceID, mangaID, chapterID, sourceOrder, chapterURL, mangaURL)
+					if err == nil && len(pages) > 0 {
+						data = map[string]interface{}{
+							"fetchChapterPages": map[string]interface{}{
+								"chapter": map[string]interface{}{
+									"id":           chapterID,
+									"pageCount":    len(pages),
+									"isDownloaded": false,
+									"manga": map[string]interface{}{
+										"id":            mangaID,
+										"downloadCount": 0,
+										"__typename":    "MangaType",
+									},
+									"__typename": "ChapterType",
+								},
+								"pages":      pages,
+								"__typename": "FetchChapterPagesPayload",
+							},
+						}
+						return c.JSON(fiber.Map{"data": data})
+					}
+					log.Printf("[SOURCES] Native fetch failed for chapter %d: %v. Falling back to Java.", chapterID, err)
+				}
+			}
+		}
+
+	case "UPDATE_MANGA":
+		var mangaID int64
+		var inLib bool
+		var inLibSet bool
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if idF, ok := input["id"].(float64); ok {
+				mangaID = int64(idF)
+			} else if idS, ok := input["id"].(string); ok {
+				mangaID, _ = strconv.ParseInt(idS, 10, 64)
+			}
+			if patch, ok := input["patch"].(map[string]interface{}); ok {
+				if v, ok := patch["inLibrary"].(bool); ok {
+					inLib = v
+					inLibSet = true
+				}
+			}
+		}
+
+		now := time.Now().UnixMilli()
+		if database.DB != nil && mangaID > 0 && inLibSet {
+			_, _ = database.DB.Exec(c.Context(), `
+				INSERT INTO suwayomi.mangauser (manga, user_id, in_library, in_library_at)
+				VALUES ($1, 1, $2, $3)
+				ON CONFLICT (manga, user_id) DO UPDATE 
+				SET in_library = $2, in_library_at = CASE WHEN $2 = true THEN $3 ELSE suwayomi.mangauser.in_library_at END
+			`, mangaID, inLib, now)
+		}
+
+		var catNodes []map[string]interface{}
+		if updateCat, ok := req.Variables["updateCategories"].(bool); ok && updateCat {
+			if catInput, ok := req.Variables["updateCategoryInput"].(map[string]interface{}); ok {
+				catNodes, _ = updateMangaCategoriesInDB(c.Context(), mangaID, catInput)
+			}
+		}
+
+		res := map[string]interface{}{
+			"updateManga": map[string]interface{}{
+				"manga": map[string]interface{}{
+					"id":          mangaID,
+					"inLibrary":   inLib,
+					"inLibraryAt": now,
+					"__typename":  "MangaType",
+				},
+				"__typename": "UpdateMangaPayload",
+			},
+		}
+		if catNodes != nil {
+			res["updateMangaCategories"] = map[string]interface{}{
+				"manga": map[string]interface{}{
+					"id": mangaID,
+					"categories": map[string]interface{}{
+						"nodes":      catNodes,
+						"totalCount": len(catNodes),
+						"__typename": "CategoryNodeList",
+					},
+					"__typename": "MangaType",
+				},
+				"__typename": "UpdateMangaCategoriesPayload",
+			}
+		}
+		data = res
+
+	case "UPDATE_MANGAS":
+		var mangaIDs []int64
+		var inLib bool
+		var inLibSet bool
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if ids, ok := input["ids"].([]interface{}); ok {
+				for _, idV := range ids {
+					if idF, ok := idV.(float64); ok {
+						mangaIDs = append(mangaIDs, int64(idF))
+					}
+				}
+			}
+			if patch, ok := input["patch"].(map[string]interface{}); ok {
+				if v, ok := patch["inLibrary"].(bool); ok {
+					inLib = v
+					inLibSet = true
+				}
+			}
+		}
+
+		now := time.Now().UnixMilli()
+		mangasNodes := []map[string]interface{}{}
+		if database.DB != nil && len(mangaIDs) > 0 && inLibSet {
+			for _, mID := range mangaIDs {
+				_, _ = database.DB.Exec(c.Context(), `
+					INSERT INTO suwayomi.mangauser (manga, user_id, in_library, in_library_at)
+					VALUES ($1, 1, $2, $3)
+					ON CONFLICT (manga, user_id) DO UPDATE 
+					SET in_library = $2, in_library_at = CASE WHEN $2 = true THEN $3 ELSE suwayomi.mangauser.in_library_at END
+				`, mID, inLib, now)
+
+				mangasNodes = append(mangasNodes, map[string]interface{}{
+					"id":          mID,
+					"inLibrary":   inLib,
+					"inLibraryAt": now,
+					"__typename":  "MangaType",
+				})
+			}
+		}
+
+		var mangasCatPayload []map[string]interface{}
+		if updateCat, ok := req.Variables["updateCategories"].(bool); ok && updateCat {
+			if catInput, ok := req.Variables["updateCategoryInput"].(map[string]interface{}); ok {
+				for _, mID := range mangaIDs {
+					cNodes, _ := updateMangaCategoriesInDB(c.Context(), mID, catInput)
+					mangasCatPayload = append(mangasCatPayload, map[string]interface{}{
+						"id": mID,
+						"categories": map[string]interface{}{
+							"nodes":      cNodes,
+							"totalCount": len(cNodes),
+							"__typename": "CategoryNodeList",
+						},
+						"__typename": "MangaType",
+					})
+				}
+			}
+		}
+
+		resM := map[string]interface{}{
+			"updateMangas": map[string]interface{}{
+				"mangas":     mangasNodes,
+				"__typename": "UpdateMangasPayload",
+			},
+		}
+		if mangasCatPayload != nil {
+			resM["updateMangasCategories"] = map[string]interface{}{
+				"mangas":     mangasCatPayload,
+				"__typename": "UpdateMangasCategoriesPayload",
+			}
+		}
+		data = resM
+
+	case "UPDATE_MANGA_CATEGORIES":
+		var mangaID int64
+		inputMap, _ := req.Variables["input"].(map[string]interface{})
+		if inputMap != nil {
+			if idF, ok := inputMap["id"].(float64); ok {
+				mangaID = int64(idF)
+			} else if idF, ok := inputMap["mangaId"].(float64); ok {
+				mangaID = int64(idF)
+			}
+		}
+
+		catNodes, _ := updateMangaCategoriesInDB(c.Context(), mangaID, inputMap)
+
+		data = map[string]interface{}{
+			"updateMangaCategories": map[string]interface{}{
+				"manga": map[string]interface{}{
+					"id": mangaID,
+					"categories": map[string]interface{}{
+						"nodes":      catNodes,
+						"totalCount": len(catNodes),
+						"__typename": "CategoryNodeList",
+					},
+					"__typename": "MangaType",
+				},
+				"__typename": "UpdateMangaCategoriesPayload",
+			},
+		}
+
+	case "UPDATE_MANGAS_CATEGORIES":
+		var mangaIDs []int64
+		inputMap, _ := req.Variables["input"].(map[string]interface{})
+		if inputMap != nil {
+			if ids, ok := inputMap["ids"].([]interface{}); ok {
+				for _, idV := range ids {
+					if idF, ok := idV.(float64); ok {
+						mangaIDs = append(mangaIDs, int64(idF))
+					}
+				}
+			} else if ids, ok := inputMap["mangaIds"].([]interface{}); ok {
+				for _, idV := range ids {
+					if idF, ok := idV.(float64); ok {
+						mangaIDs = append(mangaIDs, int64(idF))
+					}
+				}
+			} else if idF, ok := inputMap["id"].(float64); ok {
+				mangaIDs = append(mangaIDs, int64(idF))
+			}
+		}
+
+		var mangasPayload []map[string]interface{}
+		for _, mID := range mangaIDs {
+			catNodes, _ := updateMangaCategoriesInDB(c.Context(), mID, inputMap)
+			mangasPayload = append(mangasPayload, map[string]interface{}{
+				"id": mID,
+				"categories": map[string]interface{}{
+					"nodes":      catNodes,
+					"totalCount": len(catNodes),
+					"__typename": "CategoryNodeList",
+				},
+				"__typename": "MangaType",
+			})
+		}
+		if mangasPayload == nil {
+			mangasPayload = []map[string]interface{}{}
+		}
+
+		data = map[string]interface{}{
+			"updateMangasCategories": map[string]interface{}{
+				"mangas":     mangasPayload,
+				"__typename": "UpdateMangasCategoriesPayload",
+			},
+		}
+
+	case "UPDATE_CHAPTER":
+		var chapterID int64
+		var patch map[string]interface{}
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if idF, ok := input["id"].(float64); ok {
+				chapterID = int64(idF)
+			}
+			if p, ok := input["patch"].(map[string]interface{}); ok {
+				patch = p
+			}
+		}
+
+		var updatedChapter map[string]interface{}
+		if chapterID > 0 && database.DB != nil {
+			var isRead *bool
+			var isBookmarked *bool
+			var lastPageRead *int
+			var lastReadAt *int64
+
+			if patch != nil {
+				if r, ok := patch["isRead"].(bool); ok {
+					isRead = &r
+				}
+				if b, ok := patch["isBookmarked"].(bool); ok {
+					isBookmarked = &b
+				}
+				if p, ok := patch["lastPageRead"].(float64); ok {
+					ip := int(p)
+					lastPageRead = &ip
+				}
+				if lr, ok := patch["lastReadAt"].(float64); ok {
+					ilr := int64(lr)
+					lastReadAt = &ilr
+				} else if isRead != nil && *isRead {
+					now := time.Now().Unix()
+					lastReadAt = &now
+				}
+			}
+
+			var currentRead, currentBookmark bool
+			var currentLPR int
+			var currentLRA int64
+			_ = database.DB.QueryRow(c.Context(), `
+				SELECT read, bookmark, last_page_read, last_read_at
+				FROM suwayomi.chapteruser
+				WHERE chapter = $1 AND user_id = 1
+			`, chapterID).Scan(&currentRead, &currentBookmark, &currentLPR, &currentLRA)
+
+			newRead := currentRead
+			if isRead != nil {
+				newRead = *isRead
+			}
+			newBookmark := currentBookmark
+			if isBookmarked != nil {
+				newBookmark = *isBookmarked
+			}
+			newLPR := currentLPR
+			if lastPageRead != nil {
+				newLPR = *lastPageRead
+			}
+			newLRA := currentLRA
+			if lastReadAt != nil {
+				newLRA = *lastReadAt
+			}
+
+			_, _ = database.DB.Exec(c.Context(), `
+				INSERT INTO suwayomi.chapteruser (chapter, user_id, read, bookmark, last_page_read, last_read_at, version, last_modified_at)
+				VALUES ($1, 1, $2, $3, $4, $5, 1, $6)
+				ON CONFLICT (chapter, user_id) DO UPDATE SET
+					read = EXCLUDED.read,
+					bookmark = EXCLUDED.bookmark,
+					last_page_read = EXCLUDED.last_page_read,
+					last_read_at = EXCLUDED.last_read_at,
+					last_modified_at = EXCLUDED.last_modified_at
+			`, chapterID, newRead, newBookmark, newLPR, newLRA, time.Now().Unix())
+
+			var mangaID int64
+			_ = database.DB.QueryRow(c.Context(), "SELECT manga FROM suwayomi.chapter WHERE id = $1", chapterID).Scan(&mangaID)
+
+			var mObj map[string]interface{}
+			if mangaID > 0 {
+				mNodes, _ := fetchMangaGraphQLNodes(c.Context(), MangaGraphQLFilter{MangaIDs: []int64{mangaID}})
+				if len(mNodes) > 0 {
+					mObj = mNodes[0]
+				}
+			}
+
+			updatedChapter = map[string]interface{}{
+				"id":           chapterID,
+				"isRead":       newRead,
+				"isBookmarked": newBookmark,
+				"lastPageRead": newLPR,
+				"lastReadAt":   newLRA,
+				"manga":        mObj,
+				"__typename":   "ChapterType",
+			}
+		}
+
+		data = map[string]interface{}{
+			"updateChapter": map[string]interface{}{
+				"chapter":    updatedChapter,
+				"__typename": "UpdateChapterPayload",
+			},
+		}
+
+	case "UPDATE_CHAPTERS":
+		var chapterIDs []int64
+		var patch map[string]interface{}
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if ids, ok := input["ids"].([]interface{}); ok {
+				for _, idVal := range ids {
+					if idF, ok := idVal.(float64); ok {
+						chapterIDs = append(chapterIDs, int64(idF))
+					}
+				}
+			} else if idF, ok := input["ids"].(float64); ok {
+				chapterIDs = append(chapterIDs, int64(idF))
+			}
+			if p, ok := input["patch"].(map[string]interface{}); ok {
+				patch = p
+			}
+		}
+
+		var updatedChapters []map[string]interface{}
+		if len(chapterIDs) > 0 && database.DB != nil {
+			var isRead *bool
+			var isBookmarked *bool
+			if patch != nil {
+				if r, ok := patch["isRead"].(bool); ok {
+					isRead = &r
+				}
+				if b, ok := patch["isBookmarked"].(bool); ok {
+					isBookmarked = &b
+				}
+			}
+
+			now := time.Now().Unix()
+			for _, cid := range chapterIDs {
+				newRead := false
+				if isRead != nil {
+					newRead = *isRead
+				}
+				var lastReadAt int64 = 0
+				if newRead {
+					lastReadAt = now
+				}
+
+				newBookmark := false
+				if isBookmarked != nil {
+					newBookmark = *isBookmarked
+				}
+
+				_, _ = database.DB.Exec(c.Context(), `
+					INSERT INTO suwayomi.chapteruser (chapter, user_id, read, bookmark, last_page_read, last_read_at, version, last_modified_at)
+					VALUES ($1, 1, $2, $3, 0, $4, 1, $5)
+					ON CONFLICT (chapter, user_id) DO UPDATE SET
+						read = CASE WHEN $6 THEN EXCLUDED.read ELSE chapteruser.read END,
+						bookmark = CASE WHEN $7 THEN EXCLUDED.bookmark ELSE chapteruser.bookmark END,
+						last_read_at = CASE WHEN $6 AND EXCLUDED.read THEN EXCLUDED.last_read_at ELSE chapteruser.last_read_at END,
+						last_modified_at = EXCLUDED.last_modified_at
+				`, cid, newRead, newBookmark, lastReadAt, now, isRead != nil, isBookmarked != nil)
+
+				var chMangaID int64
+				_ = database.DB.QueryRow(c.Context(), "SELECT manga FROM suwayomi.chapter WHERE id = $1", cid).Scan(&chMangaID)
+
+				updatedChapters = append(updatedChapters, map[string]interface{}{
+					"id":           cid,
+					"isRead":       newRead,
+					"isBookmarked": newBookmark,
+					"lastReadAt":   lastReadAt,
+					"lastPageRead": 0,
+					"manga": map[string]interface{}{
+						"id":                 chMangaID,
+						"unreadCount":        0,
+						"lastReadChapter":    map[string]interface{}{"id": cid, "__typename": "ChapterType"},
+						"latestReadChapter":  map[string]interface{}{"id": cid, "__typename": "ChapterType"},
+						"firstUnreadChapter": nil,
+						"__typename":         "MangaType",
+					},
+					"__typename": "ChapterType",
+				})
+			}
+		}
+
+		data = map[string]interface{}{
+			"updateChapters": map[string]interface{}{
+				"chapters":   updatedChapters,
+				"__typename": "UpdateChaptersPayload",
+			},
+		}
+
+	case "DELETE_DOWNLOADED_CHAPTERS":
+		var chapterIDs []int64
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if ids, ok := input["ids"].([]interface{}); ok {
+				for _, idVal := range ids {
+					if idF, ok := idVal.(float64); ok {
+						chapterIDs = append(chapterIDs, int64(idF))
+					}
+				}
+			} else if idF, ok := input["ids"].(float64); ok {
+				chapterIDs = append(chapterIDs, int64(idF))
+			}
+		}
+
+		deletedChapters := []map[string]interface{}{}
+		if len(chapterIDs) > 0 && database.DB != nil {
+			_, _ = database.DB.Exec(c.Context(), "UPDATE suwayomi.chapteruser SET is_downloaded = false WHERE chapter = ANY($1)", chapterIDs)
+			_, _ = database.DB.Exec(c.Context(), "UPDATE suwayomi.chapter SET is_downloaded = false WHERE id = ANY($1)", chapterIDs)
+			for _, cid := range chapterIDs {
+				var chMangaID int64
+				_ = database.DB.QueryRow(c.Context(), "SELECT manga FROM suwayomi.chapter WHERE id = $1", cid).Scan(&chMangaID)
+				deletedChapters = append(deletedChapters, map[string]interface{}{
+					"id":           cid,
+					"isDownloaded": false,
+					"manga": map[string]interface{}{
+						"id":            chMangaID,
+						"downloadCount": 0,
+						"__typename":    "MangaType",
+					},
+					"__typename": "ChapterType",
+				})
+			}
+		}
+
+		data = map[string]interface{}{
+			"deleteDownloadedChapters": map[string]interface{}{
+				"chapters":   deletedChapters,
+				"__typename": "DeleteDownloadedChaptersPayload",
+			},
+		}
+
+	case "GET_SOURCE_BROWSE", "GET_SOURCE_SETTINGS":
+		if cfg != nil && cfg.Sidecar.Enabled && cfg.Sidecar.BaseURL != "" {
+			err := proxyToJava(c, req, cfg)
+			if err == nil {
+				return nil
+			}
+			log.Printf("[DEBUG] proxyToJava failed for %s: %v", req.OperationName, err)
+		}
+
+		var sourceID int64
+		if sID, ok := req.Variables["id"].(string); ok {
+			_, _ = fmt.Sscan(sID, &sourceID)
+		} else if idF, ok := req.Variables["id"].(float64); ok {
+			sourceID = int64(idF)
+		}
+
+		var srcData map[string]interface{}
+		if sourceID > 0 {
+			src, err := database.GetSourceByID(c.Context(), sourceID)
+			if err == nil && src != nil {
+				iconURL := "/api/v1/extension/icon/" + src.PkgName
+				if src.PkgName == "" {
+					iconURL = "/api/v1/source/" + src.ID + "/icon"
+				}
+				srcData = map[string]interface{}{
+					"id":             src.ID,
+					"name":           src.Name,
+					"displayName":    src.DisplayName,
+					"lang":           src.Lang,
+					"iconUrl":        iconURL,
+					"homeUrl":        "",
+					"isConfigurable": false,
+					"supportsLatest": src.SupportsLatest,
+					"meta":           []interface{}{},
+					"filters":        []interface{}{},
+					"preferences":    []interface{}{},
+					"__typename":     "SourceType",
+				}
+			}
+		}
+
+		data = map[string]interface{}{
+			"source": srcData,
+		}
+
+	case "GET_SOURCE_MANGAS_FETCH", "GET_MIGRATION_SOURCE_MANGAS_FETCH":
+		// Ensure input has "source" key (Java sidecar expects "source", not "sourceId")
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if sId, ok := input["sourceId"]; ok && input["source"] == nil {
+				input["source"] = sId
+			}
+		}
+
+		if cfg != nil && cfg.Sidecar.Enabled && cfg.Sidecar.BaseURL != "" {
+			err := proxyToJava(c, req, cfg)
+			if err == nil {
+				return nil
+			}
+			log.Printf("[DEBUG] proxyToJava failed for %s: %v", req.OperationName, err)
+		}
+
+		// Fallback: query database for existing mangas from this source matching search query
+		var sourceStr string
+		var queryStr string
+		var page int = 1
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if s, ok := input["source"].(string); ok {
+				sourceStr = s
+			} else if s, ok := input["sourceId"].(string); ok {
+				sourceStr = s
+			}
+			if q, ok := input["query"].(string); ok {
+				queryStr = q
+			}
+			if p, ok := input["page"].(float64); ok && p > 0 {
+				page = int(p)
+			}
+		}
+
+		var sourceId int64
+		_, _ = fmt.Sscan(sourceStr, &sourceId)
+
+		var sourceIdPtr *int64
+		if sourceId > 0 {
+			sourceIdPtr = &sourceId
+		}
+
+		offset := (page - 1) * 20
+		mangaNodes, err := fetchMangaGraphQLNodes(c.Context(), MangaGraphQLFilter{
+			SourceID:    sourceIdPtr,
+			TitleSearch: queryStr,
+			Limit:       20,
+			Offset:      offset,
+			OrderBy:     "ORDER BY m.id DESC",
+		})
+		if err != nil || mangaNodes == nil {
+			mangaNodes = []map[string]interface{}{}
+		}
+
+		data = map[string]interface{}{
+			"fetchSourceManga": map[string]interface{}{
+				"hasNextPage": len(mangaNodes) == 20,
+				"mangas":      mangaNodes,
+				"__typename":  "FetchSourceMangaPayload",
+			},
+		}
+
+	default:
+		log.Printf("[DEBUG] Hit default case for operation: %q. Proxying to Java server.", req.OperationName)
+		return proxyToJava(c, req, cfg)
+	}
+
+	return c.JSON(fiber.Map{"data": data})
+}
+
+func proxyToJava(c *fiber.Ctx, req GraphQLRequest, cfg *config.Config) error {
+	baseURL := "http://localhost:4567"
+	if cfg != nil && cfg.Sidecar.BaseURL != "" {
+		baseURL = cfg.Sidecar.BaseURL
+	}
+	url := strings.TrimSuffix(baseURL, "/") + "/api/graphql"
+	bodyBytes, err := json.Marshal(req)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+	}
+
+	reqJava, err := http.NewRequestWithContext(c.Context(), "POST", url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+	}
+	reqJava.Header.Set("Content-Type", "application/json")
+
+	respJava, err := http.DefaultClient.Do(reqJava)
+	if err != nil {
+		log.Printf("[ERROR] Java proxy failed: %v", err)
+		return c.JSON(fiber.Map{"data": map[string]interface{}{}})
+	}
+	defer respJava.Body.Close()
+
+	var respMap map[string]interface{}
+	if err := json.NewDecoder(respJava.Body).Decode(&respMap); err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+	}
+
+	return c.Status(respJava.StatusCode).JSON(respMap)
+}
+
+type MangaGraphQLFilter struct {
+	InLibrary   *bool
+	CategoryIDs []int64
+	MangaIDs    []int64
+	TitleSearch string
+	OrderBy     string
+	SourceID    *int64
+	Limit       int
+	Offset      int
+}
+
+func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]map[string]interface{}, error) {
+	if database.DB == nil {
+		return []map[string]interface{}{}, nil
+	}
+
+	baseQuery := `
+		SELECT 
+			m.id, 
+			COALESCE(m.title, ''), 
+			COALESCE(m.thumbnail_url, ''), 
+			COALESCE(m.thumbnail_url_last_fetched, 0),
+			COALESCE(mu.in_library, false),
+			COALESCE(mu.in_library_at, 0),
+			m.initialized,
+			COALESCE(m.artist, ''), 
+			COALESCE(m.author, ''), 
+			COALESCE(m.description, ''), 
+			COALESCE(m.genre, ''), 
+			m.status,
+			m.source,
+			COALESCE(s.name, 'Source'),
+			COALESCE(m.real_url, ''),
+			COALESCE(m.url, ''),
+			COALESCE(m.last_fetched_at, 0),
+			COALESCE(stat.unread_count, 0),
+			COALESCE(stat.download_count, 0),
+			COALESCE(stat.bookmark_count, 0),
+			COALESCE(stat.chapters_count, 0),
+			COALESCE(stat.max_last_read_at, 0),
+			COALESCE(stat.max_date_upload, 0),
+			COALESCE(stat.max_fetched_at, 0),
+			COALESCE(stat.max_chapter_number, 0.0),
+			COALESCE(fu.id, 0),
+			COALESCE(fu.source_order, 0),
+			COALESCE(fu.chapter_number, 0.0),
+			COALESCE(fu.name, ''),
+			COALESCE(fu.scanlator, ''),
+			COALESCE(lr.id, 0),
+			COALESCE(lr.source_order, 0),
+			COALESCE(lu.id, 0)
+		FROM suwayomi.manga m
+		LEFT JOIN suwayomi.mangauser mu ON m.id = mu.manga
+		LEFT JOIN suwayomi.source s ON m.source = s.id
+		LEFT JOIN LATERAL (
+			SELECT 
+				COUNT(*) as chapters_count,
+				COUNT(*) FILTER (WHERE COALESCE(cu.read, false) = false) as unread_count,
+				COUNT(*) FILTER (WHERE COALESCE(cu.is_downloaded, c.is_downloaded, false) = true) as download_count,
+				COUNT(*) FILTER (WHERE COALESCE(cu.bookmark, false) = true) as bookmark_count,
+				MAX(cu.last_read_at) as max_last_read_at,
+				MAX(c.date_upload) as max_date_upload,
+				MAX(c.fetched_at) as max_fetched_at,
+				MAX(c.chapter_number) as max_chapter_number
+			FROM suwayomi.chapter c
+			LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
+			WHERE c.manga = m.id
+		) stat ON true
+		LEFT JOIN LATERAL (
+			SELECT c.id, c.source_order, c.chapter_number, c.name, COALESCE(c.scanlator, '') as scanlator
+			FROM suwayomi.chapter c
+			LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
+			WHERE c.manga = m.id AND COALESCE(cu.read, false) = false
+			ORDER BY c.source_order ASC
+			LIMIT 1
+		) fu ON stat.unread_count > 0
+		LEFT JOIN LATERAL (
+			SELECT c.id, c.source_order
+			FROM suwayomi.chapter c
+			INNER JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
+			WHERE c.manga = m.id AND cu.last_read_at = stat.max_last_read_at
+			LIMIT 1
+		) lr ON stat.max_last_read_at > 0
+		LEFT JOIN LATERAL (
+			SELECT c.id
+			FROM suwayomi.chapter c
+			WHERE c.manga = m.id AND c.date_upload = stat.max_date_upload
+			LIMIT 1
+		) lu ON stat.max_date_upload > 0
+	`
+
+	var whereClauses []string
+	var args []interface{}
+
+	if filter.InLibrary != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("COALESCE(mu.in_library, false) = $%d", len(args)+1))
+		args = append(args, *filter.InLibrary)
+	}
+
+	if filter.SourceID != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("m.source = $%d", len(args)+1))
+		args = append(args, *filter.SourceID)
+	}
+
+	if len(filter.CategoryIDs) > 0 {
+		if len(filter.CategoryIDs) == 1 && filter.CategoryIDs[0] == 0 {
+			whereClauses = append(whereClauses, "NOT EXISTS (SELECT 1 FROM suwayomi.categorymanga cm WHERE cm.manga = m.id)")
+		} else {
+			whereClauses = append(whereClauses, fmt.Sprintf("EXISTS (SELECT 1 FROM suwayomi.categorymanga cm WHERE cm.manga = m.id AND cm.category = ANY($%d))", len(args)+1))
+			args = append(args, filter.CategoryIDs)
+		}
+	}
+
+	if len(filter.MangaIDs) > 0 {
+		whereClauses = append(whereClauses, fmt.Sprintf("m.id = ANY($%d)", len(args)+1))
+		args = append(args, filter.MangaIDs)
+	}
+
+	if filter.TitleSearch != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("m.title ILIKE $%d", len(args)+1))
+		args = append(args, "%"+filter.TitleSearch+"%")
+	}
+
+	query := baseQuery
+	if len(whereClauses) > 0 {
+		query += " WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	if filter.OrderBy != "" {
+		query += " " + filter.OrderBy
+	} else {
+		query += " ORDER BY m.id ASC"
+	}
+
+	if filter.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", filter.Limit)
+		if filter.Offset > 0 {
+			query += fmt.Sprintf(" OFFSET %d", filter.Offset)
+		}
+	}
+
+	rows, err := database.DB.Query(ctx, query, args...)
+	if err != nil {
+		log.Printf("[ERROR] fetchMangaGraphQLNodes query error: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var mangaIDs []int64
+	var nodes []map[string]interface{}
+
+	for rows.Next() {
+		var id int64
+		var title, thumbnailUrl string
+		var thumbnailUrlLastFetched int64
+		var inLibraryVal bool
+		var inLibraryAtVal int64
+		var initialized bool
+		var artist, author, description, genreStr string
+		var statusInt int
+		var sourceId int64
+		var sourceName, realUrl, mangaUrl string
+		var lastFetchedAt int64
+		var unreadCount, downloadCount, bookmarkCount, chaptersCount int
+		var maxLastReadAt, maxDateUpload, maxFetchedAt int64
+		var maxChapterNumber float32
+		var fuID, fuSourceOrder int64
+		var fuChapterNumber float32
+		var fuName, fuScanlator string
+		var lrID, lrSourceOrder int64
+		var luID int64
+
+		err := rows.Scan(
+			&id, &title, &thumbnailUrl, &thumbnailUrlLastFetched,
+			&inLibraryVal, &inLibraryAtVal, &initialized,
+			&artist, &author, &description, &genreStr,
+			&statusInt, &sourceId, &sourceName, &realUrl, &mangaUrl, &lastFetchedAt,
+			&unreadCount, &downloadCount, &bookmarkCount, &chaptersCount,
+			&maxLastReadAt, &maxDateUpload, &maxFetchedAt, &maxChapterNumber,
+			&fuID, &fuSourceOrder, &fuChapterNumber, &fuName, &fuScanlator,
+			&lrID, &lrSourceOrder, &luID,
+		)
+		if err != nil {
+			log.Printf("[ERROR] fetchMangaGraphQLNodes scan error: %v", err)
+			continue
+		}
+
+		if realUrl == "" && mangaUrl != "" {
+			realUrl = sources.GetMangaURL(sourceId, mangaUrl)
+		}
+
+		mangaIDs = append(mangaIDs, id)
+
+		var genres []string
+		if genreStr != "" {
+			parts := strings.Split(genreStr, ",")
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					genres = append(genres, p)
+				}
+			}
+		}
+		if genres == nil {
+			genres = []string{}
+		}
+
+		var firstUnreadChapter interface{} = nil
+		if fuID > 0 {
+			firstUnreadChapter = map[string]interface{}{
+				"id":            fuID,
+				"sourceOrder":   fuSourceOrder,
+				"isRead":        false,
+				"mangaId":       id,
+				"chapterNumber": fuChapterNumber,
+				"name":          fuName,
+				"scanlator":     fuScanlator,
+				"__typename":    "ChapterType",
+			}
+		}
+
+		var lastReadChapter interface{} = nil
+		if maxLastReadAt > 0 {
+			lastReadChapter = map[string]interface{}{
+				"id":          lrID,
+				"sourceOrder": lrSourceOrder,
+				"lastReadAt":  maxLastReadAt,
+				"__typename":  "ChapterType",
+			}
+		}
+
+		var latestReadChapter interface{} = nil
+		if maxLastReadAt > 0 {
+			latestReadChapter = map[string]interface{}{
+				"id":          lrID,
+				"sourceOrder": lrSourceOrder,
+				"lastReadAt":  maxLastReadAt,
+				"__typename":  "ChapterType",
+			}
+		}
+
+		var latestUploadedChapter interface{} = nil
+		if maxDateUpload > 0 {
+			latestUploadedChapter = map[string]interface{}{
+				"id":         luID,
+				"uploadDate": maxDateUpload,
+				"__typename": "ChapterType",
+			}
+		}
+
+		var latestFetchedChapter interface{} = nil
+		if maxFetchedAt > 0 {
+			latestFetchedChapter = map[string]interface{}{
+				"id":         0,
+				"fetchedAt":  maxFetchedAt,
+				"__typename": "ChapterType",
+			}
+		}
+
+		var highestNumberedChapter interface{} = nil
+		if maxChapterNumber > 0 {
+			highestNumberedChapter = map[string]interface{}{
+				"id":            0,
+				"chapterNumber": maxChapterNumber,
+				"__typename":    "ChapterType",
+			}
+		}
+
+		if sourceName == "" || sourceName == "Source" {
+			if sName := sources.GetSourceName(sourceId); sName != "" {
+				sourceName = sName
+			} else {
+				sourceName = fmt.Sprintf("%d", sourceId)
+			}
+		}
+
+		node := map[string]interface{}{
+			"id":                      id,
+			"title":                   title,
+			"thumbnailUrl":            "/api/v1/manga/" + fmt.Sprintf("%d", id) + "/thumbnail",
+			"thumbnailUrlLastFetched": thumbnailUrlLastFetched,
+			"inLibrary":               inLibraryVal,
+			"inLibraryAt":             inLibraryAtVal,
+			"initialized":             initialized,
+			"artist":                  artist,
+			"author":                  author,
+			"description":             description,
+			"genre":                   genres,
+			"status":                  string(models.MangaStatusFromInt(statusInt)),
+			"sourceId":                fmt.Sprintf("%d", sourceId),
+			"realUrl":                 realUrl,
+			"lastFetchedAt":           lastFetchedAt,
+			"source": map[string]interface{}{
+				"id":          fmt.Sprintf("%d", sourceId),
+				"name":        sourceName,
+				"displayName": sourceName,
+				"__typename":  "SourceType",
+			},
+			"unreadCount":             unreadCount,
+			"downloadCount":           downloadCount,
+			"bookmarkCount":           bookmarkCount,
+			"hasDuplicateChapters":    false,
+			"chapters": map[string]interface{}{
+				"totalCount": chaptersCount,
+				"__typename": "ChapterNodeList",
+			},
+			"categories": map[string]interface{}{
+				"totalCount": 0,
+				"nodes":      []interface{}{},
+				"__typename": "CategoryNodeList",
+			},
+			"firstUnreadChapter":     firstUnreadChapter,
+			"lastReadChapter":        lastReadChapter,
+			"latestReadChapter":       latestReadChapter,
+			"latestFetchedChapter":    latestFetchedChapter,
+			"latestUploadedChapter":   latestUploadedChapter,
+			"highestNumberedChapter":  highestNumberedChapter,
+			"meta":                   []interface{}{},
+			"trackRecords": map[string]interface{}{
+				"totalCount": 0,
+				"nodes":      []interface{}{},
+				"__typename": "TrackRecordNodeList",
+			},
+			"__typename": "MangaType",
+		}
+
+		nodes = append(nodes, node)
+	}
+
+	// Batch query categories for all returned mangas
+	if len(mangaIDs) > 0 {
+		mangaCats := make(map[int64][]int64)
+		catRows, err := database.DB.Query(ctx, "SELECT manga, category FROM suwayomi.categorymanga WHERE manga = ANY($1)", mangaIDs)
+		if err == nil {
+			defer catRows.Close()
+			for catRows.Next() {
+				var mId, cId int64
+				if err := catRows.Scan(&mId, &cId); err == nil {
+					mangaCats[mId] = append(mangaCats[mId], cId)
+				}
+			}
+		}
+
+		for _, node := range nodes {
+			mId := node["id"].(int64)
+			catList := mangaCats[mId]
+			catNodes := make([]map[string]interface{}, 0, len(catList))
+			for _, cId := range catList {
+				catNodes = append(catNodes, map[string]interface{}{
+					"id":         cId,
+					"__typename": "CategoryType",
+				})
+			}
+			node["categories"] = map[string]interface{}{
+				"totalCount": len(catNodes),
+				"nodes":      catNodes,
+				"__typename": "CategoryNodeList",
+			}
+		}
+
+		// Batch query custom metadata for all returned mangas
+		mangaMetas := make(map[int64][]map[string]interface{})
+		metaRows, err := database.DB.Query(ctx, "SELECT manga_ref, meta_key, value FROM suwayomi.mangameta WHERE manga_ref = ANY($1) AND user_id = 1", mangaIDs)
+		if err == nil {
+			defer metaRows.Close()
+			for metaRows.Next() {
+				var mId int64
+				var k, v string
+				if err := metaRows.Scan(&mId, &k, &v); err == nil {
+					mangaMetas[mId] = append(mangaMetas[mId], map[string]interface{}{
+						"mangaId":    mId,
+						"key":        k,
+						"value":      v,
+						"__typename": "MangaMetaType",
+					})
+				}
+			}
+		}
+
+		for _, node := range nodes {
+			mId := node["id"].(int64)
+			if metas, ok := mangaMetas[mId]; ok {
+				node["meta"] = metas
+			}
+		}
+	}
+
+	return nodes, nil
+}
+
+func fetchChapterGraphQLNodes(ctx context.Context, mangaId int64) ([]map[string]interface{}, error) {
+	if database.DB == nil || mangaId <= 0 {
+		return []map[string]interface{}{}, nil
+	}
+
+	query := `
+		SELECT c.id, COALESCE(c.name, ''), COALESCE(c.scanlator, ''), COALESCE(c.real_url, ''), c.source_order, c.chapter_number, 
+		       COALESCE(cu.read, false), COALESCE(cu.is_downloaded, false), COALESCE(cu.bookmark, false), c.fetched_at, c.date_upload, COALESCE(cu.last_read_at, 0),
+		       COALESCE(cu.last_page_read, 0), COALESCE(c.page_count, -1)
+		FROM suwayomi.chapter c
+		LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
+		WHERE c.manga = $1
+		ORDER BY c.source_order DESC
+	`
+	rows, err := database.DB.Query(ctx, query, mangaId)
+	if err != nil {
+		log.Printf("[ERROR] fetchChapterGraphQLNodes query error: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []map[string]interface{}
+	for rows.Next() {
+		var id int64
+		var name, scanlator, realUrl string
+		var sourceOrder int
+		var chapterNumber float32
+		var read, isDownloaded, bookmark bool
+		var fetchedAt, dateUpload, lastReadAt int64
+		var lastPageRead, pageCount int
+		err := rows.Scan(
+			&id, &name, &scanlator, &realUrl, &sourceOrder, &chapterNumber,
+			&read, &isDownloaded, &bookmark, &fetchedAt, &dateUpload, &lastReadAt,
+			&lastPageRead, &pageCount,
+		)
+		if err == nil {
+			nodes = append(nodes, map[string]interface{}{
+				"id":            id,
+				"name":          name,
+				"mangaId":       mangaId,
+				"manga": map[string]interface{}{
+					"id":         mangaId,
+					"__typename": "MangaType",
+				},
+				"scanlator":     scanlator,
+				"realUrl":       realUrl,
+				"sourceOrder":   sourceOrder,
+				"chapterNumber": chapterNumber,
+				"isRead":        read,
+				"isDownloaded":  isDownloaded,
+				"isBookmarked":  bookmark,
+				"fetchedAt":     fetchedAt,
+				"uploadDate":    dateUpload,
+				"lastReadAt":    lastReadAt,
+				"lastPageRead":  lastPageRead,
+				"pageCount":     pageCount,
+				"meta":          []interface{}{},
+				"user": map[string]interface{}{
+					"isRead":        read,
+					"isDownloaded":  isDownloaded,
+					"isBookmarked":  bookmark,
+					"lastReadAt":    lastReadAt,
+					"lastPageRead":  lastPageRead,
+					"__typename":    "ChapterUserType",
+				},
+				"__typename": "ChapterType",
+			})
+		}
+	}
+	if nodes == nil {
+		nodes = []map[string]interface{}{}
+	}
+	return nodes, nil
+}
+
+func updateMangaCategoriesInDB(ctx context.Context, mangaID int64, inputMap map[string]interface{}) ([]map[string]interface{}, error) {
+	if database.DB == nil || mangaID <= 0 {
+		return []map[string]interface{}{}, nil
+	}
+
+	var patch map[string]interface{}
+	if p, ok := inputMap["patch"].(map[string]interface{}); ok {
+		patch = p
+	} else {
+		patch = inputMap
+	}
+
+	clearCategories, _ := patch["clearCategories"].(bool)
+	if clearCategories {
+		_, _ = database.DB.Exec(ctx, "DELETE FROM suwayomi.categorymanga WHERE manga = $1 AND user_id = 1", mangaID)
+	}
+
+	// 1. removeFromCategories
+	if remList, ok := patch["removeFromCategories"].([]interface{}); ok {
+		for _, rVal := range remList {
+			if rIdF, ok := rVal.(float64); ok {
+				rId := int64(rIdF)
+				_, _ = database.DB.Exec(ctx, "DELETE FROM suwayomi.categorymanga WHERE manga = $1 AND category = $2 AND user_id = 1", mangaID, rId)
+			}
+		}
+	}
+
+	// 2. addToCategories
+	if addList, ok := patch["addToCategories"].([]interface{}); ok {
+		for _, aVal := range addList {
+			if aIdF, ok := aVal.(float64); ok {
+				aId := int64(aIdF)
+				if aId > 0 {
+					_, _ = database.DB.Exec(ctx, `
+						INSERT INTO suwayomi.categorymanga (category, manga, user_id) 
+						VALUES ($1, $2, 1) 
+						ON CONFLICT (user_id, category, manga) DO NOTHING
+					`, aId, mangaID)
+				}
+			}
+		}
+	}
+
+	// 3. direct categoryIds (replaces all categories)
+	var catIds []interface{}
+	if ids, ok := patch["categoryIds"].([]interface{}); ok {
+		catIds = ids
+	} else if ids, ok := inputMap["categoryIds"].([]interface{}); ok {
+		catIds = ids
+	}
+
+	if catIds != nil {
+		_, _ = database.DB.Exec(ctx, "DELETE FROM suwayomi.categorymanga WHERE manga = $1 AND user_id = 1", mangaID)
+		for _, cVal := range catIds {
+			if cIdF, ok := cVal.(float64); ok {
+				cId := int64(cIdF)
+				if cId > 0 {
+					_, _ = database.DB.Exec(ctx, `
+						INSERT INTO suwayomi.categorymanga (category, manga, user_id) 
+						VALUES ($1, $2, 1) 
+						ON CONFLICT (user_id, category, manga) DO NOTHING
+					`, cId, mangaID)
+				}
+			}
+		}
+	}
+
+	// Query updated categories for this manga
+	rows, err := database.DB.Query(ctx, `
+		SELECT cm.category, COALESCE(stat.cnt, 0)
+		FROM suwayomi.categorymanga cm
+		LEFT JOIN (
+			SELECT category, COUNT(*) as cnt 
+			FROM suwayomi.categorymanga 
+			WHERE user_id = 1 
+			GROUP BY category
+		) stat ON cm.category = stat.category
+		WHERE cm.manga = $1 AND cm.user_id = 1
+		ORDER BY cm.category ASC
+	`, mangaID)
+	if err != nil {
+		return []map[string]interface{}{}, nil
+	}
+	defer rows.Close()
+
+	var nodes []map[string]interface{}
+	for rows.Next() {
+		var cId int64
+		var count int
+		if err := rows.Scan(&cId, &count); err == nil {
+			nodes = append(nodes, map[string]interface{}{
+				"id": cId,
+				"mangas": map[string]interface{}{
+					"totalCount": count,
+					"__typename": "MangaNodeList",
+				},
+				"__typename": "CategoryType",
+			})
+		}
+	}
+	if nodes == nil {
+		nodes = []map[string]interface{}{}
+	}
+	return nodes, nil
+}
+
+func fetchUpdatesOrHistoryChapters(ctx context.Context, isHistory bool, limit, offset int) ([]map[string]interface{}, int, int64, error) {
+	if database.DB == nil {
+		return []map[string]interface{}{}, 0, 0, nil
+	}
+
+	if limit <= 0 {
+		limit = 150
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var totalCount int
+	var maxFetchedAt int64
+
+	type chapterRow struct {
+		id            int64
+		name          string
+		scanlator     string
+		realUrl       string
+		sourceOrder   int
+		chapterNumber float32
+		read          bool
+		isDownloaded  bool
+		bookmark      bool
+		fetchedAt     int64
+		dateUpload    int64
+		lastReadAt    int64
+		lastPageRead  int
+		pageCount     int
+		mangaId       int64
+	}
+
+	var rowsData []chapterRow
+	var mangaIDs []int64
+	seenManga := make(map[int64]bool)
+
+	if isHistory {
+		_ = database.DB.QueryRow(ctx, `
+			SELECT COUNT(*) 
+			FROM suwayomi.chapteruser cu 
+			INNER JOIN suwayomi.chapter c ON cu.chapter = c.id
+			INNER JOIN suwayomi.manga m ON c.manga = m.id
+			WHERE cu.last_read_at > 0
+		`).Scan(&totalCount)
+
+		q := `
+			SELECT 
+				c.id, COALESCE(c.name, ''), COALESCE(c.scanlator, ''), COALESCE(c.real_url, ''), c.source_order, c.chapter_number,
+				COALESCE(cu.read, false), COALESCE(cu.is_downloaded, false), COALESCE(cu.bookmark, false),
+				c.fetched_at, c.date_upload, cu.last_read_at, COALESCE(cu.last_page_read, 0), COALESCE(c.page_count, -1),
+				m.id
+			FROM suwayomi.chapteruser cu
+			INNER JOIN suwayomi.chapter c ON cu.chapter = c.id
+			INNER JOIN suwayomi.manga m ON c.manga = m.id
+			WHERE cu.last_read_at > 0
+			ORDER BY cu.last_read_at DESC, c.source_order DESC
+			LIMIT $1 OFFSET $2
+		`
+		r, err := database.DB.Query(ctx, q, limit, offset)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		defer r.Close()
+
+		for r.Next() {
+			var cr chapterRow
+			if err := r.Scan(
+				&cr.id, &cr.name, &cr.scanlator, &cr.realUrl, &cr.sourceOrder, &cr.chapterNumber,
+				&cr.read, &cr.isDownloaded, &cr.bookmark,
+				&cr.fetchedAt, &cr.dateUpload, &cr.lastReadAt, &cr.lastPageRead, &cr.pageCount,
+				&cr.mangaId,
+			); err == nil {
+				rowsData = append(rowsData, cr)
+				if !seenManga[cr.mangaId] {
+					seenManga[cr.mangaId] = true
+					mangaIDs = append(mangaIDs, cr.mangaId)
+				}
+			}
+		}
+	} else {
+		// Updates: recent library chapters
+		_ = database.DB.QueryRow(ctx, `
+			SELECT COUNT(*), COALESCE(MAX(c.fetched_at), 0)
+			FROM suwayomi.chapter c
+			INNER JOIN suwayomi.manga m ON c.manga = m.id
+			INNER JOIN suwayomi.mangauser mu ON m.id = mu.manga
+			WHERE COALESCE(mu.in_library, false) = true
+		`).Scan(&totalCount, &maxFetchedAt)
+
+		q := `
+			SELECT 
+				c.id, COALESCE(c.name, ''), COALESCE(c.scanlator, ''), COALESCE(c.real_url, ''), c.source_order, c.chapter_number,
+				COALESCE(cu.read, false), COALESCE(cu.is_downloaded, false), COALESCE(cu.bookmark, false),
+				c.fetched_at, c.date_upload, COALESCE(cu.last_read_at, 0), COALESCE(cu.last_page_read, 0), COALESCE(c.page_count, -1),
+				m.id
+			FROM suwayomi.chapter c
+			INNER JOIN suwayomi.manga m ON c.manga = m.id
+			INNER JOIN suwayomi.mangauser mu ON m.id = mu.manga
+			LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
+			WHERE COALESCE(mu.in_library, false) = true
+			ORDER BY c.fetched_at DESC, c.source_order DESC
+			LIMIT $1 OFFSET $2
+		`
+		r, err := database.DB.Query(ctx, q, limit, offset)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		defer r.Close()
+
+		for r.Next() {
+			var cr chapterRow
+			if err := r.Scan(
+				&cr.id, &cr.name, &cr.scanlator, &cr.realUrl, &cr.sourceOrder, &cr.chapterNumber,
+				&cr.read, &cr.isDownloaded, &cr.bookmark,
+				&cr.fetchedAt, &cr.dateUpload, &cr.lastReadAt, &cr.lastPageRead, &cr.pageCount,
+				&cr.mangaId,
+			); err == nil {
+				rowsData = append(rowsData, cr)
+				if !seenManga[cr.mangaId] {
+					seenManga[cr.mangaId] = true
+					mangaIDs = append(mangaIDs, cr.mangaId)
+				}
+			}
+		}
+	}
+
+	mangaMap := make(map[int64]map[string]interface{})
+	if len(mangaIDs) > 0 {
+		mNodes, _ := fetchMangaGraphQLNodes(ctx, MangaGraphQLFilter{
+			MangaIDs: mangaIDs,
+		})
+		for _, m := range mNodes {
+			if idVal, ok := m["id"].(int64); ok {
+				mangaMap[idVal] = m
+			}
+		}
+	}
+
+	var nodes []map[string]interface{}
+	for _, cr := range rowsData {
+		mObj, ok := mangaMap[cr.mangaId]
+		if !ok {
+			mObj = map[string]interface{}{
+				"id":                      cr.mangaId,
+				"title":                   "Manga",
+				"thumbnailUrl":            fmt.Sprintf("/api/v1/manga/%d/thumbnail", cr.mangaId),
+				"thumbnailUrlLastFetched": 0,
+				"sourceId":                "0",
+				"inLibrary":               true,
+				"initialized":             true,
+				"unreadCount":             0,
+				"downloadCount":           0,
+				"bookmarkCount":           0,
+				"hasDuplicateChapters":    false,
+				"chapters": map[string]interface{}{
+					"totalCount": 0,
+					"__typename": "ChapterNodeList",
+				},
+				"__typename": "MangaType",
+			}
+		}
+
+		nodes = append(nodes, map[string]interface{}{
+			"id":            cr.id,
+			"name":          cr.name,
+			"mangaId":       cr.mangaId,
+			"scanlator":     cr.scanlator,
+			"realUrl":       cr.realUrl,
+			"sourceOrder":   cr.sourceOrder,
+			"chapterNumber": cr.chapterNumber,
+			"isRead":        cr.read,
+			"isDownloaded":  cr.isDownloaded,
+			"isBookmarked":  cr.bookmark,
+			"fetchedAt":     cr.fetchedAt,
+			"uploadDate":    cr.dateUpload,
+			"lastReadAt":    cr.lastReadAt,
+			"lastPageRead":  cr.lastPageRead,
+			"pageCount":     cr.pageCount,
+			"meta":          []interface{}{},
+			"user": map[string]interface{}{
+				"isRead":        cr.read,
+				"isDownloaded":  cr.isDownloaded,
+				"isBookmarked":  cr.bookmark,
+				"lastReadAt":    cr.lastReadAt,
+				"lastPageRead":  cr.lastPageRead,
+				"__typename":    "ChapterUserType",
+			},
+			"manga":      mObj,
+			"__typename": "ChapterType",
+		})
+	}
+
+	if nodes == nil {
+		nodes = []map[string]interface{}{}
+	}
+
+	return nodes, totalCount, maxFetchedAt, nil
+}
+
+

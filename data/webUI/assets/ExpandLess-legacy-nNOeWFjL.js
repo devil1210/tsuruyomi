@@ -1,0 +1,1 @@
+System.register(["./index-legacy-B4bgfkQg.js"],function(e,t){var n,s,r;return{setters:[function(e){n=e.es,s=e.ol}],execute:function(){r=s(),e("n",n((0,r.jsx)("path",{d:"M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"}),"ExpandMore")),e("t",n((0,r.jsx)("path",{d:"m12 8-6 6 1.41 1.41L12 10.83l4.59 4.58L18 14z"}),"ExpandLess"))}}});

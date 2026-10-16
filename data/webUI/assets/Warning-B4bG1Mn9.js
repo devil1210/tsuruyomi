@@ -1,0 +1,1 @@
+import{al as e,es as t}from"./index-B15kT_vM.js";var n=t((0,e().jsx)(`path`,{d:`M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z`}),`Warning`);export{n as t};

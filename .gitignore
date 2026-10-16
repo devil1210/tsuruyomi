@@ -1,0 +1,45 @@
+# Tsuruyomi .gitignore
+
+# Configuration with private credentials
+config.yaml
+
+# Compiled Binaries and Executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/tsuruyomi
+/gosho
+/gosho-linux
+/server
+/server.exe
+/suwayomi-go
+/suwayomi-go.exe
+*.test
+
+# Local Data, Cache, Downloads & Temporary Files
+data/cache/
+data/downloads/
+data/extensions/
+downloads/
+*.log
+*.err
+
+# Backup files & Archives
+backup.proto.gz
+*.tar.gz
+*.zip
+
+# Java Reference Repository
+Suwayomi-Server/
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.swp
+*~
+
+# Operating System Files
+.DS_Store
+Thumbs.db

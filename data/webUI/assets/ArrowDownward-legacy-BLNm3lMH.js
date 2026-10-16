@@ -1,0 +1,1 @@
+System.register(["./index-legacy-BxE9h_dp.js"],function(e,r){var t,n,s;return{setters:[function(e){t=e.al,n=e.es}],execute:function(){s=t(),e("n",n((0,s.jsx)("path",{d:"m4 12 1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8z"}),"ArrowUpward")),e("t",n((0,s.jsx)("path",{d:"m20 12-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8z"}),"ArrowDownward"))}}});

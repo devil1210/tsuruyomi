@@ -1,0 +1,1 @@
+import{al as e,cl as t}from"./index-BD8EcPZF.js";var n=t(e(),1);function r(e,t,r){let i=(0,n.useEffectEvent)(t);(0,n.useEffect)(()=>(window.addEventListener(e,i,r),()=>window.removeEventListener(e,i,r)),[e])}export{r as t};

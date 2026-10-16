@@ -1,0 +1,47 @@
+# Tsuruyomi Server Configuration
+# Rename this file to config.yaml and customize settings as needed.
+
+server:
+  # IP address to bind to ("0.0.0.0" to listen on all interfaces, "127.0.0.1" for local only)
+  host: "0.0.0.0"
+  # Port to listen on (default: 7654 or 4567)
+  port: 7654
+  # Subpath prefix (e.g. "/tsuruyomi") — leave empty for root
+  subpath: ""
+
+database:
+  # PostgreSQL Connection DSN
+  # Format: postgres://username:password@hostname:5432/database_name?sslmode=disable
+  dsn: "postgres://tsuruyomi:password@localhost:5432/tsuruyomi?sslmode=disable"
+  # Connection pool sizing
+  max_conns: 20
+  min_conns: 2
+
+data:
+  # Root directory for extensions, thumbnails, chapter caches, and WebUI
+  root_dir: "./data"
+
+auth:
+  # Authentication mode: "none", "basic", or "simple_login"
+  mode: "none"
+  username: "admin"
+  password: "changeme"
+
+extensions:
+  # Mihon/Tachiyomi extension repository index
+  repo_url: "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
+
+logging:
+  # Log level: "debug", "info", "warn", "error"
+  level: "info"
+
+sidecar:
+  # Optional JVM Sidecar proxy fallback for unported Java-only extensions
+  enabled: false
+  base_url: "http://127.0.0.1:4568"
+
+flaresolverr:
+  # FlareSolverr integration for bypassing Cloudflare Turnstile / anti-bot challenges
+  enabled: false
+  url: "http://127.0.0.1:8191"
+  timeout: 90

@@ -1,0 +1,1 @@
+System.register(["./index-legacy-B4bgfkQg.js"],function(e,t){var n,r,s;return{setters:[function(e){n=e.es,r=e.ol}],execute:function(){s=r(),e("t",n((0,s.jsx)("path",{d:"M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z"}),"Warning"))}}});

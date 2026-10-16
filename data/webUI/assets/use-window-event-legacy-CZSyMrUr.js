@@ -1,0 +1,1 @@
+System.register(["./index-legacy-BxE9h_dp.js"],function(e,t){var n,i,s;return e("t",function(e,t,n){const i=(0,s.useEffectEvent)(t);(0,s.useEffect)(()=>(window.addEventListener(e,i,n),()=>window.removeEventListener(e,i,n)),[e])}),{setters:[function(e){n=e.il,i=e.sl}],execute:function(){s=i(n(),1)}}});

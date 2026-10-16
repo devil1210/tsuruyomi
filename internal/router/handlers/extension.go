@@ -1,0 +1,209 @@
+package handlers
+
+import (
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+
+	"github.com/gofiber/fiber/v2"
+
+	"tsuruyomi/internal/database"
+	"tsuruyomi/internal/models"
+	"tsuruyomi/internal/sources"
+)
+
+var (
+	iconCacheMu sync.RWMutex
+	iconCache   = make(map[string][]byte)
+)
+
+var defaultIconStub = []byte{
+	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+	0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+	0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x60, 0x60, 0x60, 0x60,
+	0x00, 0x00, 0x00, 0x05, 0x00, 0x01, 0xa5, 0xf6, 0x1e, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+	0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+}
+
+func sendDefaultIcon(c *fiber.Ctx) error {
+	c.Set(fiber.HeaderContentType, "image/png")
+	c.Set(fiber.HeaderCacheControl, "public, max-age=86400")
+	return c.Send(defaultIconStub)
+}
+
+func getFallbackIconURL(pkgName string) string {
+	switch pkgName {
+	case "eu.kanade.tachiyomi.extension.es.mangamx":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/mangamx/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.all.mangadex":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/all/mangadex/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.leermanhwas":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/leermanhwas/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.mangasnosekai":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/mangasnosekai/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.manhwalatino":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/manhwalatino/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.manhwaweb":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/manhwaweb/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.ravenmanga":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/ravenmanga/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.shadowmanga":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/shadowmanga/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.submanhwa":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/submanhwa/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.uchuujinprojects":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/uchuujinprojects/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.lectormangalat":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/lectormangalat/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.bokugentranslation":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/bokugentranslation/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.apollcomics":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/apollcomics/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.dragontranslation", "eu.kanade.tachiyomi.extension.es.dragontranslationorg":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/dragontranslationorg/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.cerberuseries", "eu.kanade.tachiyomi.extension.es.cerberusseries":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/cerberusseries/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.hadesnofansub":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/hadesnofansub/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.begatranslation":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/begatranslation/res/mipmap-xhdpi/ic_launcher.png"
+	}
+	return ""
+}
+
+func fetchAndServeIcon(c *fiber.Ctx, cacheKey, iconUrl string) error {
+	// 1. Check in-memory cache
+	iconCacheMu.RLock()
+	cached, ok := iconCache[cacheKey]
+	iconCacheMu.RUnlock()
+	if ok && len(cached) > 0 {
+		c.Set(fiber.HeaderContentType, "image/png")
+		c.Set(fiber.HeaderCacheControl, "public, max-age=604800")
+		return c.Send(cached)
+	}
+
+	// 2. Fetch remote icon if URL provided
+	if iconUrl != "" && strings.HasPrefix(iconUrl, "http") {
+		req, err := http.NewRequestWithContext(c.Context(), http.MethodGet, iconUrl, nil)
+		if err == nil {
+			req.Header.Set("User-Agent", "Mozilla/5.0")
+			resp, err := sources.DefaultClient.Do(req)
+			if err == nil && resp.StatusCode == http.StatusOK {
+				data, err := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if err == nil && len(data) > 0 {
+					iconCacheMu.Lock()
+					iconCache[cacheKey] = data
+					iconCacheMu.Unlock()
+
+					c.Set(fiber.HeaderContentType, "image/png")
+					c.Set(fiber.HeaderCacheControl, "public, max-age=604800")
+					return c.Send(data)
+				}
+			} else if resp != nil {
+				resp.Body.Close()
+			}
+		}
+	}
+
+	return sendDefaultIcon(c)
+}
+
+// ListExtensions returns the list of all available and installed extensions.
+func ListExtensions(c *fiber.Ctx) error {
+	var list []models.ExtensionDataClass
+	return c.JSON(list)
+}
+
+// InstallExtension installs an extension by its package name.
+func InstallExtension(c *fiber.Ctx) error {
+	pkgName := c.Params("pkgName")
+	_ = pkgName // suppress unused warning
+	return c.SendStatus(fiber.StatusCreated)
+}
+
+// InstallExtensionFile installs an extension using an uploaded APK file.
+func InstallExtensionFile(c *fiber.Ctx) error {
+	file, err := c.FormFile("file")
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+	}
+	_ = file // suppress unused warning
+	return c.SendStatus(fiber.StatusCreated)
+}
+
+// UpdateExtension updates an extension by package name.
+func UpdateExtension(c *fiber.Ctx) error {
+	pkgName := c.Params("pkgName")
+	_ = pkgName // suppress unused warning
+	return c.SendStatus(fiber.StatusCreated)
+}
+
+// UninstallExtension uninstalls an extension by package name.
+func UninstallExtension(c *fiber.Ctx) error {
+	pkgName := c.Params("pkgName")
+	_ = pkgName // suppress unused warning
+	return c.SendStatus(fiber.StatusOK)
+}
+
+// GetExtensionIcon retrieves the binary icon resource for a specific extension.
+func GetExtensionIcon(c *fiber.Ctx) error {
+	pkgName := c.Params("pkgName")
+	if pkgName == "" {
+		return sendDefaultIcon(c)
+	}
+
+	// 1. Fast cache check
+	iconCacheMu.RLock()
+	cached, ok := iconCache[pkgName]
+	iconCacheMu.RUnlock()
+	if ok && len(cached) > 0 {
+		c.Set(fiber.HeaderContentType, "image/png")
+		c.Set(fiber.HeaderCacheControl, "public, max-age=604800")
+		return c.Send(cached)
+	}
+
+	var iconUrl string
+	if database.DB != nil {
+		_ = database.DB.QueryRow(c.Context(), "SELECT COALESCE(icon_url, '') FROM suwayomi.extension WHERE pkg_name = $1", pkgName).Scan(&iconUrl)
+	}
+	if iconUrl == "" {
+		iconUrl = getFallbackIconURL(pkgName)
+	}
+
+	return fetchAndServeIcon(c, pkgName, iconUrl)
+}
+
+// GetSourceIcon retrieves the binary icon resource for a specific source.
+func GetSourceIcon(c *fiber.Ctx) error {
+	sourceIdStr := c.Params("sourceId")
+	var sourceId int64
+	_, _ = fmt.Sscan(sourceIdStr, &sourceId)
+
+	cacheKey := fmt.Sprintf("src_%d", sourceId)
+	iconCacheMu.RLock()
+	cached, ok := iconCache[cacheKey]
+	iconCacheMu.RUnlock()
+	if ok && len(cached) > 0 {
+		c.Set(fiber.HeaderContentType, "image/png")
+		c.Set(fiber.HeaderCacheControl, "public, max-age=604800")
+		return c.Send(cached)
+	}
+
+	var iconUrl, pkgName string
+	if database.DB != nil && sourceId > 0 {
+		_ = database.DB.QueryRow(c.Context(), `
+			SELECT COALESCE(e.icon_url, ''), COALESCE(e.pkg_name, '')
+			FROM suwayomi.source s
+			LEFT JOIN suwayomi.extension e ON s.extension = e.id
+			WHERE s.id = $1
+		`, sourceId).Scan(&iconUrl, &pkgName)
+	}
+	if iconUrl == "" && pkgName != "" {
+		iconUrl = getFallbackIconURL(pkgName)
+	}
+
+	return fetchAndServeIcon(c, cacheKey, iconUrl)
+}

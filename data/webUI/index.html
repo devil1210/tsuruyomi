@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+    <head>
+      <base href="/">
+
+      <script type="module" crossorigin src="./assets/polyfills-DTazDQbv.js"></script>
+
+        <title>Tsuruyomi</title>
+        <meta name="apple-mobile-web-app-title" content="Tsuruyomi" />
+        <meta name="description" content="A lightweight, high-performance manga reader that runs tachiyomi's extensions" />
+
+        <meta charset="utf-8" />
+
+        <meta name="viewport" content="minimum-scale=1, initial-scale=1, viewport-fit=cover, width=device-width" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+        <link rel="icon" type="image/png" href="./favicon-96x96.png" sizes="96x96" />
+        <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+        <link rel="shortcut icon" href="./favicon.ico" />
+        <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png" />
+        <!--
+      manifest.json provides metadata used when your web app is installed on a
+      user's mobile device or desktop. See https://developers.google.com/web/fundamentals/web-app-manifest/
+    -->
+        <link rel="manifest" href="./site.webmanifest" crossorigin="anonymous" />
+      <script type="module" crossorigin src="./assets/index-B15kT_vM.js"></script>
+      <link rel="stylesheet" crossorigin href="./assets/index-TZrNw7dA.css">
+      <script type="module">import'data:text/javascript,if(!import.meta.resolve)throw Error("import.meta.resolve not supported")';import.meta.url;import("_").catch(()=>1);(async function*(){})().next();window.__vite_is_modern_browser=true</script>
+      <script type="module">!function(){if(window.__vite_is_modern_browser)return;console.warn("vite: loading legacy chunks, syntax error above and the same error below should be ignored");var e=document.getElementById("vite-legacy-polyfill"),n=document.createElement("script");n.src=e.src,n.onload=function(){System.import(document.getElementById('vite-legacy-entry').getAttribute('data-src'))},document.body.appendChild(n)}();</script>
+    <script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
+    <body>
+        <noscript>You need to enable JavaScript to run this app.</noscript>
+        <div id="root"></div>
+        <script>
+            const backgroundColor = (() => {
+                let storageValue;
+                try {
+                    const subpath = (() => {
+                        const baseTag = document.querySelector('base');
+                        if (!baseTag) {
+                            return '';
+                        }
+
+                        return baseTag.href.replace(window.location.origin, '').slice(0, -1);
+                    })();
+                    storageValue = window.localStorage.getItem(`tsuruyomi_webui_${subpath}_theme_background`) || window.localStorage.getItem(`suwayomi_webui_${subpath}_theme_background`);
+                } catch (error) {
+                    return null;
+                }
+
+                try {
+                    return JSON.parse(storageValue);
+                } catch (e) {
+                    return storageValue;
+                }
+            })();
+
+            if (backgroundColor) {
+                document.documentElement.style.backgroundColor = backgroundColor;
+                // android chromium-based browser/pwa background color (e.g. top status bar and navigation bar) will change dynamically based on meta theme-color
+                let themeColorMeta = document.querySelector('meta[name="theme-color"]');
+                if (!themeColorMeta) {
+                    themeColorMeta = document.createElement('meta');
+                    themeColorMeta.setAttribute('name', 'theme-color');
+                    document.head.appendChild(themeColorMeta);
+                }
+                if (themeColorMeta.getAttribute('content') !== backgroundColor) {
+                    themeColorMeta.setAttribute('content', backgroundColor);
+                }
+            }
+        </script>
+        <!--
+  This HTML file is a template.
+  If you open it directly in the browser, you will see an empty page.
+
+  You can add webfonts, meta tags, or analytics to this file.
+  The build step will place the bundled scripts into the <body> tag.
+
+  To begin the development, run `pnpm start`.
+  To create a production bundle, use `pnpm build`.
+-->
+      <script nomodule>!function(){var e=document,t=e.createElement("script");if(!("noModule"in t)&&"onbeforeload"in t){var n=!1;e.addEventListener("beforeload",(function(e){if(e.target===t)n=!0;else if(!e.target.hasAttribute("nomodule")||!n)return;e.preventDefault()}),!0),t.type="module",t.src=".",e.head.appendChild(t),t.remove()}}();</script>
+      <script nomodule crossorigin id="vite-legacy-polyfill" src="./assets/polyfills-legacy-Cob02Vv-.js"></script>
+      <script nomodule crossorigin id="vite-legacy-entry" data-src="./assets/index-legacy-BxE9h_dp.js">System.import(document.getElementById('vite-legacy-entry').getAttribute('data-src'))</script>
+    </body>
+</html>

@@ -1,0 +1,1 @@
+System.register(["./index-legacy-BxE9h_dp.js"],function(e,t){var n,r,s;return{setters:[function(e){n=e.al,r=e.es}],execute:function(){s=n(),e("t",r((0,s.jsx)("path",{d:"M8 5v14l11-7z"}),"PlayArrow"))}}});

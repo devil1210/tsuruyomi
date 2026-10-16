@@ -1,0 +1,1 @@
+import{il as e,rn as t,sl as n}from"./index-B15kT_vM.js";var r=n(e(),1);function i(e,n,i=[e,n]){let{setTitle:a}=t();(0,r.useLayoutEffect)(()=>(typeof n==`string`?a(e,n):a(e),()=>{a(``)}),i)}export{i as t};

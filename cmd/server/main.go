@@ -1,0 +1,79 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"log"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"tsuruyomi/internal/config"
+	"tsuruyomi/internal/database"
+	"tsuruyomi/internal/extensions"
+	"tsuruyomi/internal/router"
+)
+
+func main() {
+	// Parse cmdline flags
+	configPath := flag.String("config", "config.yaml", "Path to config file")
+	flag.Parse()
+
+	// Load configuration
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	log.Printf("Starting Tsuruyomi in log level: %s", cfg.Logging.Level)
+
+	// Context for database connection check with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Initialize database pool
+	log.Printf("Connecting to database...")
+	if err := database.Connect(ctx, cfg.Database); err != nil {
+		log.Printf("Warning: Could not connect to database: %v. Server running in offline stub mode.", err)
+	} else {
+		log.Printf("Successfully connected to database.")
+		defer database.Close()
+
+		// Run index optimization for library queries
+		_, _ = database.DB.Exec(context.Background(), "CREATE INDEX IF NOT EXISTS idx_chapter_manga_read ON suwayomi.chapter (manga, read);")
+	}
+
+	// Initialize JS Extension Engine
+	extDir := filepath.Join(cfg.Data.RootDir, "extensions")
+	log.Printf("Loading JavaScript extensions from: %s", extDir)
+	if err := extensions.GlobalEngine.LoadAllExtensions(extDir); err != nil {
+		log.Printf("Warning: failed to load extensions: %v", err)
+	}
+
+	// Initialize Fiber app setup
+	app := router.Setup(cfg)
+
+	// Graceful shutdown channel
+	shutdown := make(chan os.Signal, 1)
+	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		log.Printf("Server listening on %s%s", cfg.Server.Addr(), cfg.Server.Subpath)
+		if err := app.Listen(cfg.Server.Addr()); err != nil {
+			log.Printf("Server shut down error: %v", err)
+		}
+	}()
+
+	// Wait for termination signal
+	<-shutdown
+	log.Println("Gracefully shutting down...")
+
+	// Shutdown fiber app with a timeout of 10s
+	if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {
+		log.Printf("Fiber shutdown error: %v", err)
+	}
+
+	log.Println("Shutdown complete.")
+}

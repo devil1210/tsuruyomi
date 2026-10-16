@@ -1,0 +1,1 @@
+System.register(["./index-legacy-B4bgfkQg.js"],function(e,t){var s,c,n;return{setters:[function(e){s=e.es,c=e.ol}],execute:function(){n=c(),e("t",s((0,n.jsx)("path",{d:"M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2m0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2m0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2"}),"MoreVert"))}}});
