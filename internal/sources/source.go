@@ -10,8 +10,17 @@ import (
 	"sync"
 	"time"
 
+	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
+	"tsuruyomi/internal/util"
 )
+
+var AppConfig *config.Config
+
+// SetConfig stores the configuration for source operations.
+func SetConfig(cfg *config.Config) {
+	AppConfig = cfg
+}
 
 // DefaultClient is an optimized HTTP client for source scraping with realistic browser headers.
 var DefaultClient = &http.Client{
@@ -92,6 +101,15 @@ func FetchHTML(ctx context.Context, targetURL string, referer string) (string, e
 		return "", err
 	}
 	defer resp.Body.Close()
+
+	if (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusServiceUnavailable) && AppConfig != nil && AppConfig.FlareSolverr.Enabled {
+		log.Printf("[SOURCES] Cloudflare challenge encountered for %s (HTTP %d). Requesting FlareSolverr bypass...", targetURL, resp.StatusCode)
+		html, solveErr := util.SolveAndFetchHTML(ctx, AppConfig, targetURL, referer)
+		if solveErr == nil && len(html) > 0 {
+			return html, nil
+		}
+		log.Printf("[SOURCES] FlareSolverr challenge bypass warning: %v", solveErr)
+	}
 
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("HTTP error %d fetching %s", resp.StatusCode, targetURL)

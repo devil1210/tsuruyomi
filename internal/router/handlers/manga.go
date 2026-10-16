@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/models"
+	"tsuruyomi/internal/service"
 	"tsuruyomi/internal/sources"
 	"tsuruyomi/internal/util"
 )
@@ -493,7 +495,7 @@ func DownloadChapter(c *fiber.Ctx) error {
 	cbzPath := basePath + ".cbz"
 
 	// 1. If .cbz file exists directly on disk
-	if info, err := os.Stat(cbzPath); err == nil && !info.IsDir() {
+	if info, err := os.Stat(cbzPath); err == nil && !info.IsDir() && info.Size() > 1024 {
 		filename := fmt.Sprintf("%s - %s.cbz", util.SanitizeFilename(mTitle), util.SanitizeFilename(chName))
 		c.Set(fiber.HeaderContentType, "application/vnd.comicbook+zip")
 		c.Set(fiber.HeaderContentDisposition, fmt.Sprintf(`attachment; filename="%s"`, filename))
@@ -524,6 +526,22 @@ func DownloadChapter(c *fiber.Ctx) error {
 		}
 		_ = zipWriter.Close()
 		return c.Send(zipBuffer.Bytes())
+	}
+
+	// 3. On-demand auto download for OPDS readers and clients when not yet downloaded
+	log.Printf("[OPDS/Downloader] CBZ not found locally for chapter %d ('%s' - '%s'). Initiating on-demand download...", chapterId, mTitle, chName)
+	generatedCBZ, err := service.EnsureChapterCBZ(c.Context(), cfg, chapterId)
+	if err != nil {
+		log.Printf("[OPDS/Downloader] Failed to auto-download chapter %d: %v", chapterId, err)
+		return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("Failed to download chapter: %v", err))
+	}
+
+	if info, err := os.Stat(generatedCBZ); err == nil && !info.IsDir() {
+		filename := fmt.Sprintf("%s - %s.cbz", util.SanitizeFilename(mTitle), util.SanitizeFilename(chName))
+		c.Set(fiber.HeaderContentType, "application/vnd.comicbook+zip")
+		c.Set(fiber.HeaderContentDisposition, fmt.Sprintf(`attachment; filename="%s"`, filename))
+		c.Set(fiber.HeaderContentLength, fmt.Sprintf("%d", info.Size()))
+		return c.SendFile(generatedCBZ)
 	}
 
 	return c.Status(fiber.StatusNotFound).SendString("Chapter CBZ not found on server")
@@ -561,15 +579,17 @@ func DownloadChapterMetadata(c *fiber.Ctx) error {
 				scan = scanlator.String
 			}
 			cbzPath := util.GetChapterPath(cfg, sourceName, mTitle, chName, scan) + ".cbz"
-			if info, err := os.Stat(cbzPath); err == nil && !info.IsDir() {
+			if info, err := os.Stat(cbzPath); err == nil && !info.IsDir() && info.Size() > 1024 {
 				c.Set(fiber.HeaderContentType, "application/vnd.comicbook+zip")
 				c.Set(fiber.HeaderContentLength, fmt.Sprintf("%d", info.Size()))
-				return c.SendStatus(fiber.StatusOK)
+				c.Set(fiber.HeaderAcceptRanges, "bytes")
+				return c.Send(nil)
 			}
 		}
 	}
 
+	// For undownloaded chapters, return 200 OK with CBZ content type so readers proceed to GET
 	c.Set(fiber.HeaderContentType, "application/vnd.comicbook+zip")
-	c.Set(fiber.HeaderContentLength, "0")
-	return c.SendStatus(fiber.StatusOK)
+	c.Set(fiber.HeaderAcceptRanges, "bytes")
+	return c.Send(nil)
 }

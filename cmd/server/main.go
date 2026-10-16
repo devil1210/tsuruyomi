@@ -14,6 +14,7 @@ import (
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/extensions"
 	"tsuruyomi/internal/router"
+	"tsuruyomi/internal/sources"
 )
 
 func main() {
@@ -26,6 +27,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+
+	sources.SetConfig(cfg)
 
 	log.Printf("Starting Tsuruyomi in log level: %s", cfg.Logging.Level)
 

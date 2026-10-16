@@ -182,8 +182,8 @@ func Setup(cfg *config.Config) *fiber.App {
 
 	// Chapter (cross-manga) Routes
 	api.Post("/chapter/batch", handlers.ChapterBatchGlobal)
-	api.Get("/chapter/:chapterId/download", handlers.DownloadChapter)
 	api.Head("/chapter/:chapterId/download", handlers.DownloadChapterMetadata)
+	api.Get("/chapter/:chapterId/download", handlers.DownloadChapter)
 
 	// Category Routes
 	api.Get("/category", handlers.ListCategories)
