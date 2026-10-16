@@ -263,6 +263,43 @@ func Setup(cfg *config.Config) *fiber.App {
 	opdsRoot := root.Group("/opds")
 	registerOpdsRoutes(opdsRoot)
 
+	// OPDS 2.0 Endpoints (/api/opds/v2.0, /api/opds/2.0, /opds/v2.0, /opds/2.0)
+	registerOpds2Routes := func(r fiber.Router) {
+		r.Get("/", handlers.GetOpds2Root)
+		r.Get("/search", handlers.GetOpds2Search)
+		r.Get("/history", handlers.GetOpds2History)
+		r.Get("/library-updates", handlers.GetOpds2LibraryUpdates)
+
+		// Library Navigation
+		r.Get("/library/series", handlers.GetOpds2LibrarySeries)
+		r.Get("/library/categories", handlers.GetOpds2Categories)
+		r.Get("/library/sources", handlers.GetOpds2Sources)
+		r.Get("/library/genres", handlers.GetOpds2Genres)
+		r.Get("/library/statuses", handlers.GetOpds2Statuses)
+
+		// Filtered Series Navigation Feeds
+		r.Get("/category/:categoryId", handlers.GetOpds2CategorySeries)
+		r.Get("/source/:sourceId", handlers.GetOpds2SourceSeries)
+		r.Get("/genre/:genre", handlers.GetOpds2GenreSeries)
+		r.Get("/status/:statusId", handlers.GetOpds2StatusSeries)
+
+		// Item Specific Publication Feeds
+		r.Get("/series/:mangaId", handlers.GetOpds2SeriesChapters)
+		r.Get("/series/:mangaId/chapters", handlers.GetOpds2SeriesChapters)
+	}
+
+	opds2ApiV := root.Group("/api/opds/v2.0")
+	registerOpds2Routes(opds2ApiV)
+
+	opds2Api := root.Group("/api/opds/2.0")
+	registerOpds2Routes(opds2Api)
+
+	opds2V := root.Group("/opds/v2.0")
+	registerOpds2Routes(opds2V)
+
+	opds2 := root.Group("/opds/2.0")
+	registerOpds2Routes(opds2)
+
 	// Serve WebUI static files from root_dir + "/webUI"
 	root.Static("/", filepath.Join(cfg.Data.RootDir, "webUI"), fiber.Static{
 		Compress:  true,
