@@ -10,6 +10,7 @@ config.yaml
 *.so
 *.dylib
 /tsuruyomi
+/tsuruyomi-linux
 /gosho
 /gosho-linux
 /server

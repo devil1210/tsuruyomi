@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -133,6 +134,94 @@ func formatRFC3339(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
+var xmlAttrRegex = regexp.MustCompile(`([a-zA-Z0-9_:-]+)="([^"]*)"`)
+
+// sanitizeAttrToASCII converts accented Latin characters to their ASCII base
+// and strips any remaining non-ASCII characters to keep XML attributes safe for
+// strict lexers (such as KOReader's luxl in versions <= 2024.11).
+func sanitizeAttrToASCII(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case 'á', 'à', 'ä', 'â', 'ã', 'å':
+			b.WriteByte('a')
+		case 'Á', 'À', 'Ä', 'Â', 'Ã', 'Å':
+			b.WriteByte('A')
+		case 'é', 'è', 'ë', 'ê':
+			b.WriteByte('e')
+		case 'É', 'È', 'Ë', 'Ê':
+			b.WriteByte('E')
+		case 'í', 'ì', 'ï', 'î':
+			b.WriteByte('i')
+		case 'Í', 'Ì', 'Ï', 'Î':
+			b.WriteByte('I')
+		case 'ó', 'ò', 'ö', 'ô', 'õ', 'ø':
+			b.WriteByte('o')
+		case 'Ó', 'Ò', 'Ö', 'Ô', 'Õ', 'Ø':
+			b.WriteByte('O')
+		case 'ú', 'ù', 'ü', 'û':
+			b.WriteByte('u')
+		case 'Ú', 'Ù', 'Ü', 'Û':
+			b.WriteByte('U')
+		case 'ñ':
+			b.WriteByte('n')
+		case 'Ñ':
+			b.WriteByte('N')
+		case 'ç':
+			b.WriteByte('c')
+		case 'Ç':
+			b.WriteByte('C')
+		case 'ß':
+			b.WriteString("ss")
+		default:
+			if r <= 127 {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
+}
+
+// slugifyTerm creates an ASCII-only identifier slug for OPDS category terms.
+func slugifyTerm(s string) string {
+	ascii := strings.ToLower(sanitizeAttrToASCII(s))
+	var b strings.Builder
+	for _, r := range ascii {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else if r == ' ' || r == '_' || r == '-' {
+			b.WriteByte('_')
+		}
+	}
+	res := strings.Trim(b.String(), "_")
+	if res == "" {
+		return "general"
+	}
+	return res
+}
+
+func sanitizeXMLAttributes(xmlStr string) string {
+	return xmlAttrRegex.ReplaceAllStringFunc(xmlStr, func(m string) string {
+		sub := xmlAttrRegex.FindStringSubmatch(m)
+		if len(sub) == 3 {
+			attrName := sub[1]
+			attrVal := sub[2]
+			hasNonASCII := false
+			for i := 0; i < len(attrVal); i++ {
+				if attrVal[i] >= 128 {
+					hasNonASCII = true
+					break
+				}
+			}
+			if hasNonASCII {
+				return fmt.Sprintf(`%s="%s"`, attrName, sanitizeAttrToASCII(attrVal))
+			}
+		}
+		return m
+	})
+}
+
 func renderOpdsXML(c *fiber.Ctx, feed *OpdsFeed, isAcquisition bool) error {
 	mime := OpdsMimeNavigation
 	if isAcquisition {
@@ -146,7 +235,8 @@ func renderOpdsXML(c *fiber.Ctx, feed *OpdsFeed, isAcquisition bool) error {
 	}
 
 	c.Response().Header.Set("Content-Type", mime)
-	return c.SendString(xml.Header + string(data))
+	cleanXML := sanitizeXMLAttributes(xml.Header + string(data))
+	return c.SendString(cleanXML)
 }
 
 // GetOpdsRoot serves the root navigation feed.
@@ -538,8 +628,8 @@ func buildMangaAcquisitionFeed(c *fiber.Ctx, feedSubpath, feedTitle, filterType 
 				g = strings.TrimSpace(g)
 				if g != "" {
 					categories = append(categories, OpdsCategory{
-						Term:   strings.ToLower(strings.ReplaceAll(g, " ", "_")),
-						Label:  g,
+						Term:   slugifyTerm(g),
+						Label:  sanitizeAttrToASCII(g),
 						Scheme: "/api/opds/v1.2/library/genres",
 					})
 				}
@@ -553,20 +643,19 @@ func buildMangaAcquisitionFeed(c *fiber.Ctx, feedSubpath, feedTitle, filterType 
 
 		links := []OpdsLink{
 			{
-				Rel:   OpdsRelSubsection,
-				Href:  fmt.Sprintf("/api/opds/v1.2/series/%d", mID),
-				Type:  OpdsMimeAcquisition,
-				Title: mTitle,
+				Rel:  OpdsRelSubsection,
+				Href: fmt.Sprintf("/api/opds/v1.2/series/%d", mID),
+				Type: OpdsMimeAcquisition,
 			},
 			{
-				Rel:   OpdsRelImage,
-				Href:  fmt.Sprintf("/api/v1/manga/%d/thumbnail", mID),
-				Type:  OpdsMimeJpeg,
+				Rel:  OpdsRelImage,
+				Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail", mID),
+				Type: OpdsMimeJpeg,
 			},
 			{
-				Rel:   OpdsRelImageThumbnail,
-				Href:  fmt.Sprintf("/api/v1/manga/%d/thumbnail", mID),
-				Type:  OpdsMimeJpeg,
+				Rel:  OpdsRelImageThumbnail,
+				Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail", mID),
+				Type: OpdsMimeJpeg,
 			},
 			{
 				Rel:   OpdsRelAlternate,
@@ -798,7 +887,6 @@ func GetOpdsCategories(c *fiber.Ctx) error {
 					Rel:      OpdsRelSubsection,
 					Href:     fmt.Sprintf("/api/opds/v1.2/category/%d", cat.ID),
 					Type:     OpdsMimeAcquisition,
-					Title:    cat.Name,
 					ThrCount: &cnt,
 				},
 			},
@@ -857,7 +945,6 @@ func GetOpdsSources(c *fiber.Ctx) error {
 						Rel:      OpdsRelSubsection,
 						Href:     fmt.Sprintf("/api/opds/v1.2/source/%d", srcID),
 						Type:     OpdsMimeAcquisition,
-						Title:    srcName,
 						ThrCount: &count,
 					},
 					{
@@ -925,7 +1012,6 @@ func GetOpdsGenres(c *fiber.Ctx) error {
 						Rel:      OpdsRelSubsection,
 						Href:     fmt.Sprintf("/api/opds/v1.2/genre/%s", url.PathEscape(genreName)),
 						Type:     OpdsMimeAcquisition,
-						Title:    genreName,
 						ThrCount: &count,
 					},
 				},
@@ -986,7 +1072,6 @@ func GetOpdsStatuses(c *fiber.Ctx) error {
 						Rel:      OpdsRelSubsection,
 						Href:     fmt.Sprintf("/api/opds/v1.2/status/%d", statusInt),
 						Type:     OpdsMimeAcquisition,
-						Title:    statusName,
 						ThrCount: &count,
 					},
 				},
