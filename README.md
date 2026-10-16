@@ -62,7 +62,7 @@
 #### Build Binary
 ```bash
 # Clone the repository
-git clone https://github.com/tsuruyomi/tsuruyomi.git
+git clone https://github.com/devil1210/tsuruyomi.git
 cd tsuruyomi
 
 # Build for current OS
