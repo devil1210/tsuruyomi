@@ -771,6 +771,16 @@ func GetOpdsSeriesChapters(c *fiber.Ctx) error {
 	total := len(chapters)
 	feed.TotalResults = &total
 
+	if len(chapters) == 0 {
+		feed.Entries = append(feed.Entries, OpdsEntry{
+			ID:      fmt.Sprintf("urn:tsuruyomi:series:%d:no-chapters", mangaId),
+			Title:   "[Sin capitulos disponibles en biblioteca]",
+			Updated: now,
+			Summary: &OpdsTextElem{Type: "text", Value: fmt.Sprintf("No hay capitulos sincronizados para %s.", manga.Title)},
+			Content: &OpdsTextElem{Type: "text", Value: "Esta serie aun no tiene capitulos sincronizados en la base de datos de Tsuruyomi. Actualiza la serie desde la WebUI para descargar la lista de capitulos."},
+		})
+	}
+
 	for _, ch := range chapters {
 		chUpdated := now
 		if ch.FetchedAt > 0 {
