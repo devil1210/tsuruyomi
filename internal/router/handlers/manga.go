@@ -3,6 +3,7 @@ package handlers
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -241,12 +242,23 @@ func GetChaptersList(c *fiber.Ctx) error {
 	return c.JSON(list)
 }
 
+// ModifyChapterInput defines parameters accepted when modifying a single chapter.
+type ModifyChapterInput struct {
+	Read         *bool `json:"read" form:"read"`
+	IsRead       *bool `json:"isRead" form:"isRead"`
+	Bookmarked   *bool `json:"bookmarked" form:"bookmarked"`
+	IsBookmarked *bool `json:"isBookmarked" form:"isBookmarked"`
+	LastPageRead *int  `json:"lastPageRead" form:"lastPageRead"`
+	MarkPrevRead *bool `json:"markPrevRead" form:"markPrevRead"`
+}
+
 // ChapterBatchManga edits multiple chapters of a single manga.
 func ChapterBatchManga(c *fiber.Ctx) error {
 	var body models.MangaChapterBatchEditInput
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
+	applyChapterBatchChanges(c.Context(), body.ChapterIDs, body.ChangeType)
 	return c.SendStatus(fiber.StatusOK)
 }
 
@@ -274,7 +286,104 @@ func GetChapter(c *fiber.Ctx) error {
 
 // ModifyChapter updates chapter settings like read, bookmarked, etc.
 func ModifyChapter(c *fiber.Ctx) error {
-	return c.SendStatus(fiber.StatusOK)
+	mangaId, err := strconv.Atoi(c.Params("mangaId"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString("Invalid manga ID")
+	}
+	chapterIndex, err := strconv.Atoi(c.Params("chapterIndex"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString("Invalid chapter index")
+	}
+
+	ch, err := database.GetChapterByMangaAndIndex(c.Context(), mangaId, chapterIndex)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+	}
+	if ch == nil {
+		return c.Status(fiber.StatusNotFound).SendString("Chapter not found")
+	}
+
+	var input ModifyChapterInput
+	_ = c.BodyParser(&input)
+
+	if input.Read == nil && input.IsRead == nil && c.Query("read") != "" {
+		val := c.Query("read") == "true"
+		input.Read = &val
+	}
+	if input.Bookmarked == nil && input.IsBookmarked == nil && c.Query("bookmarked") != "" {
+		val := c.Query("bookmarked") == "true"
+		input.Bookmarked = &val
+	}
+	if input.LastPageRead == nil && c.Query("lastPageRead") != "" {
+		if lpr, err := strconv.Atoi(c.Query("lastPageRead")); err == nil {
+			input.LastPageRead = &lpr
+		}
+	}
+	if input.MarkPrevRead == nil && c.Query("markPrevRead") != "" {
+		val := c.Query("markPrevRead") == "true"
+		input.MarkPrevRead = &val
+	}
+
+	newRead := ch.Read
+	if input.Read != nil {
+		newRead = *input.Read
+	} else if input.IsRead != nil {
+		newRead = *input.IsRead
+	}
+
+	newBookmark := ch.Bookmarked
+	if input.Bookmarked != nil {
+		newBookmark = *input.Bookmarked
+	} else if input.IsBookmarked != nil {
+		newBookmark = *input.IsBookmarked
+	}
+
+	newLPR := ch.LastPageRead
+	if input.LastPageRead != nil {
+		newLPR = *input.LastPageRead
+	}
+
+	now := time.Now().Unix()
+	newLRA := ch.LastReadAt
+	if newRead || newLPR > 0 {
+		newLRA = now
+	} else if (input.Read != nil && !*input.Read) || (input.IsRead != nil && !*input.IsRead) {
+		if newLPR == 0 {
+			newLRA = 0
+		}
+	}
+
+	if database.DB != nil {
+		_, _ = database.DB.Exec(c.Context(), `
+			INSERT INTO suwayomi.chapteruser (chapter, user_id, read, bookmark, last_page_read, last_read_at, version, last_modified_at)
+			VALUES ($1, 1, $2, $3, $4, $5, 1, $6)
+			ON CONFLICT (chapter, user_id) DO UPDATE SET
+				read = EXCLUDED.read,
+				bookmark = EXCLUDED.bookmark,
+				last_page_read = EXCLUDED.last_page_read,
+				last_read_at = EXCLUDED.last_read_at,
+				last_modified_at = EXCLUDED.last_modified_at
+		`, ch.ID, newRead, newBookmark, newLPR, newLRA, now)
+
+		if input.MarkPrevRead != nil && *input.MarkPrevRead {
+			_, _ = database.DB.Exec(c.Context(), `
+				INSERT INTO suwayomi.chapteruser (chapter, user_id, read, bookmark, last_page_read, last_read_at, version, last_modified_at)
+				SELECT c.id, 1, true, false, 0, $1, 1, $1
+				FROM suwayomi.chapter c
+				WHERE c.manga = $2 AND c.source_order < $3
+				ON CONFLICT (chapter, user_id) DO UPDATE SET
+					read = true,
+					last_read_at = EXCLUDED.last_read_at,
+					last_modified_at = EXCLUDED.last_modified_at
+			`, now, mangaId, ch.Index)
+		}
+	}
+
+	updatedCh, err := database.GetChapterByMangaAndIndex(c.Context(), mangaId, chapterIndex)
+	if err == nil && updatedCh != nil {
+		return c.JSON(updatedCh)
+	}
+	return c.JSON(ch)
 }
 
 // DeleteChapter removes downloaded files for a chapter.
@@ -434,12 +543,68 @@ func GetPageImage(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusNotFound).SendString("Page not found")
 }
 
+// applyChapterBatchChanges applies batch edits (isRead, isBookmarked, lastPageRead, delete) to chapteruser.
+func applyChapterBatchChanges(ctx context.Context, chapterIDs []int, change models.ChapterBatchEditChange) {
+	if len(chapterIDs) == 0 || database.DB == nil {
+		return
+	}
+	now := time.Now().Unix()
+	for _, cid := range chapterIDs {
+		var currentRead, currentBookmark bool
+		var currentLPR int
+		var currentLRA int64
+		_ = database.DB.QueryRow(ctx, `
+			SELECT read, bookmark, last_page_read, last_read_at
+			FROM suwayomi.chapteruser
+			WHERE chapter = $1 AND user_id = 1
+		`, cid).Scan(&currentRead, &currentBookmark, &currentLPR, &currentLRA)
+
+		newRead := currentRead
+		if change.IsRead != nil {
+			newRead = *change.IsRead
+		}
+		newBookmark := currentBookmark
+		if change.IsBookmarked != nil {
+			newBookmark = *change.IsBookmarked
+		}
+		newLPR := currentLPR
+		if change.LastPageRead != nil {
+			newLPR = *change.LastPageRead
+		}
+		newLRA := currentLRA
+		if change.IsRead != nil && *change.IsRead {
+			newLRA = now
+		} else if change.LastPageRead != nil && *change.LastPageRead > 0 {
+			newLRA = now
+		} else if change.IsRead != nil && !*change.IsRead && newLPR == 0 {
+			newLRA = 0
+		}
+
+		_, _ = database.DB.Exec(ctx, `
+			INSERT INTO suwayomi.chapteruser (chapter, user_id, read, bookmark, last_page_read, last_read_at, version, last_modified_at)
+			VALUES ($1, 1, $2, $3, $4, $5, 1, $6)
+			ON CONFLICT (chapter, user_id) DO UPDATE SET
+				read = EXCLUDED.read,
+				bookmark = EXCLUDED.bookmark,
+				last_page_read = EXCLUDED.last_page_read,
+				last_read_at = EXCLUDED.last_read_at,
+				last_modified_at = EXCLUDED.last_modified_at
+		`, cid, newRead, newBookmark, newLPR, newLRA, now)
+
+		if change.Delete != nil && *change.Delete {
+			_, _ = database.DB.Exec(ctx, "UPDATE suwayomi.chapteruser SET is_downloaded = false WHERE chapter = $1", cid)
+			_, _ = database.DB.Exec(ctx, "UPDATE suwayomi.chapter SET is_downloaded = false WHERE id = $1", cid)
+		}
+	}
+}
+
 // ChapterBatchGlobal edits multiple chapters across different mangas.
 func ChapterBatchGlobal(c *fiber.Ctx) error {
 	var body models.ChapterBatchEditInput
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
+	applyChapterBatchChanges(c.Context(), body.ChapterIDs, body.Change)
 	return c.SendStatus(fiber.StatusOK)
 }
 

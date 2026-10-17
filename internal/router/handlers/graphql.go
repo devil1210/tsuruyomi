@@ -2573,6 +2573,9 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				} else if isRead != nil && *isRead {
 					now := time.Now().Unix()
 					lastReadAt = &now
+				} else if lastPageRead != nil && *lastPageRead > 0 {
+					now := time.Now().Unix()
+					lastReadAt = &now
 				}
 			}
 
@@ -2600,6 +2603,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			newLRA := currentLRA
 			if lastReadAt != nil {
 				newLRA = *lastReadAt
+			} else if isRead != nil && !*isRead && newLPR == 0 {
+				newLRA = 0
 			}
 
 			_, _ = database.DB.Exec(c.Context(), `
@@ -2664,6 +2669,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		if len(chapterIDs) > 0 && database.DB != nil {
 			var isRead *bool
 			var isBookmarked *bool
+			var lastPageRead *int
+			var lastReadAt *int64
 			if patch != nil {
 				if r, ok := patch["isRead"].(bool); ok {
 					isRead = &r
@@ -2671,33 +2678,60 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				if b, ok := patch["isBookmarked"].(bool); ok {
 					isBookmarked = &b
 				}
+				if p, ok := patch["lastPageRead"].(float64); ok {
+					ip := int(p)
+					lastPageRead = &ip
+				}
+				if lr, ok := patch["lastReadAt"].(float64); ok {
+					ilr := int64(lr)
+					lastReadAt = &ilr
+				}
 			}
 
 			now := time.Now().Unix()
 			for _, cid := range chapterIDs {
-				newRead := false
+				var currentRead, currentBookmark bool
+				var currentLPR int
+				var currentLRA int64
+				_ = database.DB.QueryRow(c.Context(), `
+					SELECT read, bookmark, last_page_read, last_read_at
+					FROM suwayomi.chapteruser
+					WHERE chapter = $1 AND user_id = 1
+				`, cid).Scan(&currentRead, &currentBookmark, &currentLPR, &currentLRA)
+
+				newRead := currentRead
 				if isRead != nil {
 					newRead = *isRead
 				}
-				var lastReadAt int64 = 0
-				if newRead {
-					lastReadAt = now
-				}
-
-				newBookmark := false
+				newBookmark := currentBookmark
 				if isBookmarked != nil {
 					newBookmark = *isBookmarked
+				}
+				newLPR := currentLPR
+				if lastPageRead != nil {
+					newLPR = *lastPageRead
+				}
+				newLRA := currentLRA
+				if lastReadAt != nil {
+					newLRA = *lastReadAt
+				} else if isRead != nil && *isRead {
+					newLRA = now
+				} else if lastPageRead != nil && *lastPageRead > 0 {
+					newLRA = now
+				} else if isRead != nil && !*isRead && newLPR == 0 {
+					newLRA = 0
 				}
 
 				_, _ = database.DB.Exec(c.Context(), `
 					INSERT INTO suwayomi.chapteruser (chapter, user_id, read, bookmark, last_page_read, last_read_at, version, last_modified_at)
-					VALUES ($1, 1, $2, $3, 0, $4, 1, $5)
+					VALUES ($1, 1, $2, $3, $4, $5, 1, $6)
 					ON CONFLICT (chapter, user_id) DO UPDATE SET
-						read = CASE WHEN $6 THEN EXCLUDED.read ELSE chapteruser.read END,
-						bookmark = CASE WHEN $7 THEN EXCLUDED.bookmark ELSE chapteruser.bookmark END,
-						last_read_at = CASE WHEN $6 AND EXCLUDED.read THEN EXCLUDED.last_read_at ELSE chapteruser.last_read_at END,
+						read = EXCLUDED.read,
+						bookmark = EXCLUDED.bookmark,
+						last_page_read = EXCLUDED.last_page_read,
+						last_read_at = EXCLUDED.last_read_at,
 						last_modified_at = EXCLUDED.last_modified_at
-				`, cid, newRead, newBookmark, lastReadAt, now, isRead != nil, isBookmarked != nil)
+				`, cid, newRead, newBookmark, newLPR, newLRA, now)
 
 				var chMangaID int64
 				_ = database.DB.QueryRow(c.Context(), "SELECT manga FROM suwayomi.chapter WHERE id = $1", cid).Scan(&chMangaID)
@@ -2706,13 +2740,13 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					"id":           cid,
 					"isRead":       newRead,
 					"isBookmarked": newBookmark,
-					"lastReadAt":   lastReadAt,
-					"lastPageRead": 0,
+					"lastReadAt":   newLRA,
+					"lastPageRead": newLPR,
 					"manga": map[string]interface{}{
 						"id":                 chMangaID,
 						"unreadCount":        0,
-						"lastReadChapter":    map[string]interface{}{"id": cid, "__typename": "ChapterType"},
-						"latestReadChapter":  map[string]interface{}{"id": cid, "__typename": "ChapterType"},
+						"lastReadChapter":    map[string]interface{}{"id": cid, "lastPageRead": newLPR, "lastReadAt": newLRA, "__typename": "ChapterType"},
+						"latestReadChapter":  map[string]interface{}{"id": cid, "lastPageRead": newLPR, "lastReadAt": newLRA, "__typename": "ChapterType"},
 						"firstUnreadChapter": nil,
 						"__typename":         "MangaType",
 					},
@@ -2964,8 +2998,10 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 			COALESCE(fu.chapter_number, 0.0),
 			COALESCE(fu.name, ''),
 			COALESCE(fu.scanlator, ''),
+			COALESCE(fu.last_page_read, 0),
 			COALESCE(lr.id, 0),
 			COALESCE(lr.source_order, 0),
+			COALESCE(lr.last_page_read, 0),
 			COALESCE(lu.id, 0)
 		FROM suwayomi.manga m
 		LEFT JOIN suwayomi.mangauser mu ON m.id = mu.manga
@@ -2985,7 +3021,8 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 			WHERE c.manga = m.id
 		) stat ON true
 		LEFT JOIN LATERAL (
-			SELECT c.id, c.source_order, c.chapter_number, c.name, COALESCE(c.scanlator, '') as scanlator
+			SELECT c.id, c.source_order, c.chapter_number, c.name, COALESCE(c.scanlator, '') as scanlator,
+			       COALESCE(cu.last_page_read, 0) as last_page_read
 			FROM suwayomi.chapter c
 			LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
 			WHERE c.manga = m.id AND COALESCE(cu.read, false) = false
@@ -2993,10 +3030,11 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 			LIMIT 1
 		) fu ON stat.unread_count > 0
 		LEFT JOIN LATERAL (
-			SELECT c.id, c.source_order
+			SELECT c.id, c.source_order, COALESCE(cu.last_page_read, 0) as last_page_read
 			FROM suwayomi.chapter c
 			INNER JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
 			WHERE c.manga = m.id AND cu.last_read_at = stat.max_last_read_at
+			ORDER BY c.source_order DESC
 			LIMIT 1
 		) lr ON stat.max_last_read_at > 0
 		LEFT JOIN LATERAL (
@@ -3085,7 +3123,9 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 		var fuID, fuSourceOrder int64
 		var fuChapterNumber float32
 		var fuName, fuScanlator string
+		var fuLastPageRead int
 		var lrID, lrSourceOrder int64
+		var lrLastPageRead int
 		var luID int64
 
 		err := rows.Scan(
@@ -3095,8 +3135,8 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 			&statusInt, &sourceId, &sourceName, &realUrl, &mangaUrl, &lastFetchedAt,
 			&unreadCount, &downloadCount, &bookmarkCount, &chaptersCount,
 			&maxLastReadAt, &maxDateUpload, &maxFetchedAt, &maxChapterNumber,
-			&fuID, &fuSourceOrder, &fuChapterNumber, &fuName, &fuScanlator,
-			&lrID, &lrSourceOrder, &luID,
+			&fuID, &fuSourceOrder, &fuChapterNumber, &fuName, &fuScanlator, &fuLastPageRead,
+			&lrID, &lrSourceOrder, &lrLastPageRead, &luID,
 		)
 		if err != nil {
 			log.Printf("[ERROR] fetchMangaGraphQLNodes scan error: %v", err)
@@ -3133,6 +3173,7 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 				"chapterNumber": fuChapterNumber,
 				"name":          fuName,
 				"scanlator":     fuScanlator,
+				"lastPageRead":  fuLastPageRead,
 				"__typename":    "ChapterType",
 			}
 		}
@@ -3140,20 +3181,22 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 		var lastReadChapter interface{} = nil
 		if maxLastReadAt > 0 {
 			lastReadChapter = map[string]interface{}{
-				"id":          lrID,
-				"sourceOrder": lrSourceOrder,
-				"lastReadAt":  maxLastReadAt,
-				"__typename":  "ChapterType",
+				"id":           lrID,
+				"sourceOrder":  lrSourceOrder,
+				"lastReadAt":   maxLastReadAt,
+				"lastPageRead": lrLastPageRead,
+				"__typename":   "ChapterType",
 			}
 		}
 
 		var latestReadChapter interface{} = nil
 		if maxLastReadAt > 0 {
 			latestReadChapter = map[string]interface{}{
-				"id":          lrID,
-				"sourceOrder": lrSourceOrder,
-				"lastReadAt":  maxLastReadAt,
-				"__typename":  "ChapterType",
+				"id":           lrID,
+				"sourceOrder":  lrSourceOrder,
+				"lastReadAt":   maxLastReadAt,
+				"lastPageRead": lrLastPageRead,
+				"__typename":   "ChapterType",
 			}
 		}
 
