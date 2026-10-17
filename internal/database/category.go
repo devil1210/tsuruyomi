@@ -41,7 +41,7 @@ func GetCategoryList(ctx context.Context) ([]models.CategoryDataClass, error) {
 		var updateInt, downloadInt int
 		err := rows.Scan(
 			&cat.ID, &cat.Name, &cat.Order, &cat.Default, &updateInt,
-			&cat.IncludeInDownload, &cat.Version, &cat.UID, &cat.LastModifiedAt,
+			&downloadInt, &cat.Version, &cat.UID, &cat.LastModifiedAt,
 			&cat.Size,
 		)
 		if err != nil {
@@ -163,7 +163,7 @@ func GetMangaCategories(ctx context.Context, mangaId int) ([]models.CategoryData
 		var updateInt, downloadInt int
 		err := rows.Scan(
 			&cat.ID, &cat.Name, &cat.Order, &cat.Default, &updateInt,
-			&cat.IncludeInDownload, &cat.Version, &cat.UID, &cat.LastModifiedAt,
+			&downloadInt, &cat.Version, &cat.UID, &cat.LastModifiedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning manga category row: %w", err)
@@ -420,3 +420,36 @@ func normalizeCategoriesTx(ctx context.Context, tx pgx.Tx) error {
 
 	return nil
 }
+
+// GetCategoryByID returns a single category by ID.
+func GetCategoryByID(ctx context.Context, categoryId int) (*models.CategoryDataClass, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT 
+			c.id, c.name, c.sort_order, c.is_default, c.include_in_update, 
+			c.include_in_download, c.version, c.uid, c.last_modified_at,
+			COUNT(cm.manga) as size
+		FROM suwayomi.category c
+		LEFT JOIN suwayomi.categorymanga cm ON c.id = cm.category
+		WHERE c.id = $1
+		GROUP BY c.id
+	`
+	var cat models.CategoryDataClass
+	var updateInt, downloadInt int
+	err := DB.QueryRow(ctx, query, categoryId).Scan(
+		&cat.ID, &cat.Name, &cat.Order, &cat.Default, &updateInt,
+		&downloadInt, &cat.Version, &cat.UID, &cat.LastModifiedAt,
+		&cat.Size,
+	)
+	if err != nil {
+		return nil, err
+	}
+	cat.IncludeInUpdate = models.IncludeOrExclude(updateInt)
+	cat.IncludeInDownload = models.IncludeOrExclude(downloadInt)
+	cat.Meta = map[string]string{}
+	return &cat, nil
+}
+

@@ -6,6 +6,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"tsuruyomi/internal/database"
+	"tsuruyomi/internal/models"
 )
 
 // ListCategories returns all categories.
@@ -78,36 +79,45 @@ func ModifyCategory(c *fiber.Ctx) error {
 	}
 
 	var namePtr *string
-	nameVal := c.FormValue("name")
-	if nameVal != "" {
-		namePtr = &nameVal
+	var defaultPtr *bool
+	var includeInUpdatePtr *int
+	var includeInDownloadPtr *int
+
+	// Try reading JSON body if present
+	var jsonBody map[string]interface{}
+	if err := c.BodyParser(&jsonBody); err == nil && len(jsonBody) > 0 {
+		if n, ok := jsonBody["name"].(string); ok && n != "" {
+			namePtr = &n
+		}
+		if d, ok := jsonBody["default"].(bool); ok {
+			defaultPtr = &d
+		}
+		if u, ok := jsonBody["includeInUpdate"]; ok {
+			status := int(models.ParseIncludeOrExclude(u))
+			includeInUpdatePtr = &status
+		}
+		if d, ok := jsonBody["includeInDownload"]; ok {
+			status := int(models.ParseIncludeOrExclude(d))
+			includeInDownloadPtr = &status
+		}
 	}
 
-	var defaultPtr *bool
-	defVal := c.FormValue("default")
-	if defVal != "" {
-		b, err := strconv.ParseBool(defVal)
-		if err == nil {
+	// Form values override if set
+	if nameVal := c.FormValue("name"); nameVal != "" {
+		namePtr = &nameVal
+	}
+	if defVal := c.FormValue("default"); defVal != "" {
+		if b, err := strconv.ParseBool(defVal); err == nil {
 			defaultPtr = &b
 		}
 	}
-
-	var includeInUpdatePtr *int
-	upVal := c.FormValue("includeInUpdate")
-	if upVal != "" {
-		i, err := strconv.Atoi(upVal)
-		if err == nil {
-			includeInUpdatePtr = &i
-		}
+	if upVal := c.FormValue("includeInUpdate"); upVal != "" {
+		status := int(models.ParseIncludeOrExclude(upVal))
+		includeInUpdatePtr = &status
 	}
-
-	var includeInDownloadPtr *int
-	downVal := c.FormValue("includeInDownload")
-	if downVal != "" {
-		i, err := strconv.Atoi(downVal)
-		if err == nil {
-			includeInDownloadPtr = &i
-		}
+	if downVal := c.FormValue("includeInDownload"); downVal != "" {
+		status := int(models.ParseIncludeOrExclude(downVal))
+		includeInDownloadPtr = &status
 	}
 
 	err = database.UpdateCategory(c.Context(), categoryId, namePtr, defaultPtr, includeInUpdatePtr, includeInDownloadPtr)

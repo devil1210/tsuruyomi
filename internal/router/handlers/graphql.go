@@ -468,8 +468,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					"name":              cat.Name,
 					"order":             cat.Order,
 					"default":           cat.Default,
-					"includeInUpdate":   cat.IncludeInUpdate != models.Exclude,
-					"includeInDownload": cat.IncludeInDownload != models.Exclude,
+					"includeInUpdate":   cat.IncludeInUpdate.GraphQLEnum(),
+					"includeInDownload": cat.IncludeInDownload.GraphQLEnum(),
 					"mangas": map[string]interface{}{
 						"totalCount": count,
 					},
@@ -2759,6 +2759,251 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			"updateChapters": map[string]interface{}{
 				"chapters":   updatedChapters,
 				"__typename": "UpdateChaptersPayload",
+			},
+		}
+
+	case "UPDATE_CATEGORY":
+		var catID int
+		var patch map[string]interface{}
+		if inputMap, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if idF, ok := inputMap["id"].(float64); ok {
+				catID = int(idF)
+			}
+			if p, ok := inputMap["patch"].(map[string]interface{}); ok {
+				patch = p
+			} else {
+				patch = inputMap
+			}
+		}
+
+		if catID >= 0 && patch != nil && database.DB != nil {
+			var namePtr *string
+			var defaultPtr *bool
+			var includeInUpdatePtr *int
+			var includeInDownloadPtr *int
+
+			if n, ok := patch["name"].(string); ok && n != "" {
+				namePtr = &n
+			}
+			if d, ok := patch["default"].(bool); ok {
+				defaultPtr = &d
+			}
+			if u, ok := patch["includeInUpdate"]; ok {
+				status := int(models.ParseIncludeOrExclude(u))
+				includeInUpdatePtr = &status
+			}
+			if d, ok := patch["includeInDownload"]; ok {
+				status := int(models.ParseIncludeOrExclude(d))
+				includeInDownloadPtr = &status
+			}
+
+			_ = database.UpdateCategory(c.Context(), catID, namePtr, defaultPtr, includeInUpdatePtr, includeInDownloadPtr)
+		}
+
+		catObj := map[string]interface{}{
+			"id":                catID,
+			"name":              "",
+			"order":             0,
+			"default":           false,
+			"includeInUpdate":   "UNSET",
+			"includeInDownload": "UNSET",
+			"__typename":        "CategoryType",
+		}
+		if cat, err := database.GetCategoryByID(c.Context(), catID); err == nil && cat != nil {
+			catObj["name"] = cat.Name
+			catObj["order"] = cat.Order
+			catObj["default"] = cat.Default
+			catObj["includeInUpdate"] = cat.IncludeInUpdate.GraphQLEnum()
+			catObj["includeInDownload"] = cat.IncludeInDownload.GraphQLEnum()
+		}
+
+		data = map[string]interface{}{
+			"updateCategory": map[string]interface{}{
+				"category":   catObj,
+				"__typename": "UpdateCategoryPayload",
+			},
+		}
+
+	case "UPDATE_CATEGORIES":
+		var catIDs []int
+		var patch map[string]interface{}
+		if inputMap, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if ids, ok := inputMap["ids"].([]interface{}); ok {
+				for _, idV := range ids {
+					if idF, ok := idV.(float64); ok {
+						catIDs = append(catIDs, int(idF))
+					}
+				}
+			}
+			if p, ok := inputMap["patch"].(map[string]interface{}); ok {
+				patch = p
+			} else {
+				patch = inputMap
+			}
+		}
+
+		var catPayload []map[string]interface{}
+		if len(catIDs) > 0 && patch != nil && database.DB != nil {
+			var namePtr *string
+			var defaultPtr *bool
+			var includeInUpdatePtr *int
+			var includeInDownloadPtr *int
+
+			if n, ok := patch["name"].(string); ok && n != "" {
+				namePtr = &n
+			}
+			if d, ok := patch["default"].(bool); ok {
+				defaultPtr = &d
+			}
+			if u, ok := patch["includeInUpdate"]; ok {
+				status := int(models.ParseIncludeOrExclude(u))
+				includeInUpdatePtr = &status
+			}
+			if d, ok := patch["includeInDownload"]; ok {
+				status := int(models.ParseIncludeOrExclude(d))
+				includeInDownloadPtr = &status
+			}
+
+			for _, cid := range catIDs {
+				_ = database.UpdateCategory(c.Context(), cid, namePtr, defaultPtr, includeInUpdatePtr, includeInDownloadPtr)
+				if cat, err := database.GetCategoryByID(c.Context(), cid); err == nil && cat != nil {
+					catPayload = append(catPayload, map[string]interface{}{
+						"id":                cat.ID,
+						"name":              cat.Name,
+						"order":             cat.Order,
+						"default":           cat.Default,
+						"includeInUpdate":   cat.IncludeInUpdate.GraphQLEnum(),
+						"includeInDownload": cat.IncludeInDownload.GraphQLEnum(),
+						"__typename":        "CategoryType",
+					})
+				}
+			}
+		}
+		if catPayload == nil {
+			catPayload = []map[string]interface{}{}
+		}
+
+		data = map[string]interface{}{
+			"updateCategories": map[string]interface{}{
+				"categories": catPayload,
+				"__typename": "UpdateCategoriesPayload",
+			},
+		}
+
+	case "CREATE_CATEGORY":
+		var catName string
+		if inputMap, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if n, ok := inputMap["name"].(string); ok {
+				catName = n
+			} else if p, ok := inputMap["patch"].(map[string]interface{}); ok {
+				catName, _ = p["name"].(string)
+			}
+		}
+
+		var newID int
+		if catName != "" && database.DB != nil {
+			newID, _ = database.CreateCategory(c.Context(), catName)
+		}
+
+		catObj := map[string]interface{}{
+			"id":                newID,
+			"name":              catName,
+			"order":             0,
+			"default":           false,
+			"includeInUpdate":   "UNSET",
+			"includeInDownload": "UNSET",
+			"__typename":        "CategoryType",
+		}
+		if newID > 0 {
+			if cat, err := database.GetCategoryByID(c.Context(), newID); err == nil && cat != nil {
+				catObj["name"] = cat.Name
+				catObj["order"] = cat.Order
+				catObj["default"] = cat.Default
+				catObj["includeInUpdate"] = cat.IncludeInUpdate.GraphQLEnum()
+				catObj["includeInDownload"] = cat.IncludeInDownload.GraphQLEnum()
+			}
+		}
+
+		data = map[string]interface{}{
+			"createCategory": map[string]interface{}{
+				"category":   catObj,
+				"__typename": "CreateCategoryPayload",
+			},
+		}
+
+	case "DELETE_CATEGORY":
+		var catID int
+		if inputMap, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if cIdF, ok := inputMap["categoryId"].(float64); ok {
+				catID = int(cIdF)
+			} else if idF, ok := inputMap["id"].(float64); ok {
+				catID = int(idF)
+			}
+		}
+
+		if catID > 0 && database.DB != nil {
+			_ = database.DeleteCategory(c.Context(), catID)
+		}
+
+		data = map[string]interface{}{
+			"deleteCategory": map[string]interface{}{
+				"category": map[string]interface{}{
+					"id":         catID,
+					"__typename": "CategoryType",
+				},
+				"__typename": "DeleteCategoryPayload",
+			},
+		}
+
+	case "UPDATE_CATEGORY_ORDER":
+		if inputMap, ok := req.Variables["input"].(map[string]interface{}); ok && database.DB != nil {
+			var catID, pos int
+			if idF, ok := inputMap["id"].(float64); ok {
+				catID = int(idF)
+			}
+			if pF, ok := inputMap["position"].(float64); ok {
+				pos = int(pF)
+			} else if oF, ok := inputMap["order"].(float64); ok {
+				pos = int(oF)
+			}
+
+			// If from & to provided directly
+			if fromF, ok := inputMap["from"].(float64); ok {
+				if toF, ok := inputMap["to"].(float64); ok {
+					_ = database.ReorderCategory(c.Context(), int(fromF), int(toF))
+				}
+			} else if catID > 0 {
+				cats, _ := database.GetCategoryList(c.Context())
+				currentFrom := -1
+				for _, cItem := range cats {
+					if cItem.ID == catID {
+						currentFrom = cItem.Order
+						break
+					}
+				}
+				if currentFrom > 0 && pos > 0 && currentFrom != pos {
+					_ = database.ReorderCategory(c.Context(), currentFrom, pos)
+				}
+			}
+		}
+
+		var catOrderPayload []map[string]interface{}
+		cats, _ := database.GetCategoryList(c.Context())
+		for _, cat := range cats {
+			catOrderPayload = append(catOrderPayload, map[string]interface{}{
+				"id":         cat.ID,
+				"order":      cat.Order,
+				"__typename": "CategoryType",
+			})
+		}
+		if catOrderPayload == nil {
+			catOrderPayload = []map[string]interface{}{}
+		}
+
+		data = map[string]interface{}{
+			"updateCategoryOrder": map[string]interface{}{
+				"categories": catOrderPayload,
+				"__typename": "UpdateCategoryOrderPayload",
 			},
 		}
 
