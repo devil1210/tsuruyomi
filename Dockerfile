@@ -1,5 +1,5 @@
 # Multi-stage build for Tsuruyomi (鶴読み)
-FROM golang:1.24-alpine AS builder
+FROM golang:alpine AS builder
 
 WORKDIR /build
 RUN apk add --no-cache git ca-certificates tzdata
