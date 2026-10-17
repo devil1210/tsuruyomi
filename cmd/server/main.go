@@ -44,6 +44,10 @@ func main() {
 		log.Printf("Successfully connected to database.")
 		defer database.Close()
 
+		if err := database.EnsureSchema(ctx); err != nil {
+			log.Printf("Warning: Database schema initialization error: %v", err)
+		}
+
 		// Run index optimization for library queries
 		_, _ = database.DB.Exec(context.Background(), "CREATE INDEX IF NOT EXISTS idx_chapter_manga_read ON suwayomi.chapter (manga, read);")
 	}

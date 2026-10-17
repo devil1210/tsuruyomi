@@ -1,0 +1,161 @@
+{
+  "schema_version": "0.5.0",
+  "kind": "proxmenux.oci-template",
+  "id": "tsuruyomi",
+  "status": "laboratory-validated",
+  "catalog_ui": {
+    "title": {
+      "en_US": "Tsuruyomi",
+      "es_ES": "Tsuruyomi (鶴読み)"
+    },
+    "tagline": {
+      "en_US": "Lightweight, ultra high-performance Manga Reader and OPDS Server in Go",
+      "es_ES": "Servidor de lectura de manga y catálogo OPDS ultra liviano en Go"
+    },
+    "description": {
+      "en_US": "Tsuruyomi is a native Go high-performance replacement for Suwayomi-Server (Tachidesk). Consumes 95% less RAM (~40MB vs ~1.2GB JVM), starts in <50ms, provides full OPDS 1.2 / 2.0 catalogs, native scrapers, FlareSolverr bypass, and bundled web reader.",
+      "es_ES": "Tsuruyomi es un reemplazo nativo en Go de alto rendimiento para Suwayomi-Server. Consume 95% menos RAM (~40MB vs ~1.2GB JVM), inicia en <50ms, incluye catálogos OPDS 1.2 y 2.0, scrapers nativos en Go, bypass FlareSolverr y lector web integrado."
+    },
+    "category": "media",
+    "category_label": "Media & Streaming",
+    "author": "devil1210",
+    "developer": "devil1210",
+    "icon": "https://raw.githubusercontent.com/devil1210/tsuruyomi/main/data/webUI/apple-touch-icon.png",
+    "thumbnail": null,
+    "screenshots": [],
+    "architectures": [
+      "amd64",
+      "arm64"
+    ],
+    "launch": {
+      "scheme": "http",
+      "port": 7654,
+      "path": "/"
+    },
+    "website": "https://github.com/devil1210/tsuruyomi",
+    "documentation": "https://github.com/devil1210/tsuruyomi/blob/main/README.md",
+    "repository": "https://github.com/devil1210/tsuruyomi",
+    "tips": [
+      "Tsuruyomi automatically initializes its PostgreSQL database schema on first start.",
+      "Compatible with KOReader and Moon+ Reader via /api/opds/v1.2 or /api/opds/v2.0.",
+      "Config is stored in /config/config.yaml and manga downloads in /data."
+    ],
+    "mini_changelog": [],
+    "display_version": "1.0.0",
+    "updated_at": "2026-10-17"
+  },
+  "source": {
+    "provider": "official",
+    "repository": "https://github.com/devil1210/tsuruyomi",
+    "default_branch": "main",
+    "revision": "latest",
+    "readme_raw_url": "https://raw.githubusercontent.com/devil1210/tsuruyomi/main/README.md",
+    "image_repository_url": "https://ghcr.io/devil1210/tsuruyomi",
+    "readme_pushed_at": "2026-10-17T00:00:00Z",
+    "compose_sha256": "tsuruyomi-sha256",
+    "generated_at": "2026-10-17T20:00:00+00:00"
+  },
+  "container_contract": {
+    "service_name": "tsuruyomi",
+    "container_name": "tsuruyomi",
+    "image": {
+      "reference": "ghcr.io/devil1210/tsuruyomi:latest",
+      "registry": "ghcr.io",
+      "repository": "devil1210/tsuruyomi",
+      "tag": "latest",
+      "digest": null,
+      "pull_policy": "resolve-selected-tag-to-architecture-digest-at-install"
+    },
+    "environment": [
+      {
+        "name": "DATABASE_DSN",
+        "example": "postgres://devil:suwayomi@192.168.1.150:5432/suwayomi?sslmode=disable",
+        "required": true,
+        "sensitive": true,
+        "source": "compose"
+      },
+      {
+        "name": "SERVER_PORT",
+        "example": "7654",
+        "required": true,
+        "sensitive": false,
+        "source": "compose"
+      },
+      {
+        "name": "FLARESOLVERR_ENABLED",
+        "example": "true",
+        "required": false,
+        "sensitive": false,
+        "source": "compose"
+      },
+      {
+        "name": "FLARESOLVERR_URL",
+        "example": "http://192.168.1.136:8191",
+        "required": false,
+        "sensitive": false,
+        "source": "compose"
+      },
+      {
+        "name": "SIDECAR_ENABLED",
+        "example": "true",
+        "required": false,
+        "sensitive": false,
+        "source": "compose"
+      },
+      {
+        "name": "SIDECAR_BASE_URL",
+        "example": "http://192.168.1.104:4567",
+        "required": false,
+        "sensitive": false,
+        "source": "compose"
+      },
+      {
+        "name": "TZ",
+        "example": "America/Santiago",
+        "required": true,
+        "sensitive": false,
+        "source": "compose"
+      }
+    ],
+    "volumes": [
+      {
+        "container_path": "/config",
+        "mount_type": "managed-volume",
+        "required": true,
+        "default_size_gib": 2,
+        "backup": true
+      },
+      {
+        "container_path": "/data",
+        "mount_type": "managed-volume",
+        "required": true,
+        "default_size_gib": 32,
+        "backup": false
+      }
+    ],
+    "ports": [
+      {
+        "container_port": 7654,
+        "published_example": 7654,
+        "protocol": "tcp",
+        "required": true,
+        "proxmox_behavior": "listener-on-dedicated-lxc-address-no-nat"
+      }
+    ],
+    "related_services": [],
+    "restart": "unless-stopped",
+    "stop_grace_period": 10,
+    "original_compose": "services:\n  tsuruyomi:\n    image: ghcr.io/devil1210/tsuruyomi:latest\n    container_name: tsuruyomi\n    ports:\n      - 7654:7654\n    restart: unless-stopped\n"
+  },
+  "lifecycle": {
+    "update_strategy": "replace-rootfs-from-new-oci-image-preserve-managed-volumes",
+    "registry_state": {
+      "resolved_architecture": null,
+      "resolved_digest": null,
+      "image_version_label": null,
+      "image_created": null
+    },
+    "change_detection": "compare-resolved-architecture-digest",
+    "automatic_unattended_updates": false
+  }
+}
