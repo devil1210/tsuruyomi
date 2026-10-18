@@ -12,6 +12,8 @@ config.yaml
 /tsuruyomi
 /tsuruyomi-linux
 /tsuruyomi-linux-*
+/tsuruyomi-migrate
+/tsuruyomi-server
 /gosho
 /gosho-linux
 /server

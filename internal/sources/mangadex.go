@@ -147,7 +147,17 @@ func (h *MangaDexHandler) GetChapterList(ctx context.Context, mangaURL string) (
 		return nil, fmt.Errorf("could not extract manga UUID from MangaDex URL: %s", mangaURL)
 	}
 
-	apiURL := fmt.Sprintf("https://api.mangadex.org/manga/%s/feed?limit=500&order[chapter]=desc&includes[]=scanlation_group", mangaUUID)
+	langFilter := ""
+	switch h.sourceID {
+	case 6400665728063187402: // es
+		langFilter = "&translatedLanguage[]=es&translatedLanguage[]=es-la"
+	case 4938773340256184018: // es-419
+		langFilter = "&translatedLanguage[]=es-la&translatedLanguage[]=es"
+	case 2499283573021220255: // en
+		langFilter = "&translatedLanguage[]=en"
+	}
+
+	apiURL := fmt.Sprintf("https://api.mangadex.org/manga/%s/feed?limit=500&order[chapter]=desc&includes[]=scanlation_group%s", mangaUUID, langFilter)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err
@@ -264,14 +274,14 @@ func FetchMangaDexOnline(ctx context.Context, sourceID int64, query string, page
 	}
 	offset := (page - 1) * limit
 
-	lang := ""
+	langParam := ""
 	switch sourceID {
 	case 6400665728063187402:
-		lang = "es"
+		langParam = "&availableTranslatedLanguage[]=es&availableTranslatedLanguage[]=es-la"
 	case 2499283573021220255:
-		lang = "en"
+		langParam = "&availableTranslatedLanguage[]=en"
 	case 4938773340256184018:
-		lang = "es-la"
+		langParam = "&availableTranslatedLanguage[]=es-la&availableTranslatedLanguage[]=es"
 	}
 
 	apiURL := fmt.Sprintf("https://api.mangadex.org/manga?limit=%d&offset=%d&includes[]=cover_art&includes[]=author&includes[]=artist", limit, offset)
@@ -280,8 +290,8 @@ func FetchMangaDexOnline(ctx context.Context, sourceID int64, query string, page
 	} else {
 		apiURL += "&order[followedCount]=desc"
 	}
-	if lang != "" {
-		apiURL += "&availableTranslatedLanguage[]=" + lang
+	if langParam != "" {
+		apiURL += langParam
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
