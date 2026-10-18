@@ -158,7 +158,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"autoDownloadIgnoreReUploads":     false,
 				"downloadConversions":             []interface{}{},
 				"serveConversions":                []interface{}{},
-				"extensionRepos":                  []string{"https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb"},
+				"extensionRepos":                  []string{"https://raw.githubusercontent.com/devil1210/tsuruyomi-extensions/main/index.json", "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb"},
 				"maxSourcesInParallel":            6,
 				"excludeUnreadChapters":           true,
 				"excludeNotStarted":               true,
@@ -1458,6 +1458,20 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 	case "GET_EXTENSION_STORES":
 		stores := []map[string]interface{}{
+			{
+				"name":             "Tsuruyomi Native Go Extensions",
+				"indexUrl":         "https://raw.githubusercontent.com/devil1210/tsuruyomi-extensions/main/index.json",
+				"isLegacy":         false,
+				"badgeLabel":       "TSURU",
+				"signingKey":       "tsuruyomi",
+				"contactWebsite":   "https://github.com/devil1210/tsuruyomi-extensions",
+				"contactDiscord":   nil,
+				"extensionListUrl": nil,
+				"extensions": map[string]interface{}{
+					"totalCount": 6,
+				},
+				"__typename": "ExtensionStoreType",
+			},
 			{
 				"name":             "Keiyoushi",
 				"indexUrl":         "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb",
@@ -3152,6 +3166,51 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"hasNextPage": len(mangaNodes) == 20,
 				"mangas":      mangaNodes,
 				"__typename":  "FetchSourceMangaPayload",
+			},
+		}
+
+	case "CREATE_BACKUP", "createBackup":
+		data = map[string]interface{}{
+			"createBackup": map[string]interface{}{
+				"url":        "/api/v1/backup/export/file",
+				"__typename": "CreateBackupPayload",
+			},
+		}
+
+	case "VALIDATE_BACKUP", "validateBackup":
+		data = map[string]interface{}{
+			"validateBackup": map[string]interface{}{
+				"missingSources":  []interface{}{},
+				"missingTrackers": []interface{}{},
+				"__typename":      "ValidateBackupPayload",
+			},
+		}
+
+	case "RESTORE_BACKUP", "restoreBackup":
+		data = map[string]interface{}{
+			"restoreBackup": map[string]interface{}{
+				"id": "1",
+				"status": map[string]interface{}{
+					"state":         "COMPLETED",
+					"mangaProgress": 100,
+					"totalManga":    100,
+					"__typename":    "BackupRestoreStatusType",
+				},
+				"__typename": "RestoreBackupPayload",
+			},
+		}
+
+	case "GET_BACKUP_RESTORE_STATUS", "restoreStatus":
+		data = map[string]interface{}{
+			"restoreStatus": map[string]interface{}{
+				"id": "1",
+				"status": map[string]interface{}{
+					"state":         "COMPLETED",
+					"mangaProgress": 100,
+					"totalManga":    100,
+					"__typename":    "BackupRestoreStatusType",
+				},
+				"__typename": "BackupRestoreType",
 			},
 		}
 

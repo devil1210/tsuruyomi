@@ -159,11 +159,11 @@
     "project_name": "tsuruyomi",
     "deployment_model": "one-native-oci-lxc-per-compose-service",
     "user_experience": "single-application-install",
-    "main_service": "tsuruyomi",
+    "main_service": "server",
     "service_count": 2,
     "services": [
       {
-        "name": "tsuruyomi-postgres",
+        "name": "postgres",
         "image": "postgres:16-alpine",
         "is_main": false,
         "role": "dependency",
@@ -173,7 +173,7 @@
         "private_network": true,
         "compose": {
           "image": "postgres:16-alpine",
-          "container_name": "tsuruyomi-postgres",
+          "container_name": "postgres",
           "restart": "unless-stopped",
           "environment": {
             "POSTGRES_DB": "tsuruyomi",
@@ -214,25 +214,25 @@
         }
       },
       {
-        "name": "tsuruyomi",
+        "name": "server",
         "image": "ghcr.io/devil1210/tsuruyomi:latest",
         "is_main": true,
         "role": "frontend",
         "vmid_offset": 0,
         "depends_on": [
-          "tsuruyomi-postgres"
+          "postgres"
         ],
         "frontend_network": true,
         "private_network": true,
         "compose": {
           "image": "ghcr.io/devil1210/tsuruyomi:latest",
-          "container_name": "tsuruyomi",
+          "container_name": "server",
           "restart": "unless-stopped",
           "networks": [
             "tsuruyomi-net"
           ],
           "depends_on": {
-            "tsuruyomi-postgres": {
+            "postgres": {
               "condition": "service_healthy"
             }
           },
@@ -245,7 +245,7 @@
           ],
           "environment": {
             "SERVER_PORT": "7654",
-            "DATABASE_DSN": "postgres://tsuruyomi:${GENERATED_POSTGRES_PASSWORD}@tsuruyomi-postgres:5432/tsuruyomi?sslmode=disable",
+            "DATABASE_DSN": "postgres://tsuruyomi:${GENERATED_POSTGRES_PASSWORD}@postgres:5432/tsuruyomi?sslmode=disable",
             "SIDECAR_ENABLED": "false",
             "FLARESOLVERR_ENABLED": "false",
             "TZ": "$TZ"
@@ -292,7 +292,7 @@
     "storage": [
       {
         "id": "tsuruyomi-volume-config",
-        "service": "tsuruyomi",
+        "service": "server",
         "container_path": "/config",
         "mode": "managed-volume",
         "user_selectable": false,
@@ -303,7 +303,7 @@
       },
       {
         "id": "tsuruyomi-volume-data",
-        "service": "tsuruyomi",
+        "service": "server",
         "container_path": "/data",
         "mode": "managed-volume",
         "user_selectable": true,
@@ -314,7 +314,7 @@
       },
       {
         "id": "tsuruyomi-postgres-volume-0",
-        "service": "tsuruyomi-postgres",
+        "service": "postgres",
         "container_path": "/var/lib/postgresql/data",
         "mode": "managed-volume",
         "user_selectable": false,
@@ -327,12 +327,12 @@
     "orchestration": {
       "reserve_vmids_atomically": 2,
       "start_order": [
-        "tsuruyomi-postgres",
-        "tsuruyomi"
+        "postgres",
+        "server"
       ],
       "stop_order": [
-        "tsuruyomi",
-        "tsuruyomi-postgres"
+        "server",
+        "postgres"
       ],
       "dependency_readiness": "compose-healthcheck-then-port-or-process-fallback",
       "rollback_on_failure": "remove-new-rootfs-preserve-created-persistent-volumes"
@@ -361,7 +361,7 @@
           "strategy": "generate-cryptographically-random-at-install",
           "bindings": [
             {
-              "service": "tsuruyomi-postgres",
+              "service": "postgres",
               "environment_variable": "POSTGRES_PASSWORD"
             }
           ]

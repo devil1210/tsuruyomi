@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"fmt"
 	"io"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -77,7 +79,8 @@ func ExportBackupFile(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
 	}
 
+	filename := fmt.Sprintf("tsuruyomi_backup_%s.json", time.Now().Format("2006-01-02_150405"))
 	c.Set(fiber.HeaderContentType, "application/json")
-	c.Set(fiber.HeaderContentDisposition, `attachment; filename="backup.json"`)
+	c.Set(fiber.HeaderContentDisposition, fmt.Sprintf(`attachment; filename="%s"`, filename))
 	return c.Send(data)
 }
