@@ -772,6 +772,7 @@ func RestoreFromProtoBackup(ctx context.Context, pb *ProtoBackup) error {
 				err = tx.QueryRow(ctx, `
 					INSERT INTO suwayomi.chapter (manga, url, name, scanlator, date_upload, chapter_number, source_order, fetched_at, memo)
 					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '{}')
+					ON CONFLICT (url, manga) DO UPDATE SET name = EXCLUDED.name
 					RETURNING id
 				`, mangaID, ch.URL, ch.Name, ch.Scanlator, ch.DateUpload, ch.ChapterNumber, ch.SourceOrder, ch.DateFetch).Scan(&chapterID)
 				if err != nil {
