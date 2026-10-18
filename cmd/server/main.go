@@ -48,6 +48,13 @@ func main() {
 			log.Printf("Warning: Database schema initialization error: %v", err)
 		}
 
+		// Load persisted server settings from database and overlay on config
+		if dbSettings, err := database.GetAllServerSettings(ctx); err == nil && len(dbSettings) > 0 {
+			cfg.ApplyServerSettings(dbSettings)
+			sources.SetConfig(cfg)
+			log.Printf("Loaded %d persisted server settings from database.", len(dbSettings))
+		}
+
 		// Run index optimization for library queries
 		_, _ = database.DB.Exec(context.Background(), "CREATE INDEX IF NOT EXISTS idx_chapter_manga_read ON suwayomi.chapter (manga, read);")
 	}

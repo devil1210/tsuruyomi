@@ -103,5 +103,71 @@ func EnsureSchema(ctx context.Context) error {
 	// Ensure all native Go extensions and sources are seeded into database
 	_ = EnsureNativeSources(ctx)
 
+	// Ensure server settings table exists
+	_, _ = DB.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS suwayomi.serversetting (
+			key TEXT PRIMARY KEY,
+			value TEXT
+		);
+	`)
+
 	return nil
 }
+
+// GetServerSetting retrieves a setting value from suwayomi.serversetting.
+func GetServerSetting(ctx context.Context, key string, fallback string) string {
+	if DB == nil {
+		return fallback
+	}
+	var val string
+	err := DB.QueryRow(ctx, "SELECT value FROM suwayomi.serversetting WHERE key = $1", key).Scan(&val)
+	if err != nil || val == "" {
+		return fallback
+	}
+	return val
+}
+
+// SetServerSetting sets a single key-value setting in suwayomi.serversetting.
+func SetServerSetting(ctx context.Context, key string, value string) error {
+	if DB == nil {
+		return fmt.Errorf("database not connected")
+	}
+	_, err := DB.Exec(ctx, `
+		INSERT INTO suwayomi.serversetting (key, value)
+		VALUES ($1, $2)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+	`, key, value)
+	return err
+}
+
+// SetServerSettings batch sets multiple key-value settings.
+func SetServerSettings(ctx context.Context, settings map[string]string) error {
+	if DB == nil || len(settings) == 0 {
+		return nil
+	}
+	for k, v := range settings {
+		_ = SetServerSetting(ctx, k, v)
+	}
+	return nil
+}
+
+// GetAllServerSettings retrieves all server settings stored in the database.
+func GetAllServerSettings(ctx context.Context) (map[string]string, error) {
+	result := make(map[string]string)
+	if DB == nil {
+		return result, nil
+	}
+	rows, err := DB.Query(ctx, "SELECT key, value FROM suwayomi.serversetting")
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err == nil {
+			result[k] = v
+		}
+	}
+	return result, nil
+}
+

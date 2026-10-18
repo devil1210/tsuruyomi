@@ -101,7 +101,7 @@ func GetMangaThumbnail(c *fiber.Ctx) error {
 			if reqErr == nil {
 				req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 				req.Header.Set("Referer", dbUrl)
-				dlClient := &http.Client{Timeout: 5 * time.Second}
+				dlClient := &http.Client{Timeout: 8 * time.Second}
 				resp, respErr := dlClient.Do(req)
 				if respErr == nil && resp.StatusCode == http.StatusOK {
 					defer resp.Body.Close()
@@ -116,6 +116,23 @@ func GetMangaThumbnail(c *fiber.Ctx) error {
 						c.Set(fiber.HeaderContentType, resp.Header.Get("Content-Type"))
 						c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
 						return c.Send(data)
+					}
+				}
+
+				if (respErr != nil || (resp != nil && (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusServiceUnavailable))) && cfg.FlareSolverr.Enabled {
+					if resp != nil {
+						_ = resp.Body.Close()
+					}
+					fsData, mimeType, fsErr := util.DownloadWithFlareSolverrAndReferer(c.Context(), cfg, dbUrl, dbUrl)
+					if fsErr == nil && len(fsData) > 0 {
+						thumbnailDir := filepath.Join(cfg.Data.RootDir, "downloads", "thumbnails")
+						_ = os.MkdirAll(thumbnailDir, 0755)
+						targetFile := filepath.Join(thumbnailDir, fmt.Sprintf("%d.jpg", mangaId))
+						_ = os.WriteFile(targetFile, fsData, 0644)
+
+						c.Set(fiber.HeaderContentType, mimeType)
+						c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
+						return c.Send(fsData)
 					}
 				}
 			}
@@ -497,6 +514,34 @@ func GetPageImage(c *fiber.Ctx) error {
 						c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
 						return c.Send(respBody)
 					}
+				} else if (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusServiceUnavailable) && cfg != nil && cfg.FlareSolverr.Enabled {
+					log.Printf("[PAGES] Cloudflare challenge on page %d (HTTP %d). Requesting FlareSolverr bypass...", index, resp.StatusCode)
+					ref := ""
+					if manga != nil && manga.RealURL != nil {
+						ref = *manga.RealURL
+					}
+					fsData, mimeType, fsErr := util.DownloadWithFlareSolverrAndReferer(ctx, cfg, imageURL, ref)
+					if fsErr == nil && len(fsData) > 0 {
+						_ = os.MkdirAll(cacheDir, 0755)
+						_ = os.WriteFile(cachePath, fsData, 0644)
+						c.Set(fiber.HeaderContentType, mimeType)
+						c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
+						return c.Send(fsData)
+					}
+					log.Printf("[PAGES] FlareSolverr bypass error for page %d: %v", index, fsErr)
+				}
+			} else if cfg != nil && cfg.FlareSolverr.Enabled {
+				ref := ""
+				if manga != nil && manga.RealURL != nil {
+					ref = *manga.RealURL
+				}
+				fsData, mimeType, fsErr := util.DownloadWithFlareSolverrAndReferer(ctx, cfg, imageURL, ref)
+				if fsErr == nil && len(fsData) > 0 {
+					_ = os.MkdirAll(cacheDir, 0755)
+					_ = os.WriteFile(cachePath, fsData, 0644)
+					c.Set(fiber.HeaderContentType, mimeType)
+					c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
+					return c.Send(fsData)
 				}
 			}
 		}

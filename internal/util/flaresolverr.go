@@ -122,12 +122,46 @@ func DownloadWithFlareSolverrAndReferer(ctx context.Context, cfg *config.Config,
 	return data, resp.Header.Get("Content-Type"), nil
 }
 
+// NormalizeFlareSolverrURL ensures the URL has http:// or https:// and strips trailing /v1.
+func NormalizeFlareSolverrURL(rawURL string) string {
+	u := strings.TrimSpace(rawURL)
+	if u == "" {
+		return ""
+	}
+	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+		u = "http://" + u
+	}
+	u = strings.TrimSuffix(u, "/")
+	u = strings.TrimSuffix(u, "/v1")
+	return u
+}
+
+// GetFlareSolverrAPIURL returns the endpoint URL ending in /v1.
+func GetFlareSolverrAPIURL(rawURL string) string {
+	u := NormalizeFlareSolverrURL(rawURL)
+	if u == "" {
+		return ""
+	}
+	return u + "/v1"
+}
+
+func getFlareSolverrAPIURL(rawURL string) string {
+	return GetFlareSolverrAPIURL(rawURL)
+}
+
+func getFlareSolverrTimeout(t int) time.Duration {
+	if t <= 0 {
+		return 60 * time.Second
+	}
+	return time.Duration(t) * time.Second
+}
+
 func solveCloudflareChallenge(ctx context.Context, cfg *config.Config, targetURL string) ([]flareSolverrCookie, string, error) {
 	fsClient := &http.Client{
-		Timeout: time.Duration(cfg.FlareSolverr.Timeout) * time.Second,
+		Timeout: getFlareSolverrTimeout(cfg.FlareSolverr.Timeout),
 	}
 
-	apiURL := strings.TrimSuffix(cfg.FlareSolverr.URL, "/") + "/v1"
+	apiURL := getFlareSolverrAPIURL(cfg.FlareSolverr.URL)
 	payload := flareSolverrRequest{
 		Cmd: "request.get",
 		URL: targetURL,
@@ -173,10 +207,10 @@ func SolveAndFetchHTML(ctx context.Context, cfg *config.Config, targetURL string
 	}
 
 	fsClient := &http.Client{
-		Timeout: time.Duration(cfg.FlareSolverr.Timeout) * time.Second,
+		Timeout: getFlareSolverrTimeout(cfg.FlareSolverr.Timeout),
 	}
 
-	apiURL := strings.TrimSuffix(cfg.FlareSolverr.URL, "/") + "/v1"
+	apiURL := getFlareSolverrAPIURL(cfg.FlareSolverr.URL)
 	payload := flareSolverrRequest{
 		Cmd: "request.get",
 		URL: targetURL,
@@ -245,5 +279,26 @@ func SolveAndFetchHTML(ctx context.Context, cfg *config.Config, targetURL string
 	}
 
 	return "", fmt.Errorf("no HTML content returned by FlareSolverr")
+}
+
+// ExtractJSONFromHTML extracts raw JSON from an HTML response (e.g. if Chrome wrapped JSON in <pre> tags).
+func ExtractJSONFromHTML(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return trimmed
+	}
+	if preIdx := strings.Index(trimmed, "<pre"); preIdx != -1 {
+		closeIdx := strings.Index(trimmed[preIdx:], ">")
+		if closeIdx != -1 {
+			sub := trimmed[preIdx+closeIdx+1:]
+			if endIdx := strings.Index(sub, "</pre>"); endIdx != -1 {
+				inner := strings.TrimSpace(sub[:endIdx])
+				if strings.HasPrefix(inner, "{") || strings.HasPrefix(inner, "[") {
+					return inner
+				}
+			}
+		}
+	}
+	return trimmed
 }
 

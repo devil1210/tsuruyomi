@@ -207,6 +207,180 @@ func getExtensionNodes(ctx context.Context, filterStoreUrl string) []map[string]
 	return nodes
 }
 
+// buildServerSettingsMap merges default settings, active config, and DB persisted settings.
+func buildServerSettingsMap(ctx context.Context, cfg *config.Config) map[string]interface{} {
+	extRepos := []string{}
+	if stores, err := database.GetExtensionStores(ctx); err == nil && len(stores) > 0 {
+		for _, s := range stores {
+			extRepos = append(extRepos, s.IndexURL)
+		}
+	} else {
+		extRepos = []string{DefaultExtensionStoreURL, "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb"}
+	}
+
+	dbSettings, _ := database.GetAllServerSettings(ctx)
+	if dbSettings == nil {
+		dbSettings = make(map[string]string)
+	}
+
+	getStr := func(k string, fallback string) string {
+		if v, ok := dbSettings[k]; ok {
+			return v
+		}
+		return fallback
+	}
+	getBool := func(k string, fallback bool) bool {
+		if v, ok := dbSettings[k]; ok {
+			return strings.ToLower(v) == "true" || v == "1"
+		}
+		return fallback
+	}
+	getInt := func(k string, fallback int) int {
+		if v, ok := dbSettings[k]; ok {
+			var n int
+			if _, err := fmt.Sscan(v, &n); err == nil {
+				return n
+			}
+		}
+		return fallback
+	}
+	getFloat := func(k string, fallback float64) float64 {
+		if v, ok := dbSettings[k]; ok {
+			var f float64
+			if _, err := fmt.Sscan(v, &f); err == nil {
+				return f
+			}
+		}
+		return fallback
+	}
+
+	fsEnabled := getBool("flareSolverrEnabled", false)
+	fsURL := getStr("flareSolverrUrl", "http://127.0.0.1:8191")
+	fsTimeout := getInt("flareSolverrTimeout", 60)
+	authMode := getStr("authMode", "NONE")
+	authUsername := getStr("authUsername", "")
+	authPassword := getStr("authPassword", "")
+	port := getInt("port", 4567)
+	ip := getStr("ip", "0.0.0.0")
+
+	if cfg != nil {
+		if _, ok := dbSettings["flareSolverrEnabled"]; !ok {
+			fsEnabled = cfg.FlareSolverr.Enabled
+		}
+		if _, ok := dbSettings["flareSolverrUrl"]; !ok && cfg.FlareSolverr.URL != "" {
+			fsURL = cfg.FlareSolverr.URL
+		}
+		if _, ok := dbSettings["flareSolverrTimeout"]; !ok && cfg.FlareSolverr.Timeout > 0 {
+			fsTimeout = cfg.FlareSolverr.Timeout
+		}
+		if _, ok := dbSettings["authMode"]; !ok && cfg.Auth.Mode != "" {
+			authMode = strings.ToUpper(cfg.Auth.Mode)
+		}
+		if _, ok := dbSettings["authUsername"]; !ok {
+			authUsername = cfg.Auth.Username
+		}
+		if _, ok := dbSettings["authPassword"]; !ok {
+			authPassword = cfg.Auth.Password
+		}
+		if _, ok := dbSettings["port"]; !ok && cfg.Server.Port > 0 {
+			port = cfg.Server.Port
+		}
+		if _, ok := dbSettings["ip"]; !ok && cfg.Server.Host != "" {
+			ip = cfg.Server.Host
+		}
+	}
+
+	return map[string]interface{}{
+		"ip":                              ip,
+		"port":                            port,
+		"socksProxyEnabled":               getBool("socksProxyEnabled", false),
+		"socksProxyVersion":               getInt("socksProxyVersion", 5),
+		"socksProxyHost":                  getStr("socksProxyHost", ""),
+		"socksProxyPort":                  getStr("socksProxyPort", ""),
+		"socksProxyUsername":              getStr("socksProxyUsername", ""),
+		"socksProxyPassword":              getStr("socksProxyPassword", ""),
+		"webUIFlavor":                     "WEBUI",
+		"initialOpenInBrowserEnabled":     getBool("initialOpenInBrowserEnabled", false),
+		"webUIInterface":                  getStr("webUIInterface", "BROWSER"),
+		"electronPath":                    getStr("electronPath", ""),
+		"webUIChannel":                    getStr("webUIChannel", "PREVIEW"),
+		"webUIUpdateCheckInterval":        getFloat("webUIUpdateCheckInterval", 3.0),
+		"downloadAsCbz":                   getBool("downloadAsCbz", false),
+		"downloadsPath":                   getStr("downloadsPath", ""),
+		"autoDownloadNewChapters":         getBool("autoDownloadNewChapters", false),
+		"excludeEntryWithUnreadChapters":  getBool("excludeEntryWithUnreadChapters", true),
+		"autoDownloadNewChaptersLimit":    getInt("autoDownloadNewChaptersLimit", 1),
+		"autoDownloadIgnoreReUploads":     getBool("autoDownloadIgnoreReUploads", false),
+		"downloadConversions":             []interface{}{},
+		"serveConversions":                []interface{}{},
+		"extensionRepos":                  extRepos,
+		"maxSourcesInParallel":            getInt("maxSourcesInParallel", 6),
+		"excludeUnreadChapters":           getBool("excludeUnreadChapters", true),
+		"excludeNotStarted":               getBool("excludeNotStarted", true),
+		"excludeCompleted":                getBool("excludeCompleted", true),
+		"globalUpdateInterval":            getFloat("globalUpdateInterval", 12.0),
+		"updateMangas":                    getBool("updateMangas", false),
+		"authMode":                        authMode,
+		"authUsername":                    authUsername,
+		"authPassword":                    authPassword,
+		"jwtAudience":                     "suwayomi-server-api",
+		"jwtTokenExpiry":                  "PT5M",
+		"jwtRefreshExpiry":                "PT1440H",
+		"debugLogsEnabled":                getBool("debugLogsEnabled", true),
+		"systemTrayEnabled":               getBool("systemTrayEnabled", false),
+		"maxLogFileSize":                  getStr("maxLogFileSize", "10mb"),
+		"maxLogFiles":                     getInt("maxLogFiles", 31),
+		"maxLogFolderSize":                getStr("maxLogFolderSize", "100mb"),
+		"backupPath":                      getStr("backupPath", ""),
+		"backupTime":                      getStr("backupTime", "00:00"),
+		"backupInterval":                  getInt("backupInterval", 1),
+		"backupTTL":                       getInt("backupTTL", 14),
+		"autoBackupIncludeCategories":     getBool("autoBackupIncludeCategories", true),
+		"autoBackupIncludeChapters":       getBool("autoBackupIncludeChapters", true),
+		"autoBackupIncludeClientData":     getBool("autoBackupIncludeClientData", true),
+		"autoBackupIncludeHistory":        getBool("autoBackupIncludeHistory", true),
+		"autoBackupIncludeManga":          getBool("autoBackupIncludeManga", true),
+		"autoBackupIncludeServerSettings": getBool("autoBackupIncludeServerSettings", true),
+		"autoBackupIncludeTracking":       getBool("autoBackupIncludeTracking", true),
+		"localSourcePath":                 getStr("localSourcePath", ""),
+		"flareSolverrEnabled":             fsEnabled,
+		"flareSolverrUrl":                 fsURL,
+		"flareSolverrTimeout":             fsTimeout,
+		"flareSolverrSessionName":         getStr("flareSolverrSessionName", "suwayomi"),
+		"flareSolverrSessionTtl":          getInt("flareSolverrSessionTtl", 15),
+		"flareSolverrAsResponseFallback":  getBool("flareSolverrAsResponseFallback", true),
+		"opdsUseBinaryFileSizes":          getBool("opdsUseBinaryFileSizes", false),
+		"opdsItemsPerPage":                getInt("opdsItemsPerPage", 50),
+		"opdsEnablePageReadProgress":      getBool("opdsEnablePageReadProgress", true),
+		"opdsMarkAsReadOnDownload":        getBool("opdsMarkAsReadOnDownload", false),
+		"opdsShowOnlyUnreadChapters":      getBool("opdsShowOnlyUnreadChapters", false),
+		"opdsShowOnlyDownloadedChapters":  getBool("opdsShowOnlyDownloadedChapters", false),
+		"opdsChapterSortOrder":            getStr("opdsChapterSortOrder", "DESC"),
+		"opdsCbzMimetype":                 getStr("opdsCbzMimetype", "MODERN"),
+		"opdsSkipChapterMetadataFeed":     getBool("opdsSkipChapterMetadataFeed", false),
+		"koreaderSyncChecksumMethod":      getStr("koreaderSyncChecksumMethod", "BINARY"),
+		"koreaderSyncStrategyBackward":    getStr("koreaderSyncStrategyBackward", "DISABLED"),
+		"koreaderSyncStrategyForward":     getStr("koreaderSyncStrategyForward", "PROMPT"),
+		"koreaderSyncPercentageTolerance": getFloat("koreaderSyncPercentageTolerance", 1e-15),
+		"databaseType":                    "POSTGRESQL",
+		"databaseUrl":                     "postgresql://localhost:5432/suwayomi",
+		"databaseUsername":                "postgres",
+		"databasePassword":                "",
+		"useHikariConnectionPool":         true,
+		"kcefEnabled":                     getBool("kcefEnabled", true),
+		"syncInterval":                    getStr("syncInterval", "PT0S"),
+		"syncYomiEnabled":                 getBool("syncYomiEnabled", false),
+		"syncYomiHost":                    getStr("syncYomiHost", ""),
+		"syncYomiApiKey":                  getStr("syncYomiApiKey", ""),
+		"syncDataManga":                   getBool("syncDataManga", true),
+		"syncDataChapters":                getBool("syncDataChapters", true),
+		"syncDataTracking":                getBool("syncDataTracking", true),
+		"syncDataHistory":                 getBool("syncDataHistory", true),
+		"syncDataCategories":              getBool("syncDataCategories", true),
+		"__typename":                      "SettingsType",
+	}
+}
+
 // GraphQLRequest maps incoming query parameters or POST bodies.
 type GraphQLRequest struct {
 	OperationName string                 `json:"operationName"`
@@ -218,15 +392,8 @@ type GraphQLRequest struct {
 func HandleGraphQL(c *fiber.Ctx) error {
 	cfg, _ := c.Locals("config").(*config.Config)
 	webuiVersion := "r1411"
-	fsEnabled := false
-	fsURL := "http://127.0.0.1:8191"
-	fsTimeout := 60
-
 	if cfg != nil {
 		webuiVersion = util.GetWebUIVersion(cfg.Data.RootDir)
-		fsEnabled = cfg.FlareSolverr.Enabled
-		fsURL = cfg.FlareSolverr.URL
-		fsTimeout = cfg.FlareSolverr.Timeout
 	}
 
 	var req GraphQLRequest
@@ -277,105 +444,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 	var data interface{}
 	switch req.OperationName {
 	case "GET_SERVER_SETTINGS":
-		extRepos := []string{}
-		if stores, err := database.GetExtensionStores(c.Context()); err == nil && len(stores) > 0 {
-			for _, s := range stores {
-				extRepos = append(extRepos, s.IndexURL)
-			}
-		} else {
-			extRepos = []string{DefaultExtensionStoreURL, "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb"}
-		}
-
 		data = map[string]interface{}{
-			"settings": map[string]interface{}{
-				"ip":                              "0.0.0.0",
-				"port":                            4567,
-				"socksProxyEnabled":               false,
-				"socksProxyVersion":               5,
-				"socksProxyHost":                  "",
-				"socksProxyPort":                  "",
-				"socksProxyUsername":              "",
-				"socksProxyPassword":              "",
-				"webUIFlavor":                     "WEBUI",
-				"initialOpenInBrowserEnabled":     false,
-				"webUIInterface":                  "BROWSER",
-				"electronPath":                    "",
-				"webUIChannel":                    "PREVIEW",
-				"webUIUpdateCheckInterval":        3.0,
-				"downloadAsCbz":                   false,
-				"downloadsPath":                   "",
-				"autoDownloadNewChapters":         false,
-				"excludeEntryWithUnreadChapters":  true,
-				"autoDownloadNewChaptersLimit":    1,
-				"autoDownloadIgnoreReUploads":     false,
-				"downloadConversions":             []interface{}{},
-				"serveConversions":                []interface{}{},
-				"extensionRepos":                  extRepos,
-				"maxSourcesInParallel":            6,
-				"excludeUnreadChapters":           true,
-				"excludeNotStarted":               true,
-				"excludeCompleted":                true,
-				"globalUpdateInterval":            12.0,
-				"updateMangas":                    false,
-				"authMode":                        "NONE",
-				"authUsername":                    "",
-				"authPassword":                    "",
-				"jwtAudience":                     "suwayomi-server-api",
-				"jwtTokenExpiry":                  "PT5M",
-				"jwtRefreshExpiry":                "PT1440H",
-				"debugLogsEnabled":                true,
-				"systemTrayEnabled":               false,
-				"maxLogFileSize":                  "10mb",
-				"maxLogFiles":                     31,
-				"maxLogFolderSize":                "100mb",
-				"backupPath":                      "",
-				"backupTime":                      "00:00",
-				"backupInterval":                  1,
-				"backupTTL":                       14,
-				"autoBackupIncludeCategories":     true,
-				"autoBackupIncludeChapters":       true,
-				"autoBackupIncludeClientData":     true,
-				"autoBackupIncludeHistory":        true,
-				"autoBackupIncludeManga":          true,
-				"autoBackupIncludeServerSettings": true,
-				"autoBackupIncludeTracking":       true,
-				"localSourcePath":                 "",
-				"flareSolverrEnabled":             fsEnabled,
-				"flareSolverrUrl":                 fsURL,
-				"flareSolverrTimeout":             fsTimeout,
-				"flareSolverrSessionName":         "suwayomi",
-				"flareSolverrSessionTtl":          15,
-				"flareSolverrAsResponseFallback":  true,
-				"opdsUseBinaryFileSizes":          false,
-				"opdsItemsPerPage":                50,
-				"opdsEnablePageReadProgress":      true,
-				"opdsMarkAsReadOnDownload":        false,
-				"opdsShowOnlyUnreadChapters":      false,
-				"opdsShowOnlyDownloadedChapters":  false,
-				"opdsChapterSortOrder":            "DESC",
-				"opdsCbzMimetype":                 "MODERN",
-				"opdsSkipChapterMetadataFeed":     false,
-				"koreaderSyncChecksumMethod":      "BINARY",
-				"koreaderSyncStrategyBackward":    "DISABLED",
-				"koreaderSyncStrategyForward":     "PROMPT",
-				"koreaderSyncPercentageTolerance": 1e-15,
-				"databaseType":                    "POSTGRESQL",
-				"databaseUrl":                     "postgresql://localhost:5432/suwayomi",
-				"databaseUsername":                "postgres",
-				"databasePassword":                "",
-				"useHikariConnectionPool":         true,
-				"kcefEnabled":                     true,
-				"syncInterval":                    "PT0S",
-				"syncYomiEnabled":                 false,
-				"syncYomiHost":                    "",
-				"syncYomiApiKey":                  "",
-				"syncDataManga":                   true,
-				"syncDataChapters":                true,
-				"syncDataTracking":                true,
-				"syncDataHistory":                 true,
-				"syncDataCategories":              true,
-				"__typename":                      "SettingsType",
-			},
+			"settings": buildServerSettingsMap(c.Context(), cfg),
 			"koSyncStatus": map[string]interface{}{
 				"serverAddress": "",
 				"username":      "",
@@ -385,116 +455,108 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "UPDATE_SERVER_SETTINGS", "setSettings":
+		var settingsInput map[string]interface{}
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
-			if reposRaw, ok := input["extensionRepos"].([]interface{}); ok {
-				var urls []string
-				for _, r := range reposRaw {
-					if u, ok := r.(string); ok && strings.TrimSpace(u) != "" {
-						urls = append(urls, strings.TrimSpace(u))
-					}
-				}
-				_ = database.SetExtensionStores(c.Context(), urls)
+			if inner, ok := input["settings"].(map[string]interface{}); ok {
+				settingsInput = inner
+			} else {
+				settingsInput = input
 			}
+		} else if settingsRaw, ok := req.Variables["settings"].(map[string]interface{}); ok {
+			settingsInput = settingsRaw
 		}
 
-		extReposUpdated := []string{}
-		if stores, err := database.GetExtensionStores(c.Context()); err == nil {
-			for _, s := range stores {
-				extReposUpdated = append(extReposUpdated, s.IndexURL)
+		if settingsInput != nil {
+			for k, v := range settingsInput {
+				if k == "__typename" || k == "clientMutationId" {
+					continue
+				}
+
+				if k == "extensionRepos" {
+					if reposRaw, ok := v.([]interface{}); ok {
+						var urls []string
+						for _, r := range reposRaw {
+							if u, ok := r.(string); ok && strings.TrimSpace(u) != "" {
+								urls = append(urls, strings.TrimSpace(u))
+							}
+						}
+						_ = database.SetExtensionStores(c.Context(), urls)
+					}
+				}
+
+				// Persist setting to database
+				var valStr string
+				switch val := v.(type) {
+				case string:
+					valStr = val
+				case bool:
+					valStr = fmt.Sprintf("%t", val)
+				case float64:
+					if val == float64(int64(val)) {
+						valStr = fmt.Sprintf("%d", int64(val))
+					} else {
+						valStr = fmt.Sprintf("%g", val)
+					}
+				case int:
+					valStr = fmt.Sprintf("%d", val)
+				default:
+					b, _ := json.Marshal(val)
+					valStr = string(b)
+				}
+				_ = database.SetServerSetting(c.Context(), k, valStr)
+
+				// Synchronize in-memory config
+				if cfg != nil {
+					switch k {
+					case "flareSolverrUrl":
+						if s, ok := v.(string); ok {
+							cfg.FlareSolverr.URL = util.NormalizeFlareSolverrURL(s)
+						}
+					case "flareSolverrEnabled":
+						if b, ok := v.(bool); ok {
+							cfg.FlareSolverr.Enabled = b
+						}
+					case "flareSolverrTimeout":
+						if f, ok := v.(float64); ok {
+							cfg.FlareSolverr.Timeout = int(f)
+						} else if i, ok := v.(int); ok {
+							cfg.FlareSolverr.Timeout = i
+						}
+					case "port":
+						if f, ok := v.(float64); ok {
+							cfg.Server.Port = int(f)
+						} else if i, ok := v.(int); ok {
+							cfg.Server.Port = i
+						}
+					case "ip":
+						if s, ok := v.(string); ok && s != "" {
+							cfg.Server.Host = s
+						}
+					}
+				}
+			}
+
+			if cfg != nil {
+				sources.SetConfig(cfg)
+				_ = cfg.Save()
 			}
 		}
 
 		data = map[string]interface{}{
 			"setSettings": map[string]interface{}{
-				"settings": map[string]interface{}{
-					"ip":                              "0.0.0.0",
-					"port":                            4567,
-					"socksProxyEnabled":               false,
-					"socksProxyVersion":               5,
-					"socksProxyHost":                  "",
-					"socksProxyPort":                  "",
-					"socksProxyUsername":              "",
-					"socksProxyPassword":              "",
-					"webUIFlavor":                     "WEBUI",
-					"initialOpenInBrowserEnabled":     false,
-					"webUIInterface":                  "BROWSER",
-					"electronPath":                    "",
-					"webUIChannel":                    "PREVIEW",
-					"webUIUpdateCheckInterval":        3.0,
-					"downloadAsCbz":                   false,
-					"downloadsPath":                   "",
-					"autoDownloadNewChapters":         false,
-					"excludeEntryWithUnreadChapters":  true,
-					"autoDownloadNewChaptersLimit":    1,
-					"autoDownloadIgnoreReUploads":     false,
-					"downloadConversions":             []interface{}{},
-					"serveConversions":                []interface{}{},
-					"extensionRepos":                  extReposUpdated,
-					"maxSourcesInParallel":            6,
-					"excludeUnreadChapters":           true,
-					"excludeNotStarted":               true,
-					"excludeCompleted":                true,
-					"globalUpdateInterval":            12.0,
-					"updateMangas":                    false,
-					"authMode":                        "NONE",
-					"authUsername":                    "",
-					"authPassword":                    "",
-					"jwtAudience":                     "suwayomi-server-api",
-					"jwtTokenExpiry":                  "PT5M",
-					"jwtRefreshExpiry":                "PT1440H",
-					"debugLogsEnabled":                true,
-					"systemTrayEnabled":               false,
-					"maxLogFileSize":                  "10mb",
-					"maxLogFiles":                     31,
-					"maxLogFolderSize":                "100mb",
-					"backupPath":                      "",
-					"backupTime":                      "00:00",
-					"backupInterval":                  1,
-					"backupTTL":                       14,
-					"autoBackupIncludeCategories":     true,
-					"autoBackupIncludeChapters":       true,
-					"autoBackupIncludeClientData":     true,
-					"autoBackupIncludeHistory":        true,
-					"autoBackupIncludeManga":          true,
-					"autoBackupIncludeServerSettings": true,
-					"localSourcePath":                 "",
-					"flareSolverrEnabled":             fsEnabled,
-					"flareSolverrUrl":                 fsURL,
-					"flareSolverrTimeout":             fsTimeout,
-					"flareSolverrSessionName":         "suwayomi",
-					"flareSolverrSessionTtl":          15,
-					"flareSolverrAsResponseFallback":  true,
-					"opdsUseBinaryFileSizes":          false,
-					"opdsItemsPerPage":                50,
-					"opdsEnablePageReadProgress":      true,
-					"opdsMarkAsReadOnDownload":        false,
-					"opdsShowOnlyUnreadChapters":      false,
-					"opdsShowOnlyDownloadedChapters":  false,
-					"opdsChapterSortOrder":            "DESC",
-					"opdsCbzMimetype":                 "MODERN",
-					"opdsSkipChapterMetadataFeed":     false,
-					"koreaderSyncChecksumMethod":      "BINARY",
-					"koreaderSyncStrategyBackward":    "DISABLED",
-					"koreaderSyncStrategyForward":     "PROMPT",
-					"koreaderSyncPercentageTolerance": 1e-15,
-					"databaseType":                    "POSTGRESQL",
-					"databaseUrl":                     "postgresql://localhost:5432/suwayomi",
-					"databaseUsername":                "postgres",
-					"databasePassword":                "",
-					"useHikariConnectionPool":         true,
-					"kcefEnabled":                     true,
-					"syncInterval":                    "PT0S",
-					"syncYomiEnabled":                 false,
-					"syncYomiHost":                    "",
-					"syncYomiApiKey":                  "",
-					"syncDataManga":                   true,
-					"syncDataChapters":                true,
-					"syncDataTracking":                true,
-					"syncDataHistory":                 true,
-					"syncDataCategories":              true,
-					"__typename":                      "SettingsType",
-				},
+				"settings":   buildServerSettingsMap(c.Context(), cfg),
 				"__typename": "SetSettingsPayload",
+			},
+		}
+
+	case "RESET_SERVER_SETTINGS", "resetSettings":
+		if database.DB != nil {
+			_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.serversetting")
+		}
+		data = map[string]interface{}{
+			"resetSettings": map[string]interface{}{
+				"settings":   buildServerSettingsMap(c.Context(), cfg),
+				"__typename": "ResetSettingsPayload",
 			},
 		}
 
@@ -1072,76 +1134,125 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "UPDATE_GLOBAL_METADATA":
+		preDeletedMetas := []map[string]interface{}{}
+		postDeletedMetas := []map[string]interface{}{}
 		updatedMetas := []map[string]interface{}{}
-		deletedMetas := []map[string]interface{}{}
+		migrationMetas := []map[string]interface{}{}
+
 		if database.DB != nil {
-			// Handle deletions
-			if preDel, ok := req.Variables["preUpdateDeleteInput"].(map[string]interface{}); ok {
-				if keys, ok := preDel["keys"].([]interface{}); ok && len(keys) > 0 {
+			processGlobalDeletions := func(delInput map[string]interface{}) []map[string]interface{} {
+				result := []map[string]interface{}{}
+				if delInput == nil {
+					return result
+				}
+				if keys, ok := delInput["keys"].([]interface{}); ok && len(keys) > 0 {
 					for _, k := range keys {
-						if keyStr, ok := k.(string); ok {
-							_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.globalmeta WHERE user_id = 1 AND meta_key = $1", keyStr)
-							deletedMetas = append(deletedMetas, map[string]interface{}{
-								"key":        keyStr,
-								"value":      "",
+					if keyStr, ok := k.(string); ok && keyStr != "" {
+						_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.globalmeta WHERE user_id = 1 AND meta_key = $1", keyStr)
+						result = append(result, map[string]interface{}{
+							"key":        keyStr,
+							"value":      "",
+							"__typename": "GlobalMetaType",
+						})
+					}
+					}
+				}
+				if prefixes, ok := delInput["prefixes"].([]interface{}); ok && len(prefixes) > 0 {
+					for _, p := range prefixes {
+					if pStr, ok := p.(string); ok && pStr != "" {
+						_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.globalmeta WHERE user_id = 1 AND meta_key LIKE $1 || '%'", pStr)
+					}
+					}
+				}
+				return result
+			}
+
+			if preDel, ok := req.Variables["preUpdateDeleteInput"].(map[string]interface{}); ok {
+				preDeletedMetas = processGlobalDeletions(preDel)
+			}
+			if postDel, ok := req.Variables["postUpdateDeleteInput"].(map[string]interface{}); ok {
+				postDeletedMetas = processGlobalDeletions(postDel)
+			}
+
+			processGlobalUpdates := func(upInput map[string]interface{}) []map[string]interface{} {
+				result := []map[string]interface{}{}
+				if upInput == nil {
+					return result
+				}
+				if metas, ok := upInput["metas"].([]interface{}); ok {
+					for _, m := range metas {
+					if metaMap, ok := m.(map[string]interface{}); ok {
+						k, _ := metaMap["key"].(string)
+						var valStr string
+						if v, ok := metaMap["value"].(string); ok {
+							valStr = v
+						} else {
+							vBytes, _ := json.Marshal(metaMap["value"])
+							valStr = string(vBytes)
+						}
+
+						if k != "" {
+							_, _ = database.DB.Exec(c.Context(), `
+								INSERT INTO suwayomi.globalmeta (user_id, meta_key, value)
+								VALUES (1, $1, $2)
+								ON CONFLICT (user_id, meta_key) DO UPDATE SET value = EXCLUDED.value
+							`, k, valStr)
+
+							result = append(result, map[string]interface{}{
+								"key":        k,
+								"value":      valStr,
 								"__typename": "GlobalMetaType",
 							})
 						}
 					}
-				}
-			}
-
-			// Handle updates
-			if updateInput, ok := req.Variables["updateInput"].(map[string]interface{}); ok {
-				if metas, ok := updateInput["metas"].([]interface{}); ok {
-					for _, m := range metas {
-						if metaMap, ok := m.(map[string]interface{}); ok {
-							k, _ := metaMap["key"].(string)
-							var valStr string
-							if v, ok := metaMap["value"].(string); ok {
-								valStr = v
-							} else {
-								vBytes, _ := json.Marshal(metaMap["value"])
-								valStr = string(vBytes)
-							}
-
-							if k != "" {
-								_, _ = database.DB.Exec(c.Context(), `
-									INSERT INTO suwayomi.globalmeta (user_id, meta_key, value)
-									VALUES (1, $1, $2)
-									ON CONFLICT (user_id, meta_key) DO UPDATE SET value = EXCLUDED.value
-								`, k, valStr)
-
-								updatedMetas = append(updatedMetas, map[string]interface{}{
-									"key":        k,
-									"value":      valStr,
-									"__typename": "GlobalMetaType",
-								})
-							}
-						}
 					}
 				}
+				return result
+			}
+
+			if updateInput, ok := req.Variables["updateInput"].(map[string]interface{}); ok {
+				updatedMetas = processGlobalUpdates(updateInput)
+			}
+			if migrateInput, ok := req.Variables["migrateInput"].(map[string]interface{}); ok {
+				migrationMetas = processGlobalUpdates(migrateInput)
 			}
 		}
 
-		data = map[string]interface{}{
-			"preUpdateDeletedMeta": map[string]interface{}{
-				"metas":      deletedMetas,
-				"__typename": "GlobalMetaPayload",
-			},
-			"updatedMeta": map[string]interface{}{
-				"metas":      updatedMetas,
-				"__typename": "GlobalMetaPayload",
-			},
-			"postUpdateDeletedMeta": map[string]interface{}{
-				"metas":      []interface{}{},
-				"__typename": "GlobalMetaPayload",
-			},
-			"migrationMeta": map[string]interface{}{
-				"metas":      []interface{}{},
-				"__typename": "GlobalMetaPayload",
-			},
+		resMap := make(map[string]interface{})
+		hasPre, _ := req.Variables["hasPreUpdateDeletions"].(bool)
+		hasUp, _ := req.Variables["hasUpdates"].(bool)
+		hasPost, _ := req.Variables["hasPostUpdateDeletions"].(bool)
+		isMig, _ := req.Variables["isMigration"].(bool)
+
+		if _, ok := req.Variables["hasUpdates"]; !ok {
+			hasUp = true
 		}
+
+		if hasPre {
+			resMap["preUpdateDeletedMeta"] = map[string]interface{}{
+				"metas":      preDeletedMetas,
+				"__typename": "DeleteGlobalMetasPayload",
+			}
+		}
+		if hasUp {
+			resMap["updatedMeta"] = map[string]interface{}{
+				"metas":      updatedMetas,
+				"__typename": "SetGlobalMetasPayload",
+			}
+		}
+		if hasPost {
+			resMap["postUpdateDeletedMeta"] = map[string]interface{}{
+				"metas":      postDeletedMetas,
+				"__typename": "DeleteGlobalMetasPayload",
+			}
+		}
+		if isMig {
+			resMap["migrationMeta"] = map[string]interface{}{
+				"metas":      migrationMetas,
+				"__typename": "SetGlobalMetasPayload",
+			}
+		}
+		data = resMap
 
 	case "UPDATE_MANGA_METADATA":
 		updatedMetas := []map[string]interface{}{}
@@ -1321,26 +1432,46 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			if upInput, ok := req.Variables["updateInput"].(map[string]interface{}); ok {
 				processUpdates(upInput)
 			}
+			if migInput, ok := req.Variables["migrateInput"].(map[string]interface{}); ok {
+				processUpdates(migInput)
+			}
 		}
 
-		data = map[string]interface{}{
-			"preUpdateDeletedMeta": map[string]interface{}{
+		resMap := make(map[string]interface{})
+		hasPre, _ := req.Variables["hasPreUpdateDeletions"].(bool)
+		hasUp, _ := req.Variables["hasUpdates"].(bool)
+		hasPost, _ := req.Variables["hasPostUpdateDeletions"].(bool)
+		isMig, _ := req.Variables["isMigration"].(bool)
+
+		if _, ok := req.Variables["hasUpdates"]; !ok {
+			hasUp = true
+		}
+
+		if hasPre {
+			resMap["preUpdateDeletedMeta"] = map[string]interface{}{
 				"metas":      deletedMetas,
 				"__typename": "DeleteMangaMetasPayload",
-			},
-			"updatedMeta": map[string]interface{}{
+			}
+		}
+		if hasUp {
+			resMap["updatedMeta"] = map[string]interface{}{
 				"metas":      updatedMetas,
 				"__typename": "SetMangaMetasPayload",
-			},
-			"postUpdateDeletedMeta": map[string]interface{}{
+			}
+		}
+		if hasPost {
+			resMap["postUpdateDeletedMeta"] = map[string]interface{}{
 				"metas":      deletedMetas,
 				"__typename": "DeleteMangaMetasPayload",
-			},
-			"migrationMeta": map[string]interface{}{
+			}
+		}
+		if isMig {
+			resMap["migrationMeta"] = map[string]interface{}{
 				"metas":      []interface{}{},
 				"__typename": "SetMangaMetasPayload",
-			},
+			}
 		}
+		data = resMap
 
 	case "UPDATE_CATEGORY_METADATA":
 		updatedMetas := []map[string]interface{}{}
@@ -1525,44 +1656,115 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			}
 		}
 
-		data = map[string]interface{}{
-			"preUpdateDeletedMeta": map[string]interface{}{
-				"metas":      deletedMetas,
-				"__typename": "DeleteCategoryMetasPayload",
-			},
-			"updatedMeta": map[string]interface{}{
-				"metas":      updatedMetas,
-				"__typename": "SetCategoryMetasPayload",
-			},
-			"postUpdateDeletedMeta": map[string]interface{}{
-				"metas":      deletedMetas,
-				"__typename": "DeleteCategoryMetasPayload",
-			},
-			"migrationMeta": map[string]interface{}{
-				"metas":      []interface{}{},
-				"__typename": "SetCategoryMetasPayload",
-			},
+		resMap := make(map[string]interface{})
+		hasPre, _ := req.Variables["hasPreUpdateDeletions"].(bool)
+		hasUp, _ := req.Variables["hasUpdates"].(bool)
+		hasPost, _ := req.Variables["hasPostUpdateDeletions"].(bool)
+		isMig, _ := req.Variables["isMigration"].(bool)
+
+		if _, ok := req.Variables["hasUpdates"]; !ok {
+			hasUp = true
 		}
 
-	case "UPDATE_CHAPTER_METADATA":
-		data = map[string]interface{}{
-			"preUpdateDeletedMeta": map[string]interface{}{
-				"metas":      []interface{}{},
-				"__typename": "DeleteChapterMetasPayload",
-			},
-			"updatedMeta": map[string]interface{}{
-				"metas":      []interface{}{},
-				"__typename": "SetChapterMetasPayload",
-			},
-			"postUpdateDeletedMeta": map[string]interface{}{
-				"metas":      []interface{}{},
-				"__typename": "DeleteChapterMetasPayload",
-			},
-			"migrationMeta": map[string]interface{}{
-				"metas":      []interface{}{},
-				"__typename": "SetChapterMetasPayload",
-			},
+		if hasPre {
+			resMap["preUpdateDeletedMeta"] = map[string]interface{}{
+				"metas":      deletedMetas,
+				"__typename": "DeleteCategoryMetasPayload",
+			}
 		}
+		if hasUp {
+			resMap["updatedMeta"] = map[string]interface{}{
+				"metas":      updatedMetas,
+				"__typename": "SetCategoryMetasPayload",
+			}
+		}
+		if hasPost {
+			resMap["postUpdateDeletedMeta"] = map[string]interface{}{
+				"metas":      deletedMetas,
+				"__typename": "DeleteCategoryMetasPayload",
+			}
+		}
+		if isMig {
+			resMap["migrationMeta"] = map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "SetCategoryMetasPayload",
+			}
+		}
+		data = resMap
+
+	case "UPDATE_CHAPTER_METADATA":
+		resMap := make(map[string]interface{})
+		hasPre, _ := req.Variables["hasPreUpdateDeletions"].(bool)
+		hasUp, _ := req.Variables["hasUpdates"].(bool)
+		hasPost, _ := req.Variables["hasPostUpdateDeletions"].(bool)
+		isMig, _ := req.Variables["isMigration"].(bool)
+
+		if _, ok := req.Variables["hasUpdates"]; !ok {
+			hasUp = true
+		}
+
+		if hasPre {
+			resMap["preUpdateDeletedMeta"] = map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "DeleteChapterMetasPayload",
+			}
+		}
+		if hasUp {
+			resMap["updatedMeta"] = map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "SetChapterMetasPayload",
+			}
+		}
+		if hasPost {
+			resMap["postUpdateDeletedMeta"] = map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "DeleteChapterMetasPayload",
+			}
+		}
+		if isMig {
+			resMap["migrationMeta"] = map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "SetChapterMetasPayload",
+			}
+		}
+		data = resMap
+
+	case "UPDATE_SOURCE_METADATA":
+		resMap := make(map[string]interface{})
+		hasPre, _ := req.Variables["hasPreUpdateDeletions"].(bool)
+		hasUp, _ := req.Variables["hasUpdates"].(bool)
+		hasPost, _ := req.Variables["hasPostUpdateDeletions"].(bool)
+		isMig, _ := req.Variables["isMigration"].(bool)
+
+		if _, ok := req.Variables["hasUpdates"]; !ok {
+			hasUp = true
+		}
+
+		if hasPre {
+			resMap["preUpdateDeletedMeta"] = map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "DeleteSourceMetasPayload",
+			}
+		}
+		if hasUp {
+			resMap["updatedMeta"] = map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "SetSourceMetasPayload",
+			}
+		}
+		if hasPost {
+			resMap["postUpdateDeletedMeta"] = map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "DeleteSourceMetasPayload",
+			}
+		}
+		if isMig {
+			resMap["migrationMeta"] = map[string]interface{}{
+				"metas":      []interface{}{},
+				"__typename": "SetSourceMetasPayload",
+			}
+		}
+		data = resMap
 
 	case "GET_EXTENSION_STORES":
 		dbStores, err := database.GetExtensionStores(c.Context())

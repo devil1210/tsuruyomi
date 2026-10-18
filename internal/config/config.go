@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -9,6 +10,7 @@ import (
 
 // Config holds all application configuration loaded from config.yaml or environment variables.
 type Config struct {
+	ConfigPath   string             `mapstructure:"-"`
 	Server       ServerConfig       `mapstructure:"server"`
 	Database     DatabaseConfig     `mapstructure:"database"`
 	Data         DataConfig         `mapstructure:"data"`
@@ -130,5 +132,91 @@ func Load(cfgFile string) (*Config, error) {
 	}
 	cfg.Server.Subpath = strings.TrimSuffix(cfg.Server.Subpath, "/")
 
+	cfg.ConfigPath = cfgFile
+	if cfg.ConfigPath == "" {
+		cfg.ConfigPath = "config.yaml"
+	}
+
 	return &cfg, nil
 }
+
+// ApplyServerSettings updates the in-memory Config with key-value settings from the database.
+func (c *Config) ApplyServerSettings(settings map[string]string) {
+	if c == nil || len(settings) == 0 {
+		return
+	}
+	if v, ok := settings["flaresolverr.enabled"]; ok {
+		c.FlareSolverr.Enabled = (v == "true" || v == "1")
+	}
+	if v, ok := settings["flaresolverr.url"]; ok && strings.TrimSpace(v) != "" {
+		c.FlareSolverr.URL = strings.TrimSpace(v)
+	}
+	if v, ok := settings["flaresolverr.timeout"]; ok {
+		var t int
+		if _, err := fmt.Sscan(v, &t); err == nil && t > 0 {
+			c.FlareSolverr.Timeout = t
+		}
+	}
+	if v, ok := settings["auth.mode"]; ok && v != "" {
+		c.Auth.Mode = v
+	}
+	if v, ok := settings["auth.username"]; ok {
+		c.Auth.Username = v
+	}
+	if v, ok := settings["auth.password"]; ok {
+		c.Auth.Password = v
+	}
+}
+
+// Save attempts to serialize the current config back to config.yaml if writable.
+func (c *Config) Save() error {
+	if c == nil || c.ConfigPath == "" {
+		return nil
+	}
+	yamlContent := fmt.Sprintf(`# Tsuruyomi Server Configuration
+server:
+  host: "%s"
+  port: %d
+  subpath: "%s"
+
+database:
+  dsn: "%s"
+  max_conns: %d
+  min_conns: %d
+
+data:
+  root_dir: "%s"
+
+auth:
+  mode: "%s"
+  username: "%s"
+  password: "%s"
+
+extensions:
+  repo_url: "%s"
+
+logging:
+  level: "%s"
+
+sidecar:
+  enabled: %t
+  base_url: "%s"
+
+flaresolverr:
+  enabled: %t
+  url: "%s"
+  timeout: %d
+`,
+		c.Server.Host, c.Server.Port, c.Server.Subpath,
+		c.Database.DSN, c.Database.MaxConns, c.Database.MinConns,
+		c.Data.RootDir,
+		c.Auth.Mode, c.Auth.Username, c.Auth.Password,
+		c.Extensions.RepoURL,
+		c.Logging.Level,
+		c.Sidecar.Enabled, c.Sidecar.BaseURL,
+		c.FlareSolverr.Enabled, c.FlareSolverr.URL, c.FlareSolverr.Timeout,
+	)
+
+	return os.WriteFile(c.ConfigPath, []byte(yamlContent), 0644)
+}
+

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
@@ -145,5 +146,32 @@ func DeleteCategory(c *fiber.Ctx) error {
 
 // ModifyCategoryMeta alters key-value properties of a category.
 func ModifyCategoryMeta(c *fiber.Ctx) error {
+	categoryId, err := strconv.Atoi(c.Params("categoryId"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString("Invalid category ID")
+	}
+
+	var body map[string]interface{}
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+	}
+
+	if database.DB != nil {
+		for k, v := range body {
+			var valStr string
+			if s, ok := v.(string); ok {
+				valStr = s
+			} else {
+				vBytes, _ := json.Marshal(v)
+				valStr = string(vBytes)
+			}
+			_, _ = database.DB.Exec(c.Context(), `
+				INSERT INTO suwayomi.categorymeta (user_id, category_ref, meta_key, value)
+				VALUES (1, $1, $2, $3)
+				ON CONFLICT (user_id, category_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
+			`, categoryId, k, valStr)
+		}
+	}
+
 	return c.SendStatus(fiber.StatusOK)
 }

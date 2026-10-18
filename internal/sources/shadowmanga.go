@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"tsuruyomi/internal/util"
 )
 
 func init() {
@@ -74,9 +77,27 @@ func (h *ShadowMangaHandler) doJSONGet(ctx context.Context, targetURL string, ta
 
 	resp, err := DefaultClient.Do(req)
 	if err != nil {
+		if AppConfig != nil && AppConfig.FlareSolverr.Enabled {
+			log.Printf("[SHADOWMANGA] GET network error %v for %s. Requesting FlareSolverr bypass...", err, targetURL)
+			rawHTML, solveErr := util.SolveAndFetchHTML(ctx, AppConfig, targetURL, h.baseURL+"/")
+			if solveErr == nil && len(rawHTML) > 0 {
+				cleanJSON := util.ExtractJSONFromHTML(rawHTML)
+				return json.Unmarshal([]byte(cleanJSON), target)
+			}
+		}
 		return err
 	}
 	defer resp.Body.Close()
+
+	if (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == 429) && AppConfig != nil && AppConfig.FlareSolverr.Enabled {
+		log.Printf("[SHADOWMANGA] Cloudflare challenge encountered for %s (HTTP %d). Requesting FlareSolverr bypass...", targetURL, resp.StatusCode)
+		rawHTML, solveErr := util.SolveAndFetchHTML(ctx, AppConfig, targetURL, h.baseURL+"/")
+		if solveErr == nil && len(rawHTML) > 0 {
+			cleanJSON := util.ExtractJSONFromHTML(rawHTML)
+			return json.Unmarshal([]byte(cleanJSON), target)
+		}
+		log.Printf("[SHADOWMANGA] FlareSolverr challenge bypass warning: %v", solveErr)
+	}
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("HTTP error %d fetching %s", resp.StatusCode, targetURL)
