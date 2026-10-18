@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sort"
@@ -17,6 +18,7 @@ import (
 	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/models"
+	"tsuruyomi/internal/service"
 	"tsuruyomi/internal/sources"
 	"tsuruyomi/internal/util"
 )
@@ -24,7 +26,9 @@ import (
 // NativeGoExtensionPackages lists extension package names implemented natively in Go
 var NativeGoExtensionPackages = map[string]bool{
 	"eu.kanade.tachiyomi.extension.es.mangamx":              true, // MangaOni
+	"eu.kanade.tachiyomi.extension.es.mangaoni":             true, // MangaOni (alias)
 	"eu.kanade.tachiyomi.extension.es.lectormangalat":        true, // LectorManga.lat
+	"eu.kanade.tachiyomi.extension.es.lectormanga":           true, // LectorManga (alias)
 	"eu.kanade.tachiyomi.extension.all.mangadex":             true, // MangaDex
 	"eu.kanade.tachiyomi.extension.es.uchuujinprojects":      true, // Uchuujin Projects
 	"eu.kanade.tachiyomi.extension.es.shadowmanga":           true, // Shadow Manga
@@ -53,7 +57,9 @@ type NativeExtInfo struct {
 
 var NativeGoExtensionInfo = map[string]NativeExtInfo{
 	"eu.kanade.tachiyomi.extension.es.mangamx":             {Name: "MangaOni", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.mangaoni":            {Name: "MangaOni", Lang: "es"},
 	"eu.kanade.tachiyomi.extension.es.lectormangalat":       {Name: "LectorManga.lat", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.lectormanga":          {Name: "LectorManga", Lang: "es"},
 	"eu.kanade.tachiyomi.extension.all.mangadex":            {Name: "MangaDex", Lang: "all"},
 	"eu.kanade.tachiyomi.extension.es.uchuujinprojects":     {Name: "Uchuujin Projects", Lang: "es"},
 	"eu.kanade.tachiyomi.extension.es.shadowmanga":          {Name: "Shadow Manga", Lang: "es"},
@@ -71,7 +77,134 @@ var NativeGoExtensionInfo = map[string]NativeExtInfo{
 	"eu.kanade.tachiyomi.extension.es.manhwalatino":         {Name: "Manhwa-Latino", Lang: "es"},
 	"eu.kanade.tachiyomi.extension.es.hadesnofansub":        {Name: "Hades no Fansub", Lang: "es"},
 	"eu.kanade.tachiyomi.extension.es.begatranslation":       {Name: "Bega Translation", Lang: "es"},
-	"eu.kanade.tachiyomi.source.local":                     {Name: "Local Source", Lang: "localsourcelang"},
+	"eu.kanade.tachiyomi.source.local":                     {Name: "Local Source", Lang: "all"},
+}
+
+// DefaultExtensionStoreURL is the canonical repository URL for Tsuruyomi native Go extensions
+const DefaultExtensionStoreURL = "https://raw.githubusercontent.com/devil1210/tsuruyomi-extensions/main/index.json"
+const DefaultExtensionStoreName = "Tsuruyomi Native Go Extensions"
+
+func getExtensionMap(ctx context.Context, pkgName string) map[string]interface{} {
+	name := pkgName
+	lang := "all"
+	cw := "SAFE"
+	if info, ok := NativeGoExtensionInfo[pkgName]; ok {
+		name = info.Name
+		lang = info.Lang
+		if strings.Contains(name, "+18") || strings.Contains(name, "NSFW") {
+			cw = "NSFW"
+		}
+	}
+	return map[string]interface{}{
+		"pkgName":         pkgName,
+		"name":            name,
+		"lang":            lang,
+		"versionCodeLong": int64(100),
+		"versionName":     "1.0-go (Nativa)",
+		"iconUrl":         "/api/v1/extension/icon/" + pkgName,
+		"storeIndexUrl":   DefaultExtensionStoreURL,
+		"contentWarning":  cw,
+		"isInstalled":     true,
+		"isObsolete":      false,
+		"hasUpdate":       false,
+		"extensionLib":    "1.5",
+		"extensionStore": map[string]interface{}{
+			"indexUrl":   DefaultExtensionStoreURL,
+			"name":       DefaultExtensionStoreName,
+			"__typename": "ExtensionStoreType",
+		},
+		"__typename": "ExtensionType",
+	}
+}
+
+func getExtensionNodes(ctx context.Context, filterStoreUrl string) []map[string]interface{} {
+	nodes := []map[string]interface{}{}
+	seen := make(map[string]bool)
+
+	// 1. If database has extension records, query them
+	if database.DB != nil {
+		rows, err := database.DB.Query(ctx, `
+			SELECT name, pkg_name, version_name, version_code, lang, COALESCE(icon_url, ''), is_installed, has_update, is_obsolete, COALESCE(store_index_url, $1), COALESCE(content_warning, 0), COALESCE(extension_lib, '1.5')
+			FROM suwayomi.extension
+		`, DefaultExtensionStoreURL)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var name, pkgName, versionName, lang, iconUrl, storeIndexUrl, extLib string
+				var versionCode int64
+				var isInstalled, hasUpdate, isObsolete bool
+				var cwInt int
+				err := rows.Scan(&name, &pkgName, &versionName, &versionCode, &lang, &iconUrl, &isInstalled, &hasUpdate, &isObsolete, &storeIndexUrl, &cwInt, &extLib)
+				if err == nil {
+					if NativeGoExtensionPackages[pkgName] || pkgName == "eu.kanade.tachiyomi.source.local" {
+						isInstalled = true
+						hasUpdate = false
+						isObsolete = false
+						versionName = "1.0-go (Nativa)"
+					}
+					seen[pkgName] = true
+
+					if filterStoreUrl != "" && storeIndexUrl != filterStoreUrl && !NativeGoExtensionPackages[pkgName] {
+						continue
+					}
+
+					cw := "SAFE"
+					if cwInt > 0 {
+						cw = "NSFW"
+					}
+					storeName := DefaultExtensionStoreName
+					if strings.Contains(storeIndexUrl, "keiyoushi") {
+						storeName = "Keiyoushi"
+					} else if strings.Contains(storeIndexUrl, "suwayomi") {
+						storeName = "Suwayomi Extension Repo"
+					}
+
+					nodes = append(nodes, map[string]interface{}{
+						"pkgName":         pkgName,
+						"name":            name,
+						"lang":            lang,
+						"versionCodeLong": versionCode,
+						"versionName":     versionName,
+						"iconUrl":         "/api/v1/extension/icon/" + pkgName,
+						"storeIndexUrl":   storeIndexUrl,
+						"contentWarning":  cw,
+						"isInstalled":     isInstalled,
+						"isObsolete":      isObsolete,
+						"hasUpdate":       hasUpdate,
+						"extensionLib":    extLib,
+						"extensionStore": map[string]interface{}{
+							"indexUrl":   storeIndexUrl,
+							"name":       storeName,
+							"__typename": "ExtensionStoreType",
+						},
+						"__typename": "ExtensionType",
+					})
+				}
+			}
+		}
+	}
+
+	// 2. Add all native Go extensions
+	type extItem struct {
+		pkgName string
+		info    NativeExtInfo
+	}
+	var sortedExts []extItem
+	for pkg, info := range NativeGoExtensionInfo {
+		sortedExts = append(sortedExts, extItem{pkgName: pkg, info: info})
+	}
+	sort.Slice(sortedExts, func(i, j int) bool {
+		return sortedExts[i].info.Name < sortedExts[j].info.Name
+	})
+
+	for _, item := range sortedExts {
+		if !seen[item.pkgName] {
+			seen[item.pkgName] = true
+			nodes = append(nodes, getExtensionMap(ctx, item.pkgName))
+		}
+	}
+
+	return nodes
 }
 
 // GraphQLRequest maps incoming query parameters or POST bodies.
@@ -105,12 +238,22 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			_ = json.Unmarshal([]byte(vars), &req.Variables)
 		}
 	} else {
-		if err := c.BodyParser(&req); err != nil {
-			req.OperationName = c.Query("operationName")
-			req.Query = c.Query("query")
-			vars := c.Query("variables")
-			if vars != "" {
-				_ = json.Unmarshal([]byte(vars), &req.Variables)
+		contentType := c.Get(fiber.HeaderContentType)
+		if strings.Contains(contentType, "multipart/form-data") {
+			ops := c.FormValue("operations")
+			if ops != "" {
+				_ = json.Unmarshal([]byte(ops), &req)
+			}
+		}
+
+		if req.OperationName == "" && req.Query == "" {
+			if err := c.BodyParser(&req); err != nil {
+				req.OperationName = c.Query("operationName")
+				req.Query = c.Query("query")
+				vars := c.Query("variables")
+				if vars != "" {
+					_ = json.Unmarshal([]byte(vars), &req.Variables)
+				}
 			}
 		}
 	}
@@ -134,6 +277,15 @@ func HandleGraphQL(c *fiber.Ctx) error {
 	var data interface{}
 	switch req.OperationName {
 	case "GET_SERVER_SETTINGS":
+		extRepos := []string{}
+		if stores, err := database.GetExtensionStores(c.Context()); err == nil && len(stores) > 0 {
+			for _, s := range stores {
+				extRepos = append(extRepos, s.IndexURL)
+			}
+		} else {
+			extRepos = []string{DefaultExtensionStoreURL, "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb"}
+		}
+
 		data = map[string]interface{}{
 			"settings": map[string]interface{}{
 				"ip":                              "0.0.0.0",
@@ -158,7 +310,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"autoDownloadIgnoreReUploads":     false,
 				"downloadConversions":             []interface{}{},
 				"serveConversions":                []interface{}{},
-				"extensionRepos":                  []string{"https://raw.githubusercontent.com/devil1210/tsuruyomi-extensions/main/index.json", "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb"},
+				"extensionRepos":                  extRepos,
 				"maxSourcesInParallel":            6,
 				"excludeUnreadChapters":           true,
 				"excludeNotStarted":               true,
@@ -232,6 +384,120 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
+	case "UPDATE_SERVER_SETTINGS", "setSettings":
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if reposRaw, ok := input["extensionRepos"].([]interface{}); ok {
+				var urls []string
+				for _, r := range reposRaw {
+					if u, ok := r.(string); ok && strings.TrimSpace(u) != "" {
+						urls = append(urls, strings.TrimSpace(u))
+					}
+				}
+				_ = database.SetExtensionStores(c.Context(), urls)
+			}
+		}
+
+		extReposUpdated := []string{}
+		if stores, err := database.GetExtensionStores(c.Context()); err == nil {
+			for _, s := range stores {
+				extReposUpdated = append(extReposUpdated, s.IndexURL)
+			}
+		}
+
+		data = map[string]interface{}{
+			"setSettings": map[string]interface{}{
+				"settings": map[string]interface{}{
+					"ip":                              "0.0.0.0",
+					"port":                            4567,
+					"socksProxyEnabled":               false,
+					"socksProxyVersion":               5,
+					"socksProxyHost":                  "",
+					"socksProxyPort":                  "",
+					"socksProxyUsername":              "",
+					"socksProxyPassword":              "",
+					"webUIFlavor":                     "WEBUI",
+					"initialOpenInBrowserEnabled":     false,
+					"webUIInterface":                  "BROWSER",
+					"electronPath":                    "",
+					"webUIChannel":                    "PREVIEW",
+					"webUIUpdateCheckInterval":        3.0,
+					"downloadAsCbz":                   false,
+					"downloadsPath":                   "",
+					"autoDownloadNewChapters":         false,
+					"excludeEntryWithUnreadChapters":  true,
+					"autoDownloadNewChaptersLimit":    1,
+					"autoDownloadIgnoreReUploads":     false,
+					"downloadConversions":             []interface{}{},
+					"serveConversions":                []interface{}{},
+					"extensionRepos":                  extReposUpdated,
+					"maxSourcesInParallel":            6,
+					"excludeUnreadChapters":           true,
+					"excludeNotStarted":               true,
+					"excludeCompleted":                true,
+					"globalUpdateInterval":            12.0,
+					"updateMangas":                    false,
+					"authMode":                        "NONE",
+					"authUsername":                    "",
+					"authPassword":                    "",
+					"jwtAudience":                     "suwayomi-server-api",
+					"jwtTokenExpiry":                  "PT5M",
+					"jwtRefreshExpiry":                "PT1440H",
+					"debugLogsEnabled":                true,
+					"systemTrayEnabled":               false,
+					"maxLogFileSize":                  "10mb",
+					"maxLogFiles":                     31,
+					"maxLogFolderSize":                "100mb",
+					"backupPath":                      "",
+					"backupTime":                      "00:00",
+					"backupInterval":                  1,
+					"backupTTL":                       14,
+					"autoBackupIncludeCategories":     true,
+					"autoBackupIncludeChapters":       true,
+					"autoBackupIncludeClientData":     true,
+					"autoBackupIncludeHistory":        true,
+					"autoBackupIncludeManga":          true,
+					"autoBackupIncludeServerSettings": true,
+					"localSourcePath":                 "",
+					"flareSolverrEnabled":             fsEnabled,
+					"flareSolverrUrl":                 fsURL,
+					"flareSolverrTimeout":             fsTimeout,
+					"flareSolverrSessionName":         "suwayomi",
+					"flareSolverrSessionTtl":          15,
+					"flareSolverrAsResponseFallback":  true,
+					"opdsUseBinaryFileSizes":          false,
+					"opdsItemsPerPage":                50,
+					"opdsEnablePageReadProgress":      true,
+					"opdsMarkAsReadOnDownload":        false,
+					"opdsShowOnlyUnreadChapters":      false,
+					"opdsShowOnlyDownloadedChapters":  false,
+					"opdsChapterSortOrder":            "DESC",
+					"opdsCbzMimetype":                 "MODERN",
+					"opdsSkipChapterMetadataFeed":     false,
+					"koreaderSyncChecksumMethod":      "BINARY",
+					"koreaderSyncStrategyBackward":    "DISABLED",
+					"koreaderSyncStrategyForward":     "PROMPT",
+					"koreaderSyncPercentageTolerance": 1e-15,
+					"databaseType":                    "POSTGRESQL",
+					"databaseUrl":                     "postgresql://localhost:5432/suwayomi",
+					"databaseUsername":                "postgres",
+					"databasePassword":                "",
+					"useHikariConnectionPool":         true,
+					"kcefEnabled":                     true,
+					"syncInterval":                    "PT0S",
+					"syncYomiEnabled":                 false,
+					"syncYomiHost":                    "",
+					"syncYomiApiKey":                  "",
+					"syncDataManga":                   true,
+					"syncDataChapters":                true,
+					"syncDataTracking":                true,
+					"syncDataHistory":                 true,
+					"syncDataCategories":              true,
+					"__typename":                      "SettingsType",
+				},
+				"__typename": "SetSettingsPayload",
+			},
+		}
+
 	case "GET_ABOUT":
 		nowSec := fmt.Sprintf("%d", time.Now().Unix())
 		nowMilli := fmt.Sprintf("%d", time.Now().UnixMilli())
@@ -295,64 +561,32 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "GET_EXTENSIONS_FETCH":
-		extList := []map[string]interface{}{}
-		if database.DB != nil {
-			rows, err := database.DB.Query(c.Context(), `
-				SELECT name, pkg_name, version_name, version_code, lang, COALESCE(icon_url, ''), is_installed, has_update, is_obsolete, COALESCE(store_index_url, 'https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json'), COALESCE(content_warning, 0), COALESCE(extension_lib, '1.5')
-				FROM suwayomi.extension
-			`)
-			if err == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var name, pkgName, versionName, lang, iconUrl, storeIndexUrl, extLib string
-					var versionCode int64
-					var isInstalled, hasUpdate, isObsolete bool
-					var cwInt int
-					err := rows.Scan(&name, &pkgName, &versionName, &versionCode, &lang, &iconUrl, &isInstalled, &hasUpdate, &isObsolete, &storeIndexUrl, &cwInt, &extLib)
-					if err == nil {
-						if NativeGoExtensionPackages[pkgName] || pkgName == "eu.kanade.tachiyomi.source.local" {
-							isInstalled = true
-							hasUpdate = false
-							isObsolete = false
-							versionName = "1.0-go (Nativa)"
-						}
-						cw := "SAFE"
-						if cwInt > 0 {
-							cw = "NSFW"
-						}
-						storeName := "Keiyoushi"
-						if strings.Contains(storeIndexUrl, "suwayomi") {
-							storeName = "Suwayomi Extension Repo"
-						}
-						extList = append(extList, map[string]interface{}{
-							"pkgName":         pkgName,
-							"name":            name,
-							"lang":            lang,
-							"versionCodeLong": versionCode,
-							"versionName":     versionName,
-							"iconUrl":         "/api/v1/extension/icon/" + pkgName,
-							"storeIndexUrl":   storeIndexUrl,
-							"contentWarning":  cw,
-							"isInstalled":     isInstalled,
-							"isObsolete":      isObsolete,
-							"hasUpdate":       hasUpdate,
-							"extensionLib":    extLib,
-							"extensionStore": map[string]interface{}{
-								"indexUrl":   storeIndexUrl,
-								"name":       storeName,
-								"__typename": "ExtensionStoreType",
-							},
-							"__typename": "ExtensionType",
-						})
-					}
-				}
-			}
+		extList := getExtensionNodes(c.Context(), "")
+
+		dbStores, _ := database.GetExtensionStores(c.Context())
+		storeNodes := []map[string]interface{}{}
+		for _, s := range dbStores {
+			storeNodes = append(storeNodes, map[string]interface{}{
+				"id":               s.ID,
+				"name":             s.Name,
+				"indexUrl":         s.IndexURL,
+				"isLegacy":         s.IsLegacy,
+				"badgeLabel":       s.BadgeLabel,
+				"signingKey":       s.SigningKey,
+				"contactWebsite":   s.ContactWebsite,
+				"contactDiscord":   s.ContactDiscord,
+				"extensionListUrl": nil,
+				"extensions": map[string]interface{}{
+					"totalCount": s.TotalCount,
+				},
+				"__typename": "ExtensionStoreType",
+			})
 		}
 
 		data = map[string]interface{}{
 			"fetchExtensions": map[string]interface{}{
 				"extensions":      extList,
-				"extensionStores": []interface{}{},
+				"extensionStores": storeNodes,
 				"__typename":      "FetchExtensionsResult",
 			},
 		}
@@ -636,122 +870,17 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			}
 		}
 
-		if filterInstalled != nil && !*filterInstalled {
-			// All native Go extensions are built-in/installed, so there are no uninstalled extensions
-			data = map[string]interface{}{
-				"extensions": map[string]interface{}{
-					"nodes":      []interface{}{},
-					"totalCount": 0,
-					"pageInfo": map[string]interface{}{
-						"hasNextPage":     false,
-						"hasPreviousPage": false,
-						"startCursor":     nil,
-						"endCursor":       nil,
-						"__typename":      "PageInfo",
-					},
-					"__typename": "ExtensionNodeList",
-				},
-			}
-			break
-		}
-
-		seen := make(map[string]bool)
-		nodes := []map[string]interface{}{}
-		if database.DB != nil {
-			rows, err := database.DB.Query(c.Context(), `
-				SELECT name, pkg_name, version_name, version_code, lang, COALESCE(icon_url, ''), is_installed, has_update, is_obsolete, COALESCE(store_index_url, 'https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json'), COALESCE(content_warning, 0), COALESCE(extension_lib, '1.5')
-				FROM suwayomi.extension
-			`)
-			if err == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var name, pkgName, versionName, lang, iconUrl, storeIndexUrl, extLib string
-					var versionCode int64
-					var isInstalled, hasUpdate, isObsolete bool
-					var cwInt int
-					err := rows.Scan(&name, &pkgName, &versionName, &versionCode, &lang, &iconUrl, &isInstalled, &hasUpdate, &isObsolete, &storeIndexUrl, &cwInt, &extLib)
-					if err == nil {
-						// Only include extensions ported to Go!
-						if !NativeGoExtensionPackages[pkgName] {
-							continue
-						}
-						seen[pkgName] = true
-
-						isInstalled = true
-						hasUpdate = false
-						isObsolete = false
-						versionName = "1.0-go (Nativa)"
-
-						if filterStoreUrl != "" && storeIndexUrl != filterStoreUrl {
-							continue
-						}
-
-						cw := "SAFE"
-						if cwInt > 0 {
-							cw = "NSFW"
-						}
-
-						storeName := "Keiyoushi"
-						if strings.Contains(storeIndexUrl, "suwayomi") {
-							storeName = "Suwayomi Extension Repo"
-						}
-
-						nodes = append(nodes, map[string]interface{}{
-							"pkgName":         pkgName,
-							"name":            name,
-							"lang":            lang,
-							"versionCodeLong": versionCode,
-							"versionName":     versionName,
-							"iconUrl":         "/api/v1/extension/icon/" + pkgName,
-							"storeIndexUrl":   storeIndexUrl,
-							"contentWarning":  cw,
-							"isInstalled":     isInstalled,
-							"isObsolete":      isObsolete,
-							"hasUpdate":       hasUpdate,
-							"extensionLib":    extLib,
-							"extensionStore": map[string]interface{}{
-								"indexUrl":   storeIndexUrl,
-								"name":       storeName,
-								"__typename": "ExtensionStoreType",
-							},
-							"__typename": "ExtensionType",
-						})
-					}
+		allNodes := getExtensionNodes(c.Context(), filterStoreUrl)
+		nodes := []interface{}{}
+		for _, node := range allNodes {
+			if filterInstalled != nil {
+				isInst, _ := node["isInstalled"].(bool)
+				if isInst != *filterInstalled {
+					continue
 				}
 			}
+			nodes = append(nodes, node)
 		}
-
-		// Ensure every native Go extension appears even if not present in suwayomi.extension
-		for pkgName, info := range NativeGoExtensionInfo {
-			if !seen[pkgName] {
-				nodes = append(nodes, map[string]interface{}{
-					"pkgName":         pkgName,
-					"name":            info.Name,
-					"lang":            info.Lang,
-					"versionCodeLong": int64(100),
-					"versionName":     "1.0-go (Nativa)",
-					"iconUrl":         "/api/v1/extension/icon/" + pkgName,
-					"storeIndexUrl":   "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json",
-					"contentWarning":  "SAFE",
-					"isInstalled":     true,
-					"isObsolete":      false,
-					"hasUpdate":       false,
-					"extensionLib":    "1.5",
-					"extensionStore": map[string]interface{}{
-						"indexUrl":   "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json",
-						"name":       "Keiyoushi",
-						"__typename": "ExtensionStoreType",
-					},
-					"__typename": "ExtensionType",
-				})
-			}
-		}
-
-		sort.Slice(nodes, func(i, j int) bool {
-			nameI, _ := nodes[i]["name"].(string)
-			nameJ, _ := nodes[j]["name"].(string)
-			return strings.ToLower(nameI) < strings.ToLower(nameJ)
-		})
 
 		data = map[string]interface{}{
 			"extensions": map[string]interface{}{
@@ -773,66 +902,50 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		if p, ok := req.Variables["pkgName"].(string); ok {
 			pkgName = p
 		}
-		var extMap map[string]interface{}
-		if pkgName != "" && NativeGoExtensionPackages[pkgName] {
-			var name, versionName, lang, iconUrl, storeIndexUrl, extLib string
-			var versionCode int64
-			var isInstalled, hasUpdate, isObsolete bool
-			var cwInt int
-			if database.DB != nil {
-				_ = database.DB.QueryRow(c.Context(), `
-					SELECT name, version_name, version_code, lang, COALESCE(icon_url, ''), is_installed, has_update, is_obsolete, COALESCE(store_index_url, 'https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json'), COALESCE(content_warning, 0), COALESCE(extension_lib, '1.5')
-					FROM suwayomi.extension
-					WHERE pkg_name = $1
-				`, pkgName).Scan(&name, &versionName, &versionCode, &lang, &iconUrl, &isInstalled, &hasUpdate, &isObsolete, &storeIndexUrl, &cwInt, &extLib)
-			}
-			if name == "" {
-				if info, ok := NativeGoExtensionInfo[pkgName]; ok {
-					name = info.Name
-					lang = info.Lang
-				} else {
-					name = pkgName
-					lang = "es"
-				}
-				storeIndexUrl = "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
-				extLib = "1.5"
-			}
-			isInstalled = true
-			hasUpdate = false
-			isObsolete = false
-			versionName = "1.0-go (Nativa)"
+		data = map[string]interface{}{
+			"extension": getExtensionMap(c.Context(), pkgName),
+		}
 
-			cw := "SAFE"
-			if cwInt > 0 {
-				cw = "NSFW"
-			}
-			storeName := "Keiyoushi"
-			if strings.Contains(storeIndexUrl, "suwayomi") {
-				storeName = "Suwayomi Extension Repo"
-			}
-			extMap = map[string]interface{}{
-				"pkgName":         pkgName,
-				"name":            name,
-				"lang":            lang,
-				"versionCodeLong": versionCode,
-				"versionName":     versionName,
-				"iconUrl":         "/api/v1/extension/icon/" + pkgName,
-				"storeIndexUrl":   storeIndexUrl,
-				"contentWarning":  cw,
-				"isInstalled":     isInstalled,
-				"isObsolete":      isObsolete,
-				"hasUpdate":       hasUpdate,
-				"extensionLib":    extLib,
-				"extensionStore": map[string]interface{}{
-					"indexUrl":   storeIndexUrl,
-					"name":       storeName,
-					"__typename": "ExtensionStoreType",
-				},
-				"__typename": "ExtensionType",
-			}
+	case "UPDATE_EXTENSION", "updateExtension":
+		var pkgName string
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			pkgName, _ = input["pkgName"].(string)
 		}
 		data = map[string]interface{}{
-			"extension": extMap,
+			"updateExtension": map[string]interface{}{
+				"extension":  getExtensionMap(c.Context(), pkgName),
+				"__typename": "UpdateExtensionPayload",
+			},
+		}
+
+	case "UPDATE_EXTENSIONS", "updateExtensions":
+		var pkgs []string
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if list, ok := input["pkgNames"].([]interface{}); ok {
+				for _, p := range list {
+					if s, ok := p.(string); ok {
+						pkgs = append(pkgs, s)
+					}
+				}
+			}
+		}
+		extList := []interface{}{}
+		for _, p := range pkgs {
+			extList = append(extList, getExtensionMap(c.Context(), p))
+		}
+		data = map[string]interface{}{
+			"updateExtensions": map[string]interface{}{
+				"extensions": extList,
+				"__typename": "UpdateExtensionsPayload",
+			},
+		}
+
+	case "INSTALL_EXTERNAL_EXTENSION", "installExternalExtension":
+		data = map[string]interface{}{
+			"installExternalExtension": map[string]interface{}{
+				"extension":  getExtensionMap(c.Context(), "eu.kanade.tachiyomi.extension.all.mangadex"),
+				"__typename": "InstallExternalExtensionPayload",
+			},
 		}
 
 	case "GET_CHAPTERS_UPDATES":
@@ -1457,49 +1570,29 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "GET_EXTENSION_STORES":
-		stores := []map[string]interface{}{
-			{
-				"name":             "Tsuruyomi Native Go Extensions",
-				"indexUrl":         "https://raw.githubusercontent.com/devil1210/tsuruyomi-extensions/main/index.json",
-				"isLegacy":         false,
-				"badgeLabel":       "TSURU",
-				"signingKey":       "tsuruyomi",
-				"contactWebsite":   "https://github.com/devil1210/tsuruyomi-extensions",
-				"contactDiscord":   nil,
+		dbStores, err := database.GetExtensionStores(c.Context())
+		if err != nil || len(dbStores) == 0 {
+			_ = database.EnsureDefaultExtensionStores(c.Context())
+			dbStores, _ = database.GetExtensionStores(c.Context())
+		}
+
+		stores := []map[string]interface{}{}
+		for _, s := range dbStores {
+			stores = append(stores, map[string]interface{}{
+				"id":               s.ID,
+				"name":             s.Name,
+				"indexUrl":         s.IndexURL,
+				"isLegacy":         s.IsLegacy,
+				"badgeLabel":       s.BadgeLabel,
+				"signingKey":       s.SigningKey,
+				"contactWebsite":   s.ContactWebsite,
+				"contactDiscord":   s.ContactDiscord,
 				"extensionListUrl": nil,
 				"extensions": map[string]interface{}{
-					"totalCount": 6,
+					"totalCount": s.TotalCount,
 				},
 				"__typename": "ExtensionStoreType",
-			},
-			{
-				"name":             "Keiyoushi",
-				"indexUrl":         "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb",
-				"isLegacy":         false,
-				"badgeLabel":       "KEI",
-				"signingKey":       "9add655a78e96c4ec7a53ef89dccb557cb5d767489fac5e785d671a5a75d4da2",
-				"contactWebsite":   "https://keiyoushi.github.io",
-				"contactDiscord":   "https://discord.gg/3FbCpdKbdY",
-				"extensionListUrl": nil,
-				"extensions": map[string]interface{}{
-					"totalCount": 1377,
-				},
-				"__typename": "ExtensionStoreType",
-			},
-			{
-				"name":             "Suwayomi Extension Repo",
-				"indexUrl":         "https://raw.githubusercontent.com/suwayomi/tachiyomi-extension/repo/repo.json",
-				"isLegacy":         true,
-				"badgeLabel":       "Suwayomi",
-				"signingKey":       "263228f0827ca0b66e8aad8eba50d71c0f13927fe6912520f8a05f19667283bc",
-				"contactWebsite":   "https://suwayomi.org/",
-				"contactDiscord":   nil,
-				"extensionListUrl": nil,
-				"extensions": map[string]interface{}{
-					"totalCount": 1,
-				},
-				"__typename": "ExtensionStoreType",
-			},
+			})
 		}
 
 		data = map[string]interface{}{
@@ -2031,24 +2124,45 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "ADD_EXTENSION_STORE":
+	case "ADD_EXTENSION_STORE", "addExtensionStore":
 		var url string
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
-			url, _ = input["url"].(string)
+			if u, ok := input["indexUrl"].(string); ok && u != "" {
+				url = u
+			} else if u, ok := input["url"].(string); ok {
+				url = u
+			}
 		}
+
+		name := "Custom Extension Store"
+		badge := "REPO"
+		if strings.Contains(url, "tsuruyomi") || strings.Contains(url, "devil1210") {
+			name = "Tsuruyomi Native Go Extensions"
+			badge = "TSURU"
+		} else if strings.Contains(url, "keiyoushi") {
+			name = "Keiyoushi"
+			badge = "KEI"
+		}
+
+		_ = database.AddExtensionStore(c.Context(), models.ExtensionStore{
+			IndexURL:   url,
+			Name:       name,
+			BadgeLabel: badge,
+		})
+
 		data = map[string]interface{}{
 			"addExtensionStore": map[string]interface{}{
 				"extensionStore": map[string]interface{}{
-					"name":             "Custom Store",
+					"name":             name,
 					"indexUrl":         url,
 					"isLegacy":         false,
-					"badgeLabel":       "CUST",
+					"badgeLabel":       badge,
 					"signingKey":       "",
 					"contactWebsite":   "",
 					"contactDiscord":   "",
 					"extensionListUrl": nil,
 					"extensions": map[string]interface{}{
-						"totalCount": 0,
+						"totalCount": 6,
 					},
 					"__typename": "ExtensionStoreType",
 				},
@@ -2056,18 +2170,27 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "REMOVE_EXTENSION_STORE":
+	case "REMOVE_EXTENSION_STORE", "removeExtensionStore":
 		var url string
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
-			url, _ = input["url"].(string)
+			if u, ok := input["indexUrl"].(string); ok && u != "" {
+				url = u
+			} else if u, ok := input["url"].(string); ok {
+				url = u
+			}
 		}
+
+		if url != "" {
+			_ = database.RemoveExtensionStore(c.Context(), url)
+		}
+
 		data = map[string]interface{}{
 			"removeExtensionStore": map[string]interface{}{
 				"extensionStore": map[string]interface{}{
-					"name":             "Custom Store",
+					"name":             "Extension Store",
 					"indexUrl":         url,
 					"isLegacy":         false,
-					"badgeLabel":       "CUST",
+					"badgeLabel":       "",
 					"signingKey":       "",
 					"contactWebsite":   "",
 					"contactDiscord":   "",
@@ -3187,6 +3310,35 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "RESTORE_BACKUP", "restoreBackup":
+		// Read uploaded file if available in multipart form
+		var restoreErr error
+		if form, err := c.MultipartForm(); err == nil && form != nil {
+			for _, files := range form.File {
+				for _, fh := range files {
+					if f, err := fh.Open(); err == nil {
+						dataBytes, err := io.ReadAll(f)
+						f.Close()
+						if err == nil && len(dataBytes) > 0 {
+							log.Printf("[BACKUP] Received backup file %q (%d bytes) via GraphQL. Restoring...", fh.Filename, len(dataBytes))
+							restoreErr = service.ImportBackup(c.Context(), dataBytes)
+							if restoreErr != nil {
+								log.Printf("[BACKUP] Error restoring backup: %v\n", restoreErr)
+							} else {
+								log.Printf("[BACKUP] Successfully restored backup from %q\n", fh.Filename)
+							}
+							break
+						}
+					}
+				}
+			}
+		}
+
+		if restoreErr != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"errors": []fiber.Map{{"message": restoreErr.Error()}},
+			})
+		}
+
 		data = map[string]interface{}{
 			"restoreBackup": map[string]interface{}{
 				"id": "1",

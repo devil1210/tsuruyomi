@@ -14,3 +14,17 @@ type ExtensionDataClass struct {
 	HasUpdate   bool    `json:"hasUpdate"`
 	Obsolete    bool    `json:"obsolete"`
 }
+
+type ExtensionStore struct {
+	ID               int    `json:"id"`
+	IndexURL         string `json:"indexUrl"`
+	Name             string `json:"name"`
+	BadgeLabel       string `json:"badgeLabel"`
+	SigningKey       string `json:"signingKey"`
+	ContactWebsite   string `json:"contactWebsite"`
+	ContactDiscord   string `json:"contactDiscord"`
+	IsLegacy         bool   `json:"isLegacy"`
+	ExtensionListURL string `json:"extensionListUrl"`
+	TotalCount       int    `json:"totalCount"`
+}
+

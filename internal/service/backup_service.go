@@ -1,9 +1,12 @@
 package service
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/models"
@@ -105,6 +108,20 @@ func ExportBackup(ctx context.Context) ([]byte, error) {
 func ImportBackup(ctx context.Context, data []byte) error {
 	if database.DB == nil {
 		return fmt.Errorf("database not initialized")
+	}
+
+	// Support gzip decompression if data is compressed (.tachibk / .proto.gz format)
+	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+		zr, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return fmt.Errorf("decompressing gzip backup: %w", err)
+		}
+		defer zr.Close()
+		decompressed, err := io.ReadAll(zr)
+		if err != nil {
+			return fmt.Errorf("reading decompressed backup data: %w", err)
+		}
+		data = decompressed
 	}
 
 	var payload BackupPayload

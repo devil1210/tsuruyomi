@@ -78,5 +78,8 @@ func EnsureSchema(ctx context.Context) error {
 		`)
 	}
 
+	// Ensure default extension repositories are present if table is empty
+	_ = EnsureDefaultExtensionStores(ctx)
+
 	return nil
 }
