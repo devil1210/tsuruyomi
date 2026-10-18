@@ -14,17 +14,72 @@ import (
 
 func init() {
 	// Register MangaDex across language variants
-	dex := &MangaDexHandler{}
-	Register(6400665728063187402, dex) // es
-	Register(2499283573021220255, dex) // en
-	Register(4938773340256184018, dex) // es-419
-	Register(4638673959522768501, dex) // general
+	Register(6400665728063187402, NewMangaDexHandler(6400665728063187402)) // es
+	Register(2499283573021220255, NewMangaDexHandler(2499283573021220255)) // en
+	Register(4938773340256184018, NewMangaDexHandler(4938773340256184018)) // es-419
+	Register(4638673959522768501, NewMangaDexHandler(4638673959522768501)) // general
 }
 
-type MangaDexHandler struct{}
+type MangaDexHandler struct {
+	sourceID int64
+}
+
+func NewMangaDexHandler(sourceID int64) *MangaDexHandler {
+	return &MangaDexHandler{sourceID: sourceID}
+}
 
 func (h *MangaDexHandler) Name() string {
 	return "MangaDex"
+}
+
+func (h *MangaDexHandler) GetPopularManga(ctx context.Context, page int) ([]MangaItem, bool, error) {
+	dexItems, hasNext, err := FetchMangaDexOnline(ctx, h.sourceID, "", page, 20)
+	if err != nil {
+		return nil, false, err
+	}
+	items := make([]MangaItem, len(dexItems))
+	for i, d := range dexItems {
+		items[i] = MangaItem{
+			ID:           d.ID,
+			Title:        d.Title,
+			Description:  d.Description,
+			Status:       d.Status,
+			ThumbnailURL: d.ThumbnailURL,
+			URL:          d.URL,
+			SourceID:     d.SourceID,
+			Genres:       d.Genres,
+			Author:       d.Author,
+			Artist:       d.Artist,
+		}
+	}
+	return items, hasNext, nil
+}
+
+func (h *MangaDexHandler) GetLatestManga(ctx context.Context, page int) ([]MangaItem, bool, error) {
+	return h.GetPopularManga(ctx, page)
+}
+
+func (h *MangaDexHandler) SearchManga(ctx context.Context, query string, page int) ([]MangaItem, bool, error) {
+	dexItems, hasNext, err := FetchMangaDexOnline(ctx, h.sourceID, query, page, 20)
+	if err != nil {
+		return nil, false, err
+	}
+	items := make([]MangaItem, len(dexItems))
+	for i, d := range dexItems {
+		items[i] = MangaItem{
+			ID:           d.ID,
+			Title:        d.Title,
+			Description:  d.Description,
+			Status:       d.Status,
+			ThumbnailURL: d.ThumbnailURL,
+			URL:          d.URL,
+			SourceID:     d.SourceID,
+			Genres:       d.Genres,
+			Author:       d.Author,
+			Artist:       d.Artist,
+		}
+	}
+	return items, hasNext, nil
 }
 
 var reUUID = regexp.MustCompile(`[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}`)

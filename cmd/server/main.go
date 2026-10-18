@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -59,11 +58,10 @@ func main() {
 		_, _ = database.DB.Exec(context.Background(), "CREATE INDEX IF NOT EXISTS idx_chapter_manga_read ON suwayomi.chapter (manga, read);")
 	}
 
-	// Initialize JS Extension Engine
-	extDir := filepath.Join(cfg.Data.RootDir, "extensions")
-	log.Printf("Loading JavaScript extensions from: %s", extDir)
-	if err := extensions.GlobalEngine.LoadAllExtensions(extDir); err != nil {
-		log.Printf("Warning: failed to load extensions: %v", err)
+	// Initialize dynamic extension manifests and JS Extension Engine
+	log.Printf("Loading extensions from root dir: %s", cfg.Data.RootDir)
+	if err := extensions.LoadInstalledExtensions(cfg.Data.RootDir); err != nil {
+		log.Printf("Warning: failed to load installed extensions: %v", err)
 	}
 
 	// Initialize Fiber app setup

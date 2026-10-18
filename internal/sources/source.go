@@ -43,6 +43,35 @@ type ChapterItem struct {
 	SourceOrder   int
 }
 
+// MangaItem represents a manga's metadata scraped from a source for catalog browsing or searching.
+type MangaItem struct {
+	ID           string
+	Title        string
+	Description  string
+	Status       int // 1: ongoing, 2: completed, 5: cancelled, 6: hiatus
+	ThumbnailURL string
+	URL          string
+	SourceID     int64
+	Genres       []string
+	Author       string
+	Artist       string
+}
+
+// MangaSearcher is an optional interface for sources that support searching manga online.
+type MangaSearcher interface {
+	SearchManga(ctx context.Context, query string, page int) ([]MangaItem, bool, error)
+}
+
+// PopularLister is an optional interface for sources that support listing popular manga online.
+type PopularLister interface {
+	GetPopularManga(ctx context.Context, page int) ([]MangaItem, bool, error)
+}
+
+// LatestLister is an optional interface for sources that support listing latest updated manga online.
+type LatestLister interface {
+	GetLatestManga(ctx context.Context, page int) ([]MangaItem, bool, error)
+}
+
 // ChapterLister is an optional interface implemented by SourceHandlers that support fetching chapter lists natively in Go.
 type ChapterLister interface {
 	GetChapterList(ctx context.Context, mangaURL string) ([]ChapterItem, error)
@@ -64,6 +93,13 @@ func Register(sourceID int64, handler SourceHandler) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	registry[sourceID] = handler
+}
+
+// Unregister removes a source ID from the registry.
+func Unregister(sourceID int64) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	delete(registry, sourceID)
 }
 
 // Get returns the native Go handler for a given source ID if one exists.

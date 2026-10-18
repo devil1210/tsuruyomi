@@ -670,6 +670,13 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "GET_EXTENSIONS_FETCH":
+		// Sync configured extension repositories in background
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			_ = service.SyncExtensionRepositories(ctx, cfg)
+		}()
+
 		extList := getExtensionNodes(c.Context(), "")
 
 		dbStores, _ := database.GetExtensionStores(c.Context())
@@ -1012,9 +1019,30 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 	case "UPDATE_EXTENSION", "updateExtension":
 		var pkgName string
+		var install, uninstall, update bool
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			pkgName, _ = input["pkgName"].(string)
+			install, _ = input["install"].(bool)
+			uninstall, _ = input["uninstall"].(bool)
+			update, _ = input["update"].(bool)
 		}
+
+		if pkgName != "" {
+			if install {
+				if err := service.InstallExtension(c.Context(), cfg, pkgName); err != nil {
+					log.Printf("[EXTENSIONS] Failed to install %s: %v", pkgName, err)
+				}
+			} else if uninstall {
+				if err := service.UninstallExtension(c.Context(), cfg, pkgName); err != nil {
+					log.Printf("[EXTENSIONS] Failed to uninstall %s: %v", pkgName, err)
+				}
+			} else if update {
+				if err := service.UpdateExtension(c.Context(), cfg, pkgName); err != nil {
+					log.Printf("[EXTENSIONS] Failed to update %s: %v", pkgName, err)
+				}
+			}
+		}
+
 		data = map[string]interface{}{
 			"updateExtension": map[string]interface{}{
 				"extension":  getExtensionMap(c.Context(), pkgName),
@@ -1035,6 +1063,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 		extList := []interface{}{}
 		for _, p := range pkgs {
+			_ = service.UpdateExtension(c.Context(), cfg, p)
 			extList = append(extList, getExtensionMap(c.Context(), p))
 		}
 		data = map[string]interface{}{
@@ -3540,12 +3569,32 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		var sourceId int64
 		_, _ = fmt.Sscan(sourceStr, &sourceId)
 
-		// Check if source is MangaDex for live online browsing/searching
-		if database.DB != nil && (sourceId == 2499283573021220255 || sourceId == 6400665728063187402 || sourceId == 4938773340256184018 || sourceId == 4638673959522768501) {
-			onlineItems, hasNext, errOnline := sources.FetchMangaDexOnline(c.Context(), sourceId, queryStr, page, 20)
+		// Check if source has a native online scraper (MangaSearcher / PopularLister / LatestLister)
+		if database.DB != nil && sourceId > 0 {
+			var onlineItems []sources.MangaItem
+			var hasNext bool
+			var errOnline error
+
+			if h, ok := sources.Get(sourceId); ok {
+				if queryStr != "" {
+					if searcher, ok := h.(sources.MangaSearcher); ok {
+						onlineItems, hasNext, errOnline = searcher.SearchManga(c.Context(), queryStr, page)
+					}
+				} else {
+					if pop, ok := h.(sources.PopularLister); ok {
+						onlineItems, hasNext, errOnline = pop.GetPopularManga(c.Context(), page)
+					} else if latest, ok := h.(sources.LatestLister); ok {
+						onlineItems, hasNext, errOnline = latest.GetLatestManga(c.Context(), page)
+					}
+				}
+			}
+
 			if errOnline == nil && len(onlineItems) > 0 {
 				var ids []int64
 				for _, it := range onlineItems {
+					if it.SourceID == 0 {
+						it.SourceID = sourceId
+					}
 					genreStr := strings.Join(it.Genres, ", ")
 					var mID int64
 					errFind := database.DB.QueryRow(c.Context(), "SELECT id FROM suwayomi.manga WHERE source = $1 AND url = $2", it.SourceID, it.URL).Scan(&mID)

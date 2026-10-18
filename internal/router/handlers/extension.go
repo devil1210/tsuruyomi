@@ -10,8 +10,10 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/models"
+	"tsuruyomi/internal/service"
 	"tsuruyomi/internal/sources"
 )
 
@@ -208,7 +210,13 @@ func ListExtensions(c *fiber.Ctx) error {
 // InstallExtension installs an extension by its package name.
 func InstallExtension(c *fiber.Ctx) error {
 	pkgName := c.Params("pkgName")
-	_ = pkgName // suppress unused warning
+	if pkgName == "" {
+		return c.Status(fiber.StatusBadRequest).SendString("missing pkgName")
+	}
+	cfg, _ := c.Locals("config").(*config.Config)
+	if err := service.InstallExtension(c.Context(), cfg, pkgName); err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+	}
 	return c.SendStatus(fiber.StatusCreated)
 }
 
@@ -225,14 +233,26 @@ func InstallExtensionFile(c *fiber.Ctx) error {
 // UpdateExtension updates an extension by package name.
 func UpdateExtension(c *fiber.Ctx) error {
 	pkgName := c.Params("pkgName")
-	_ = pkgName // suppress unused warning
+	if pkgName == "" {
+		return c.Status(fiber.StatusBadRequest).SendString("missing pkgName")
+	}
+	cfg, _ := c.Locals("config").(*config.Config)
+	if err := service.UpdateExtension(c.Context(), cfg, pkgName); err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+	}
 	return c.SendStatus(fiber.StatusCreated)
 }
 
 // UninstallExtension uninstalls an extension by package name.
 func UninstallExtension(c *fiber.Ctx) error {
 	pkgName := c.Params("pkgName")
-	_ = pkgName // suppress unused warning
+	if pkgName == "" {
+		return c.Status(fiber.StatusBadRequest).SendString("missing pkgName")
+	}
+	cfg, _ := c.Locals("config").(*config.Config)
+	if err := service.UninstallExtension(c.Context(), cfg, pkgName); err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+	}
 	return c.SendStatus(fiber.StatusOK)
 }
 

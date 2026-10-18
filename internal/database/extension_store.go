@@ -9,11 +9,16 @@ import (
 	"tsuruyomi/internal/models"
 )
 
+const (
+	DefaultExtensionStoreName = "Tsuruyomi Native Go Extensions"
+	DefaultExtensionStoreURL  = "https://raw.githubusercontent.com/devil1210/tsuruyomi-extensions/main/index.json"
+)
+
 // DefaultExtensionStores contains the out-of-the-box extension stores.
 var DefaultExtensionStores = []models.ExtensionStore{
 	{
-		Name:           "Tsuruyomi Native Go Extensions",
-		IndexURL:       "https://raw.githubusercontent.com/devil1210/tsuruyomi-extensions/main/index.json",
+		Name:           DefaultExtensionStoreName,
+		IndexURL:       DefaultExtensionStoreURL,
 		BadgeLabel:     "TSURU",
 		SigningKey:     "tsuruyomi",
 		ContactWebsite: "https://github.com/devil1210/tsuruyomi-extensions",
