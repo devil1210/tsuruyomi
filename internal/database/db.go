@@ -70,13 +70,32 @@ func EnsureSchema(ctx context.Context) error {
 		}
 		log.Println("[DATABASE] Schema successfully created.")
 
+		// Ensure default useraccount (ID 1) exists
+		_, _ = DB.Exec(ctx, `
+			INSERT INTO suwayomi.useraccount (id, username, password)
+			VALUES (1, 'admin', '')
+			ON CONFLICT (id) DO NOTHING
+		`)
+
 		// Ensure default category (ID 0) exists
 		_, _ = DB.Exec(ctx, `
-			INSERT INTO suwayomi.category (id, name, sort_order, is_default, include_in_update, include_in_download, version, uid, last_modified_at)
-			VALUES (0, 'Default', 0, true, -1, -1, 0, 0, 0)
+			INSERT INTO suwayomi.category (id, name, sort_order, is_default, include_in_update, include_in_download, version, uid, last_modified_at, user_id, is_default_category)
+			VALUES (0, 'Default', 0, true, -1, -1, 0, 0, 0, 1, true)
 			ON CONFLICT (id) DO NOTHING
 		`)
 	}
+
+	// Always ensure default user and default category exist
+	_, _ = DB.Exec(ctx, `
+		INSERT INTO suwayomi.useraccount (id, username, password)
+		VALUES (1, 'admin', '')
+		ON CONFLICT (id) DO NOTHING
+	`)
+	_, _ = DB.Exec(ctx, `
+		INSERT INTO suwayomi.category (id, name, sort_order, is_default, include_in_update, include_in_download, version, uid, last_modified_at, user_id, is_default_category)
+		VALUES (0, 'Default', 0, true, -1, -1, 0, 0, 0, 1, true)
+		ON CONFLICT (id) DO NOTHING
+	`)
 
 	// Ensure default extension repositories are present if table is empty
 	_ = EnsureDefaultExtensionStores(ctx)

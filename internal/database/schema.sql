@@ -1874,5 +1874,3 @@ ALTER TABLE ONLY suwayomi.usersettings
 -- PostgreSQL database dump complete
 --
 
-\unrestrict GoMkiScPIWwPyB14wAFD1VLOCnHXTDGk3HFFtgo6Gu74bgU4n12jDImSpxZJ6Dl
-
