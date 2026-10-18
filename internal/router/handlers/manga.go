@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -49,6 +50,166 @@ func GetMangaFull(c *fiber.Ctx) error {
 	return GetManga(c) // Reuses GetManga since the struct contains full counts and relations
 }
 
+func rewriteKnownCDN(rawUrl string) string {
+	u := rawUrl
+	u = strings.ReplaceAll(u, "cdn.manga-oni.com", "oni.ntr-files.online")
+	u = strings.ReplaceAll(u, "oni.ntr-cdn.online", "oni.ntr-files.online")
+	return u
+}
+
+func isKnownDeadDomain(rawUrl string) bool {
+	return strings.Contains(rawUrl, "otakuteca.com")
+}
+
+func downloadImageRaw(ctx context.Context, cfg *config.Config, imgURL string) ([]byte, string, error) {
+	req, reqErr := http.NewRequestWithContext(ctx, "GET", imgURL, nil)
+	if reqErr != nil {
+		return nil, "", reqErr
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Referer", imgURL)
+	dlClient := &http.Client{Timeout: 8 * time.Second}
+	resp, respErr := dlClient.Do(req)
+	if respErr == nil && resp.StatusCode == http.StatusOK {
+		defer resp.Body.Close()
+		data, readErr := io.ReadAll(resp.Body)
+		if readErr == nil && len(data) > 0 && !strings.Contains(string(data[:min(len(data), 512)]), "<html") {
+			mimeType := resp.Header.Get("Content-Type")
+			if mimeType == "" {
+				mimeType = "image/jpeg"
+			}
+			return data, mimeType, nil
+		}
+	}
+
+	if (respErr != nil || (resp != nil && (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusServiceUnavailable))) && cfg != nil && cfg.FlareSolverr.Enabled {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		fsData, mimeType, fsErr := util.DownloadWithFlareSolverrAndReferer(ctx, cfg, imgURL, imgURL)
+		if fsErr == nil && len(fsData) > 0 {
+			return fsData, mimeType, nil
+		}
+	}
+	return nil, "", fmt.Errorf("failed to download image from %s", imgURL)
+}
+
+func saveThumbnailToDisk(cfg *config.Config, mangaId int, data []byte) {
+	if cfg == nil || len(data) == 0 {
+		return
+	}
+	thumbnailDir := filepath.Join(cfg.Data.RootDir, "downloads", "thumbnails")
+	_ = os.MkdirAll(thumbnailDir, 0755)
+	targetFile := filepath.Join(thumbnailDir, fmt.Sprintf("%d.jpg", mangaId))
+	_ = os.WriteFile(targetFile, data, 0644)
+}
+
+func findSiblingCover(ctx context.Context, cfg *config.Config, mangaId int, title string) ([]byte, string, error) {
+	if database.DB == nil || title == "" {
+		return nil, "", fmt.Errorf("no database or empty title")
+	}
+	rows, err := database.DB.Query(ctx, `
+		SELECT id, COALESCE(thumbnail_url, '') 
+		FROM suwayomi.manga 
+		WHERE title ILIKE $1 AND id != $2 
+		ORDER BY id ASC LIMIT 5
+	`, title, mangaId)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	type sibling struct {
+		id  int
+		url string
+	}
+	var siblings []sibling
+	for rows.Next() {
+		var s sibling
+		if err := rows.Scan(&s.id, &s.url); err == nil {
+			siblings = append(siblings, s)
+		}
+	}
+
+	// 1. Check if any sibling already has a thumbnail cached on disk
+	for _, s := range siblings {
+		if path, mime, err := util.GetMangaThumbnailPath(cfg, s.id); err == nil {
+			if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+				return data, mime, nil
+			}
+		}
+	}
+
+	// 2. Check if any sibling has a working remote URL
+	for _, s := range siblings {
+		cleanURL := rewriteKnownCDN(s.url)
+		if cleanURL != "" && !isKnownDeadDomain(cleanURL) {
+			if data, mime, err := downloadImageRaw(ctx, cfg, cleanURL); err == nil && len(data) > 0 {
+				return data, mime, nil
+			}
+		}
+	}
+
+	return nil, "", fmt.Errorf("no sibling cover found")
+}
+
+func findMangaDexCover(ctx context.Context, cfg *config.Config, title string) ([]byte, string, error) {
+	if title == "" {
+		return nil, "", fmt.Errorf("empty title")
+	}
+	apiURL := fmt.Sprintf("https://api.mangadex.org/manga?title=%s&limit=1&includes[]=cover_art", url.QueryEscape(title))
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("User-Agent", "Tsuruyomi/1.0 (https://github.com/Suwayomi)")
+
+	client := &http.Client{Timeout: 6 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, "", fmt.Errorf("mangadex api request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			ID            string `json:"id"`
+			Relationships []struct {
+				Type       string `json:"type"`
+				Attributes struct {
+					FileName string `json:"fileName"`
+				} `json:"attributes"`
+			} `json:"relationships"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Data) == 0 {
+		return nil, "", fmt.Errorf("no mangadex manga found")
+	}
+
+	mangaID := result.Data[0].ID
+	var fileName string
+	for _, rel := range result.Data[0].Relationships {
+		if rel.Type == "cover_art" && rel.Attributes.FileName != "" {
+			fileName = rel.Attributes.FileName
+			break
+		}
+	}
+	if fileName == "" {
+		return nil, "", fmt.Errorf("no cover_art found in mangadex result")
+	}
+
+	coverURL := fmt.Sprintf("https://uploads.mangadex.org/covers/%s/%s.512.jpg", mangaID, fileName)
+	data, mime, err := downloadImageRaw(ctx, cfg, coverURL)
+	if err != nil {
+		coverURL = fmt.Sprintf("https://uploads.mangadex.org/covers/%s/%s", mangaID, fileName)
+		data, mime, err = downloadImageRaw(ctx, cfg, coverURL)
+	}
+	return data, mime, err
+}
+
 // GetMangaThumbnail serves the cover image file from local cache or storage.
 func GetMangaThumbnail(c *fiber.Ctx) error {
 	mangaId, err := strconv.Atoi(c.Params("mangaId"))
@@ -56,7 +217,7 @@ func GetMangaThumbnail(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).SendString("Invalid manga ID")
 	}
 
-	cfg := c.Locals("config").(*config.Config)
+	cfg, _ := c.Locals("config").(*config.Config)
 
 	// 1. Try to serve the cover directly from the shared disk cache first
 	filePath, mimeType, err := util.GetMangaThumbnailPath(cfg, mangaId)
@@ -67,7 +228,7 @@ func GetMangaThumbnail(c *fiber.Ctx) error {
 	}
 
 	// 2. If not on disk, proxy to sidecar and persist to disk for future requests
-	if cfg.Sidecar.Enabled {
+	if cfg != nil && cfg.Sidecar.Enabled && cfg.Sidecar.BaseURL != "" {
 		sidecarClient := &http.Client{Timeout: 5 * time.Second}
 		url := fmt.Sprintf("%s/api/v1/manga/%d/thumbnail", strings.TrimSuffix(cfg.Sidecar.BaseURL, "/"), mangaId)
 		
@@ -78,12 +239,7 @@ func GetMangaThumbnail(c *fiber.Ctx) error {
 				defer resp.Body.Close()
 				data, readErr := io.ReadAll(resp.Body)
 				if readErr == nil && len(data) > 0 {
-					// Persist to local cache on disk
-					thumbnailDir := filepath.Join(cfg.Data.RootDir, "downloads", "thumbnails")
-					_ = os.MkdirAll(thumbnailDir, 0755)
-					targetFile := filepath.Join(thumbnailDir, fmt.Sprintf("%d.jpg", mangaId))
-					_ = os.WriteFile(targetFile, data, 0644)
-
+					saveThumbnailToDisk(cfg, mangaId, data)
 					c.Set(fiber.HeaderContentType, resp.Header.Get("Content-Type"))
 					c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
 					return c.Send(data)
@@ -92,48 +248,43 @@ func GetMangaThumbnail(c *fiber.Ctx) error {
 		}
 	}
 
-	// 3. Fallback: Download remotely via database URL
+	// 3. Fallback: Download remotely via database URL or smart fallbacks
 	if database.DB != nil {
-		var dbUrl string
-		errDb := database.DB.QueryRow(c.Context(), "SELECT thumbnail_url FROM suwayomi.manga WHERE id = $1", mangaId).Scan(&dbUrl)
-		if errDb == nil && dbUrl != "" {
-			req, reqErr := http.NewRequestWithContext(c.Context(), "GET", dbUrl, nil)
-			if reqErr == nil {
-				req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-				req.Header.Set("Referer", dbUrl)
-				dlClient := &http.Client{Timeout: 8 * time.Second}
-				resp, respErr := dlClient.Do(req)
-				if respErr == nil && resp.StatusCode == http.StatusOK {
-					defer resp.Body.Close()
-					data, readErr := io.ReadAll(resp.Body)
-					// Only save if it's a real image and not Cloudflare HTML challenge
-					if readErr == nil && len(data) > 0 && !strings.Contains(string(data[:min(len(data), 512)]), "<html") {
-						thumbnailDir := filepath.Join(cfg.Data.RootDir, "downloads", "thumbnails")
-						_ = os.MkdirAll(thumbnailDir, 0755)
-						targetFile := filepath.Join(thumbnailDir, fmt.Sprintf("%d.jpg", mangaId))
-						_ = os.WriteFile(targetFile, data, 0644)
+		var dbUrl, title string
+		errDb := database.DB.QueryRow(c.Context(), "SELECT COALESCE(thumbnail_url, ''), COALESCE(title, '') FROM suwayomi.manga WHERE id = $1", mangaId).Scan(&dbUrl, &title)
+		if errDb == nil {
+			cleanUrl := rewriteKnownCDN(dbUrl)
+			if cleanUrl != dbUrl {
+				// Update database with rewritten CDN so next time it is already clean
+				_, _ = database.DB.Exec(c.Context(), "UPDATE suwayomi.manga SET thumbnail_url = $1 WHERE id = $2", cleanUrl, mangaId)
+				dbUrl = cleanUrl
+			}
 
-						c.Set(fiber.HeaderContentType, resp.Header.Get("Content-Type"))
-						c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
-						return c.Send(data)
-					}
+			if dbUrl != "" && !isKnownDeadDomain(dbUrl) {
+				if data, mimeType, dlErr := downloadImageRaw(c.Context(), cfg, dbUrl); dlErr == nil && len(data) > 0 {
+					saveThumbnailToDisk(cfg, mangaId, data)
+					c.Set(fiber.HeaderContentType, mimeType)
+					c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
+					return c.Send(data)
+				}
+			}
+
+			// If direct download failed or domain is known dead (like otakuteca.com):
+			// Strategy A: Check siblings in local library with identical title
+			if title != "" {
+				if data, mimeType, sibErr := findSiblingCover(c.Context(), cfg, mangaId, title); sibErr == nil && len(data) > 0 {
+					saveThumbnailToDisk(cfg, mangaId, data)
+					c.Set(fiber.HeaderContentType, mimeType)
+					c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
+					return c.Send(data)
 				}
 
-				if (respErr != nil || (resp != nil && (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusServiceUnavailable))) && cfg.FlareSolverr.Enabled {
-					if resp != nil {
-						_ = resp.Body.Close()
-					}
-					fsData, mimeType, fsErr := util.DownloadWithFlareSolverrAndReferer(c.Context(), cfg, dbUrl, dbUrl)
-					if fsErr == nil && len(fsData) > 0 {
-						thumbnailDir := filepath.Join(cfg.Data.RootDir, "downloads", "thumbnails")
-						_ = os.MkdirAll(thumbnailDir, 0755)
-						targetFile := filepath.Join(thumbnailDir, fmt.Sprintf("%d.jpg", mangaId))
-						_ = os.WriteFile(targetFile, fsData, 0644)
-
-						c.Set(fiber.HeaderContentType, mimeType)
-						c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
-						return c.Send(fsData)
-					}
+				// Strategy B: Search MangaDex for official high-res cover
+				if data, mimeType, mdErr := findMangaDexCover(c.Context(), cfg, title); mdErr == nil && len(data) > 0 {
+					saveThumbnailToDisk(cfg, mangaId, data)
+					c.Set(fiber.HeaderContentType, mimeType)
+					c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
+					return c.Send(data)
 				}
 			}
 		}
