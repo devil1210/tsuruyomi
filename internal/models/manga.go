@@ -36,6 +36,26 @@ func MangaStatusFromInt(v int) MangaStatus {
 	}
 }
 
+// MangaStatusToInt converts MangaStatus enum to the integer stored in database and backups.
+func MangaStatusToInt(s MangaStatus) int32 {
+	switch s {
+	case MangaStatusOngoing:
+		return 1
+	case MangaStatusCompleted:
+		return 2
+	case MangaStatusLicensed:
+		return 3
+	case MangaStatusPublishingFinished:
+		return 4
+	case MangaStatusCancelled:
+		return 5
+	case MangaStatusOnHiatus:
+		return 6
+	default:
+		return 0
+	}
+}
+
 // UpdateStrategy mirrors eu.kanade.tachiyomi.source.model.UpdateStrategy.
 type UpdateStrategy string
 

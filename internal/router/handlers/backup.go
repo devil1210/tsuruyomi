@@ -68,19 +68,19 @@ func ExportBackup(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
 	}
 
-	c.Set(fiber.HeaderContentType, "application/json")
+	c.Set(fiber.HeaderContentType, "application/gzip")
 	return c.Send(data)
 }
 
-// ExportBackupFile exports backup file attachment.
+// ExportBackupFile exports backup file attachment in standard .tachibk format.
 func ExportBackupFile(c *fiber.Ctx) error {
 	data, err := service.ExportBackup(c.Context())
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
 	}
 
-	filename := fmt.Sprintf("tsuruyomi_backup_%s.json", time.Now().Format("2006-01-02_150405"))
-	c.Set(fiber.HeaderContentType, "application/json")
+	filename := fmt.Sprintf("tsuruyomi_backup_%s.tachibk", time.Now().Format("2006-01-02_150405"))
+	c.Set(fiber.HeaderContentType, "application/gzip")
 	c.Set(fiber.HeaderContentDisposition, fmt.Sprintf(`attachment; filename="%s"`, filename))
 	return c.Send(data)
 }

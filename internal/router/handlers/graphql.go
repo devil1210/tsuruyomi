@@ -3352,17 +3352,20 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_BACKUP_RESTORE_STATUS", "restoreStatus":
+	case "GET_RESTORE_STATUS", "GET_BACKUP_RESTORE_STATUS", "restoreStatus":
 		data = map[string]interface{}{
 			"restoreStatus": map[string]interface{}{
-				"id": "1",
+				"id":            "1",
+				"state":         "COMPLETED",
+				"mangaProgress": 100,
+				"totalManga":    100,
 				"status": map[string]interface{}{
 					"state":         "COMPLETED",
 					"mangaProgress": 100,
 					"totalManga":    100,
 					"__typename":    "BackupRestoreStatusType",
 				},
-				"__typename": "BackupRestoreType",
+				"__typename": "BackupRestoreStatusType",
 			},
 		}
 
