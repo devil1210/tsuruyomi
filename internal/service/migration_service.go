@@ -144,26 +144,67 @@ func SearchMangaDexOnlineWithAggregate(ctx context.Context, query string, target
 	return nil, nil
 }
 
+var stopWords = map[string]bool{
+	"the": true, "a": true, "an": true, "and": true, "of": true, "in": true, "to": true, "with": true,
+	"de": true, "la": true, "el": true, "los": true, "las": true, "un": true, "una": true, "y": true, "en": true, "del": true, "al": true, "que": true, "su": true,
+	"no": true, "ga": true, "wa": true, "ni": true, "wo": true, "o": true, "mo": true, "ka": true,
+}
+
+func filterSignificantWords(words []string) []string {
+	var res []string
+	for _, w := range words {
+		wClean := strings.Trim(strings.ToLower(w), ".,!?:;\"'()[]{}~-—_♂♀")
+		if len(wClean) <= 1 || stopWords[wClean] {
+			continue
+		}
+		res = append(res, wClean)
+	}
+	return res
+}
+
+func cleanForMatching(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.ReplaceAll(s, "-", " ")
+	s = strings.ReplaceAll(s, "_", " ")
+	s = strings.ReplaceAll(s, "/", " ")
+	s = strings.ReplaceAll(s, "(", " ")
+	s = strings.ReplaceAll(s, ")", " ")
+	s = strings.ReplaceAll(s, "[", " ")
+	s = strings.ReplaceAll(s, "]", " ")
+	s = strings.ReplaceAll(s, "!", " ")
+	s = strings.ReplaceAll(s, "?", " ")
+	s = strings.ReplaceAll(s, ".", " ")
+	s = strings.ReplaceAll(s, ",", " ")
+	s = strings.ReplaceAll(s, ":", " ")
+	return strings.TrimSpace(reExtraSpaces.ReplaceAllString(s, " "))
+}
+
 func isTitleMatch(query string, titles map[string]string, altTitles []map[string]string) bool {
-	q := strings.ToLower(strings.TrimSpace(query))
+	q := cleanForMatching(query)
 	if len(q) < 3 {
 		return false
 	}
 	checkStr := func(cand string) bool {
-		c := strings.ToLower(strings.TrimSpace(cand))
+		c := cleanForMatching(cand)
 		if c == "" {
 			return false
 		}
-		if strings.Contains(c, q) || strings.Contains(q, c) {
+		if c == q {
 			return true
 		}
-		qWords := strings.Fields(q)
-		candWords := strings.Fields(c)
+		if strings.Contains(c, q) && float64(len(q))/float64(len(c)) >= 0.7 {
+			return true
+		}
+		if strings.Contains(q, c) && float64(len(c))/float64(len(q)) >= 0.7 {
+			return true
+		}
+		qWords := filterSignificantWords(strings.Fields(q))
+		candWords := filterSignificantWords(strings.Fields(c))
+		if len(qWords) == 0 || len(candWords) == 0 {
+			return false
+		}
 		matchCount := 0
 		for _, qw := range qWords {
-			if len(qw) <= 2 {
-				continue
-			}
 			for _, cw := range candWords {
 				if strings.EqualFold(qw, cw) {
 					matchCount++
@@ -171,10 +212,9 @@ func isTitleMatch(query string, titles map[string]string, altTitles []map[string
 				}
 			}
 		}
-		if len(qWords) > 0 && float64(matchCount)/float64(len(qWords)) >= 0.5 {
-			return true
-		}
-		return false
+		qRatio := float64(matchCount) / float64(len(qWords))
+		cRatio := float64(matchCount) / float64(len(candWords))
+		return qRatio >= 0.75 && cRatio >= 0.5
 	}
 
 	for _, t := range titles {
@@ -368,30 +408,200 @@ var KnownTmoAliases = map[string]string{
 	"the dark maid dominates":                                   "Yami Maid ga Shihai suru",
 }
 
+var KnownMangaOniMatches = map[string]string{
+	"uso bitch senpai":                                          "/manga/uso-bitch-senpai/",
+	"uso-bitch-senpai":                                          "/manga/uso-bitch-senpai/",
+	"una cuñada genial que apunta a la virginidad de su cuñado": "/manhwa/una-cunada-genial-que-apunta-a-la-virginidad-de-su-cunado/",
+	"una cunada genial que apunta a la virginidad de su cunado": "/manhwa/una-cunada-genial-que-apunta-a-la-virginidad-de-su-cunado/",
+	"las circunstancias de beber sangre de la familia hiiragi":   "/manga/hiiragi-san-chi-no-kyuuketsu-jijou/",
+	"hiiragi-san chi no kyuuketsu jijou":                        "/manga/hiiragi-san-chi-no-kyuuketsu-jijou/",
+}
+
+// GetMangaOniByPath fetches chapters for a known MangaOni path directly.
+func GetMangaOniByPath(ctx context.Context, relPath string, title string) (*TargetMatch, error) {
+	handler, ok := sources.Get(2202687009511923782)
+	if !ok {
+		return nil, fmt.Errorf("mangaoni handler not registered")
+	}
+	lister, ok := handler.(sources.ChapterLister)
+	if !ok {
+		return nil, fmt.Errorf("mangaoni does not implement ChapterLister")
+	}
+
+	chapters, err := lister.GetChapterList(ctx, relPath)
+	if err != nil || len(chapters) == 0 {
+		return nil, fmt.Errorf("failed to fetch chapters for %s: %v", relPath, err)
+	}
+
+	slug := strings.Trim(relPath, "/")
+	parts := strings.Split(slug, "/")
+	if len(parts) > 1 {
+		slug = parts[1]
+	}
+
+	return &TargetMatch{
+		SourceID:     2202687009511923782, // MangaOni
+		URL:          relPath,
+		Title:        title,
+		ThumbnailURL: fmt.Sprintf("https://oni.ntr-files.online/public/archivos/mangas/%s/thumb.jpg", slug),
+		Language:     "es",
+		ChapterCount: len(chapters),
+	}, nil
+}
+
+func isSimpleTitleMatch(query, cand string) bool {
+	q := cleanForMatching(query)
+	c := cleanForMatching(cand)
+	if q == "" || c == "" {
+		return false
+	}
+	if q == c {
+		return true
+	}
+	if strings.Contains(c, q) && float64(len(q))/float64(len(c)) >= 0.7 {
+		return true
+	}
+	if strings.Contains(q, c) && float64(len(c))/float64(len(q)) >= 0.7 {
+		return true
+	}
+	qWords := filterSignificantWords(strings.Fields(q))
+	cWords := filterSignificantWords(strings.Fields(c))
+	if len(qWords) == 0 || len(cWords) == 0 {
+		return false
+	}
+	matches := 0
+	for _, qw := range qWords {
+		for _, cw := range cWords {
+			if qw == cw {
+				matches++
+				break
+			}
+		}
+	}
+	qRatio := float64(matches) / float64(len(qWords))
+	cRatio := float64(matches) / float64(len(cWords))
+	return qRatio >= 0.75 && cRatio >= 0.5
+}
+
+// SearchMangaOniOnline searches MangaOni and checks if returned results have chapters.
+func SearchMangaOniOnline(ctx context.Context, query string) (*TargetMatch, error) {
+	handler, ok := sources.Get(2202687009511923782)
+	if !ok {
+		return nil, fmt.Errorf("mangaoni handler not registered")
+	}
+	searcher, ok := handler.(sources.MangaSearcher)
+	if !ok {
+		return nil, fmt.Errorf("mangaoni does not implement MangaSearcher")
+	}
+
+	items, _, err := searcher.SearchManga(ctx, query, 1)
+	if err != nil || len(items) == 0 {
+		return nil, err
+	}
+
+	lister, ok := handler.(sources.ChapterLister)
+	if !ok {
+		return nil, fmt.Errorf("mangaoni does not implement ChapterLister")
+	}
+
+	for _, it := range items {
+		if !isSimpleTitleMatch(query, it.Title) {
+			continue
+		}
+		chapters, errCh := lister.GetChapterList(ctx, it.URL)
+		if errCh == nil && len(chapters) > 0 {
+			return &TargetMatch{
+				SourceID:     2202687009511923782, // MangaOni
+				URL:          it.URL,
+				Title:        it.Title,
+				Author:       it.Author,
+				ThumbnailURL: it.ThumbnailURL,
+				Language:     "es",
+				ChapterCount: len(chapters),
+			}, nil
+		}
+	}
+	return nil, nil
+}
+
+// SearchGenericSourceOnline queries any registered MangaSearcher + ChapterLister handler.
+func SearchGenericSourceOnline(ctx context.Context, sourceID int64, query string) (*TargetMatch, error) {
+	handler, ok := sources.Get(sourceID)
+	if !ok {
+		return nil, fmt.Errorf("source %d not registered", sourceID)
+	}
+	searcher, ok := handler.(sources.MangaSearcher)
+	if !ok {
+		return nil, nil
+	}
+	lister, ok := handler.(sources.ChapterLister)
+	if !ok {
+		return nil, nil
+	}
+
+	searchCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+
+	items, _, err := searcher.SearchManga(searchCtx, query, 1)
+	if err != nil || len(items) == 0 {
+		return nil, err
+	}
+
+	for _, it := range items {
+		if !isSimpleTitleMatch(query, it.Title) {
+			continue
+		}
+		listCtx, listCancel := context.WithTimeout(ctx, 4*time.Second)
+		chapters, errCh := lister.GetChapterList(listCtx, it.URL)
+		listCancel()
+		if errCh == nil && len(chapters) > 0 {
+			return &TargetMatch{
+				SourceID:     sourceID,
+				URL:          it.URL,
+				Title:        it.Title,
+				Author:       it.Author,
+				ThumbnailURL: it.ThumbnailURL,
+				Language:     "es",
+				ChapterCount: len(chapters),
+			}, nil
+		}
+	}
+	return nil, nil
+}
+
+var TopSpanishSourceIDs = []int64{
+	8701445043633550960, // LeerManhwas (Madara)
+	3044113561993269522, // ApollComics (Madara)
+	5943212552955476721, // ManhwaWeb (MangaThemesia)
+	1136717301008230074, // Submanhwa (MangaThemesia)
+	829053423099062956,  // Mangas No Sekai (MangaThemesia)
+	3548601371328353875, // Manhwa-Latino (Madara)
+	698913079501532785,  // RavenManga (MangaThemesia)
+	1598762687295904337, // BokugenTranslation (Madara)
+	4647982373411241498, // DragonTranslation.org (Madara)
+	1814471239661920836, // Cerberus Series (Madara)
+	8311505150576608267, // Hades no Fansub (Madara)
+	6757330205319558057, // Bega Translation (Madara)
+	1326771034671033762, // Manhwas.net (Madara)
+	3903750533251938295, // Jobsibe (Madara)
+	3953107753690791431, // Uchuujin Projects (MangaThemesia)
+	1348827658894665970, // Ragnarok Scanlation (Madara)
+	5414998368888208528, // ManhwaOnline (Madara)
+	4150746388640244220, // Ver Manhwas (Madara)
+	8879875375160764811, // Inmortal Scan (Madara)
+	7121772696835562045, // Mundo Manhwa (Madara)
+	2716608619626653265, // Nova Manhwas (MangaThemesia)
+	3655128076360662290, // Asia Lotus (MangaThemesia)
+	688847276247637882,  // Luna Pieces (MangaThemesia)
+	8713024885922119175, // SkyMangas (MangaThemesia)
+}
+
 // FindBestMigrationTarget discovers the best target manga by cascading across sources and languages.
 func FindBestMigrationTarget(ctx context.Context, oldTitle, oldURL, oldDesc string) (*TargetMatch, error) {
 	cleanT := CleanTitle(oldTitle)
 	slug := ExtractSlug(oldURL)
 
-	// 0. Priority: Known exact UUID direct lookup
-	for _, key := range []string{strings.ToLower(cleanT), strings.ToLower(slug)} {
-		if key == "" {
-			continue
-		}
-		if uuid, ok := KnownTmoUUIDs[key]; ok {
-			// Check ES first
-			if m, err := GetMangaDexByUUID(ctx, uuid, "es"); err == nil && m != nil && m.ChapterCount > 0 {
-				return m, nil
-			}
-			// Check EN fallback
-			if m, err := GetMangaDexByUUID(ctx, uuid, "en"); err == nil && m != nil && m.ChapterCount > 0 {
-				return m, nil
-			}
-		}
-	}
-
 	searchTerms := []string{}
-	// Check known alias
 	lowerClean := strings.ToLower(cleanT)
 	if alias, ok := KnownTmoAliases[lowerClean]; ok {
 		searchTerms = append(searchTerms, alias)
@@ -406,23 +616,104 @@ func FindBestMigrationTarget(ctx context.Context, oldTitle, oldURL, oldDesc stri
 		searchTerms = append(searchTerms, slug)
 	}
 
-	// 1. First priority: MangaDex (ES / es-la)
+	// Known UUID check to prevent false-positive title searches
+	var knownUUID string
+	for _, key := range []string{lowerClean, lowerSlug} {
+		if key == "" {
+			continue
+		}
+		if uuid, ok := KnownTmoUUIDs[key]; ok {
+			knownUUID = uuid
+			break
+		}
+	}
+
+	// =========================================================================
+	// TIER 1: SPANISH SOURCES FIRST (MangaDex ES, MangaOni ES, Madara ES, MangaThemesia ES)
+	// =========================================================================
+
+	// 1. Spanish Priority A: MangaDex (ES / es-la) via known UUID
+	if knownUUID != "" {
+		if m, err := GetMangaDexByUUID(ctx, knownUUID, "es"); err == nil && m != nil && m.ChapterCount > 0 {
+			return m, nil
+		}
+	}
+
+	// 2. Spanish Priority B: MangaOni (ES) via known path
+	for _, key := range []string{lowerClean, lowerSlug} {
+		if key == "" {
+			continue
+		}
+		if path, ok := KnownMangaOniMatches[key]; ok {
+			if m, err := GetMangaOniByPath(ctx, path, cleanT); err == nil && m != nil && m.ChapterCount > 0 {
+				return m, nil
+			}
+		}
+	}
+
+	// 3. Spanish Priority C: MangaDex (ES / es-la) search (ONLY IF no known UUID)
+	if knownUUID == "" {
+		for _, term := range searchTerms {
+			match, err := SearchMangaDexOnlineWithAggregate(ctx, term, "es")
+			if err == nil && match != nil && match.ChapterCount > 0 {
+				return match, nil
+			}
+		}
+	}
+
+	// 4. Spanish Priority D: MangaOni (ES) search
 	for _, term := range searchTerms {
-		match, err := SearchMangaDexOnlineWithAggregate(ctx, term, "es")
+		match, err := SearchMangaOniOnline(ctx, term)
 		if err == nil && match != nil && match.ChapterCount > 0 {
 			return match, nil
 		}
 	}
 
-	// 2. Second priority: MangaDex (EN) as fallback
-	for _, term := range searchTerms {
-		match, err := SearchMangaDexOnlineWithAggregate(ctx, term, "en")
-		if err == nil && match != nil && match.ChapterCount > 0 {
-			return match, nil
+	// 5. Spanish Priority E: Top Active Spanish Sources (Madara & MangaThemesia)
+	if knownUUID == "" {
+		for _, term := range searchTerms {
+			for _, srcID := range TopSpanishSourceIDs {
+				match, err := SearchGenericSourceOnline(ctx, srcID, term)
+				if err == nil && match != nil && match.ChapterCount > 0 {
+					return match, nil
+				}
+			}
 		}
 	}
 
-	return nil, fmt.Errorf("no online chapters found across MangaDex (ES/EN) for %q", oldTitle)
+	// =========================================================================
+	// TIER 2: ENGLISH FALLBACK (Only installed English sources when NO Spanish source has chapters)
+	// =========================================================================
+
+	// 6. English Priority A: MangaDex (EN) via known UUID
+	if knownUUID != "" {
+		if m, err := GetMangaDexByUUID(ctx, knownUUID, "en"); err == nil && m != nil && m.ChapterCount > 0 {
+			return m, nil
+		}
+	}
+
+	// 7. English Priority B: MangaDex (EN) search (ONLY IF no known UUID)
+	if knownUUID == "" {
+		for _, term := range searchTerms {
+			match, err := SearchMangaDexOnlineWithAggregate(ctx, term, "en")
+			if err == nil && match != nil && match.ChapterCount > 0 {
+				return match, nil
+			}
+		}
+	}
+
+	// 8. English Priority C: Other Installed English Sources (e.g. DragonTea)
+	if knownUUID == "" {
+		for _, term := range searchTerms {
+			// DragonTea: 6573506892686767219
+			if match, err := SearchGenericSourceOnline(ctx, 6573506892686767219, term); err == nil && match != nil && match.ChapterCount > 0 {
+				match.Language = "en"
+				return match, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("no online chapters found across Spanish/English sources for %q", oldTitle)
 }
 
 // MigrateSingleManga migrates a single manga from oldMangaID to a specified or auto-discovered target.

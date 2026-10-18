@@ -5,6 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -131,4 +134,103 @@ func (h *MangaOniHandler) GetChapterList(ctx context.Context, mangaURL string) (
 
 	return chapters, nil
 }
+
+var reCSRFToken = regexp.MustCompile(`<meta name="csrf-token" content="([^"]+)">`)
+
+type mangaOniSearchResponse struct {
+	Mangas []struct {
+		Nombre  string `json:"nombre"`
+		Alterno string `json:"alterno"`
+		Visible int    `json:"visible"`
+		Slug    string `json:"slug"`
+		Autor   string `json:"autor"`
+		URL     string `json:"url"`
+		Img     string `json:"img"`
+	} `json:"mangas"`
+}
+
+// SearchManga queries MangaOni online using its AJAX search endpoint.
+func (h *MangaOniHandler) SearchManga(ctx context.Context, query string, page int) ([]MangaItem, bool, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, false, nil
+	}
+
+	// 1. Fetch homepage to extract CSRF token and cookie
+	homeReq, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://manga-oni.com", nil)
+	if err != nil {
+		return nil, false, err
+	}
+	homeReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
+	homeResp, err := DefaultClient.Do(homeReq)
+	if err != nil {
+		return nil, false, fmt.Errorf("fetching MangaOni CSRF: %w", err)
+	}
+	defer homeResp.Body.Close()
+
+	homeHTML, _ := io.ReadAll(homeResp.Body)
+	m := reCSRFToken.FindStringSubmatch(string(homeHTML))
+	if len(m) < 2 {
+		return nil, false, fmt.Errorf("could not find CSRF token on MangaOni homepage")
+	}
+	csrfToken := m[1]
+
+	// 2. Perform search POST
+	form := url.Values{}
+	form.Set("buscar", query)
+	form.Set("_token", csrfToken)
+
+	searchReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://manga-oni.com/buscar", strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, false, err
+	}
+	searchReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
+	searchReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	searchReq.Header.Set("X-Requested-With", "XMLHttpRequest")
+	searchReq.Header.Set("X-CSRF-TOKEN", csrfToken)
+	searchReq.Header.Set("Referer", "https://manga-oni.com/")
+
+	// Copy cookies from homepage response
+	for _, cookie := range homeResp.Cookies() {
+		searchReq.AddCookie(cookie)
+	}
+
+	searchResp, err := DefaultClient.Do(searchReq)
+	if err != nil {
+		return nil, false, fmt.Errorf("calling MangaOni search: %w", err)
+	}
+	defer searchResp.Body.Close()
+
+	if searchResp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("MangaOni search returned HTTP %d", searchResp.StatusCode)
+	}
+
+	var res mangaOniSearchResponse
+	if err := json.NewDecoder(searchResp.Body).Decode(&res); err != nil {
+		return nil, false, fmt.Errorf("decoding MangaOni search JSON: %w", err)
+	}
+
+	var items []MangaItem
+	for _, m := range res.Mangas {
+		relURL := m.URL
+		if idx := strings.Index(relURL, "manga-oni.com"); idx != -1 {
+			relURL = relURL[idx+len("manga-oni.com"):]
+		}
+		if relURL == "" && m.Slug != "" {
+			relURL = "/manga/" + m.Slug + "/"
+		}
+
+		items = append(items, MangaItem{
+			ID:           m.Slug,
+			Title:        m.Nombre,
+			Status:       1,
+			ThumbnailURL: m.Img,
+			URL:          relURL,
+			SourceID:     2202687009511923782,
+			Author:       m.Autor,
+		})
+	}
+
+	return items, false, nil
+}
+
 

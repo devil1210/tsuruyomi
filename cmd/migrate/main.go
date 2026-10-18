@@ -11,6 +11,7 @@ import (
 
 	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
+	"tsuruyomi/internal/extensions"
 	"tsuruyomi/internal/service"
 	"tsuruyomi/internal/sources"
 )
@@ -18,6 +19,8 @@ import (
 func main() {
 	configPath := flag.String("config", "/config/config.yaml", "Path to config file")
 	idsFlag := flag.String("ids", "", "Comma-separated list of manga IDs to migrate (e.g. 2,3,4)")
+	allTmo := flag.Bool("all-tmo", false, "Migrate all TuMangaOnline mangas in library")
+	limitFlag := flag.Int("limit", 0, "Limit number of mangas to migrate (0 for no limit)")
 	dryRun := flag.Bool("dry-run", false, "Preview migration without modifying the database")
 	flag.Parse()
 
@@ -39,9 +42,12 @@ func main() {
 	}
 
 	sources.SetConfig(cfg)
+	if err := extensions.LoadInstalledExtensions(cfg.Data.RootDir); err != nil {
+		log.Printf("[MIGRATE] Warning loading installed extensions: %v", err)
+	}
 
 	// Connect to PostgreSQL
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	if err := database.Connect(ctx, cfg.Database); err != nil {
@@ -57,14 +63,35 @@ func main() {
 				targetIDs = append(targetIDs, id)
 			}
 		}
+	} else if *allTmo {
+		query := `
+			SELECT m.id FROM suwayomi.manga m
+			JOIN suwayomi.mangauser mu ON m.id = mu.manga
+			WHERE m.source = 7925520943983324764 AND mu.in_library = true
+			ORDER BY m.id
+		`
+		if *limitFlag > 0 {
+			query += fmt.Sprintf(" LIMIT %d", *limitFlag)
+		}
+		rows, err := database.DB.Query(ctx, query)
+		if err != nil {
+			log.Fatalf("Failed to query TMO mangas: %v", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var mid int64
+			if err := rows.Scan(&mid); err == nil {
+				targetIDs = append(targetIDs, mid)
+			}
+		}
 	}
 
 	if len(targetIDs) == 0 {
-		log.Fatalf("No valid manga IDs provided to migrate. Use -ids 2,3,4,...")
+		log.Fatalf("No valid manga IDs provided to migrate. Use -ids 2,3,4,... or -all-tmo")
 	}
 
 	fmt.Println("================================================================================")
-	fmt.Printf(" Tsuruyomi Manga Migration Utility (IDs: %v | Dry-Run: %v)\n", targetIDs, *dryRun)
+	fmt.Printf(" Tsuruyomi Manga Migration Utility (Total: %d | Dry-Run: %v)\n", len(targetIDs), *dryRun)
 	fmt.Println("================================================================================")
 
 	var reports []*service.MigrationReport
@@ -116,6 +143,7 @@ func main() {
 		if rep != nil {
 			reports = append(reports, rep)
 		}
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	fmt.Println("\n================================================================================")

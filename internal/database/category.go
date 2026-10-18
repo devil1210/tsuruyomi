@@ -66,11 +66,12 @@ func GetCategoryMangas(ctx context.Context, categoryId int) ([]models.MangaDataC
 		SELECT 
 			m.id, m.url, m.title, m.initialized, m.artist, m.author, m.description, 
 			m.genre, m.status, m.thumbnail_url, m.thumbnail_url_last_fetched, 
-			m.in_library, m.in_library_at, m.source, m.real_url, m.last_fetched_at, 
-			m.chapters_last_fetched_at, m.update_strategy, m.last_modified_at, m.version, m.memo,
+			COALESCE(mu.in_library, false), COALESCE(mu.in_library_at, 0), m.source, m.real_url, m.last_fetched_at, 
+			m.chapters_last_fetched_at, m.update_strategy, COALESCE(mu.last_modified_at, 0), COALESCE(mu.version, 0), m.memo,
 			s.name as source_name, s.lang as source_lang,
 			e.icon_url as source_icon_url
 		FROM suwayomi.manga m
+		LEFT JOIN suwayomi.mangauser mu ON m.id = mu.manga
 		INNER JOIN suwayomi.categorymanga cm ON m.id = cm.manga
 		LEFT JOIN suwayomi.source s ON m.source = s.id
 		LEFT JOIN suwayomi.extension e ON s.extension = e.id
