@@ -39,14 +39,36 @@ var NativeGoExtensionPackages = map[string]bool{
 	"eu.kanade.tachiyomi.extension.es.leermanhwas":           true, // LeerManhwas
 	"eu.kanade.tachiyomi.extension.es.bokugentranslation":     true, // BokugenTranslation
 	"eu.kanade.tachiyomi.extension.es.apollcomics":           true, // ApollComics
-	"eu.kanade.tachiyomi.extension.es.dragontranslation":     true, // DragonTranslation
-	"eu.kanade.tachiyomi.extension.es.dragontranslationorg":  true, // DragonTranslation.org
-	"eu.kanade.tachiyomi.extension.es.cerberuseries":         true, // Cerberus Series
-	"eu.kanade.tachiyomi.extension.es.cerberusseries":        true, // Cerberus Series (alias)
+	"eu.kanade.tachiyomi.extension.es.dragontranslation":     true, // DragonTranslation (alias)
+	"eu.kanade.tachiyomi.extension.es.dragontranslationorg":  true, // DragonTranslation
+	"eu.kanade.tachiyomi.extension.es.cerberuseries":         true, // Cerberus Series (alias)
+	"eu.kanade.tachiyomi.extension.es.cerberusseries":        true, // Cerberus Series
 	"eu.kanade.tachiyomi.extension.es.manhwalatino":          true, // Manhwa-Latino
 	"eu.kanade.tachiyomi.extension.es.hadesnofansub":         true, // Hades no Fansub
 	"eu.kanade.tachiyomi.extension.es.begatranslation":        true, // Bega Translation
+	"eu.kanade.tachiyomi.extension.es.lmtoonline":           true, // LMTO Online
+	"eu.kanade.tachiyomi.extension.es.ninemanga":            true, // NineManga (ES)
+	"eu.kanade.tachiyomi.extension.en.ninemanga":            true, // NineManga (EN)
+	"eu.kanade.tachiyomi.extension.es.manhwasnet":           true, // Manhwas.net
+	"eu.kanade.tachiyomi.extension.all.batoto":              true, // Bato.to
+	"eu.kanade.tachiyomi.extension.es.jobsibe":              true, // Jobsibe
+	"eu.kanade.tachiyomi.extension.es.zevep":                true, // Zevep
 	"eu.kanade.tachiyomi.source.local":                      true, // Local source
+}
+
+// ExtensionPackageAliases maps alias extension packages to their canonical counterparts
+var ExtensionPackageAliases = map[string]string{
+	"eu.kanade.tachiyomi.extension.es.cerberuseries":     "eu.kanade.tachiyomi.extension.es.cerberusseries",
+	"eu.kanade.tachiyomi.extension.es.dragontranslation": "eu.kanade.tachiyomi.extension.es.dragontranslationorg",
+	"eu.kanade.tachiyomi.extension.es.mangaoni":          "eu.kanade.tachiyomi.extension.es.mangamx",
+	"eu.kanade.tachiyomi.extension.es.lectormanga":       "eu.kanade.tachiyomi.extension.es.lectormangalat",
+}
+
+func getCanonicalPkg(pkgName string) string {
+	if canon, ok := ExtensionPackageAliases[pkgName]; ok {
+		return canon
+	}
+	return pkgName
 }
 
 // NativeExtInfo holds basic display metadata for native Go extensions
@@ -71,12 +93,19 @@ var NativeGoExtensionInfo = map[string]NativeExtInfo{
 	"eu.kanade.tachiyomi.extension.es.bokugentranslation":    {Name: "BokugenTranslation", Lang: "es"},
 	"eu.kanade.tachiyomi.extension.es.apollcomics":          {Name: "ApollComics", Lang: "es"},
 	"eu.kanade.tachiyomi.extension.es.dragontranslation":    {Name: "DragonTranslation", Lang: "es"},
-	"eu.kanade.tachiyomi.extension.es.dragontranslationorg": {Name: "DragonTranslation.org", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.dragontranslationorg": {Name: "DragonTranslation", Lang: "es"},
 	"eu.kanade.tachiyomi.extension.es.cerberuseries":        {Name: "Cerberus Series", Lang: "es"},
 	"eu.kanade.tachiyomi.extension.es.cerberusseries":       {Name: "Cerberus Series", Lang: "es"},
 	"eu.kanade.tachiyomi.extension.es.manhwalatino":         {Name: "Manhwa-Latino", Lang: "es"},
 	"eu.kanade.tachiyomi.extension.es.hadesnofansub":        {Name: "Hades no Fansub", Lang: "es"},
 	"eu.kanade.tachiyomi.extension.es.begatranslation":       {Name: "Bega Translation", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.lmtoonline":           {Name: "LMTO Online", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.ninemanga":            {Name: "NineManga", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.en.ninemanga":            {Name: "NineManga (EN)", Lang: "en"},
+	"eu.kanade.tachiyomi.extension.es.manhwasnet":           {Name: "Manhwas.net", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.all.batoto":              {Name: "Bato.to", Lang: "all"},
+	"eu.kanade.tachiyomi.extension.es.jobsibe":              {Name: "Jobsibe", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.zevep":                {Name: "Zevep", Lang: "es"},
 	"eu.kanade.tachiyomi.source.local":                     {Name: "Local Source", Lang: "all"},
 }
 
@@ -119,7 +148,8 @@ func getExtensionMap(ctx context.Context, pkgName string) map[string]interface{}
 
 func getExtensionNodes(ctx context.Context, filterStoreUrl string) []map[string]interface{} {
 	nodes := []map[string]interface{}{}
-	seen := make(map[string]bool)
+	seenPkg := make(map[string]bool)
+	seenNameLang := make(map[string]bool)
 
 	// 1. If database has extension records, query them
 	if database.DB != nil {
@@ -136,15 +166,25 @@ func getExtensionNodes(ctx context.Context, filterStoreUrl string) []map[string]
 				var cwInt int
 				err := rows.Scan(&name, &pkgName, &versionName, &versionCode, &lang, &iconUrl, &isInstalled, &hasUpdate, &isObsolete, &storeIndexUrl, &cwInt, &extLib)
 				if err == nil {
-					if NativeGoExtensionPackages[pkgName] || pkgName == "eu.kanade.tachiyomi.source.local" {
+					canon := getCanonicalPkg(pkgName)
+					nameKey := strings.ToLower(strings.TrimSpace(name)) + "::" + strings.ToLower(strings.TrimSpace(lang))
+
+					// Deduplicate if canonical package or same name+lang already processed
+					if seenPkg[pkgName] || seenPkg[canon] || seenNameLang[nameKey] {
+						continue
+					}
+
+					if NativeGoExtensionPackages[pkgName] || NativeGoExtensionPackages[canon] || pkgName == "eu.kanade.tachiyomi.source.local" {
 						isInstalled = true
 						hasUpdate = false
 						isObsolete = false
 						versionName = "1.0-go (Nativa)"
 					}
-					seen[pkgName] = true
+					seenPkg[pkgName] = true
+					seenPkg[canon] = true
+					seenNameLang[nameKey] = true
 
-					if filterStoreUrl != "" && storeIndexUrl != filterStoreUrl && !NativeGoExtensionPackages[pkgName] {
+					if filterStoreUrl != "" && storeIndexUrl != filterStoreUrl && !NativeGoExtensionPackages[pkgName] && !NativeGoExtensionPackages[canon] {
 						continue
 					}
 
@@ -191,6 +231,9 @@ func getExtensionNodes(ctx context.Context, filterStoreUrl string) []map[string]
 	}
 	var sortedExts []extItem
 	for pkg, info := range NativeGoExtensionInfo {
+		if _, isAlias := ExtensionPackageAliases[pkg]; isAlias {
+			continue
+		}
 		sortedExts = append(sortedExts, extItem{pkgName: pkg, info: info})
 	}
 	sort.Slice(sortedExts, func(i, j int) bool {
@@ -198,8 +241,12 @@ func getExtensionNodes(ctx context.Context, filterStoreUrl string) []map[string]
 	})
 
 	for _, item := range sortedExts {
-		if !seen[item.pkgName] {
-			seen[item.pkgName] = true
+		canon := getCanonicalPkg(item.pkgName)
+		nameKey := strings.ToLower(strings.TrimSpace(item.info.Name)) + "::" + strings.ToLower(strings.TrimSpace(item.info.Lang))
+		if !seenPkg[item.pkgName] && !seenPkg[canon] && !seenNameLang[nameKey] {
+			seenPkg[item.pkgName] = true
+			seenPkg[canon] = true
+			seenNameLang[nameKey] = true
 			nodes = append(nodes, getExtensionMap(ctx, item.pkgName))
 		}
 	}
@@ -1824,12 +1871,26 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					var name, lang string
 					if err := rows.Scan(&srcID, &name, &lang); err == nil {
 						sIdStr := fmt.Sprintf("%d", srcID)
-						if name == "" || name == "Source" {
+						displayName := name
+						if known, ok := database.KnownSourcesByID[srcID]; ok {
+							if name == "" || name == "Source" || strings.HasPrefix(name, "Source ") {
+								name = known.Name
+							}
+							if lang == "" || (lang == "all" && known.Lang != "all") {
+								lang = known.Lang
+							}
+							if known.DisplayName != "" {
+								displayName = known.DisplayName
+							}
+						} else if name == "" || name == "Source" || strings.HasPrefix(name, "Source ") {
 							if sName := sources.GetSourceName(srcID); sName != "" {
 								name = sName
 							} else {
 								name = sIdStr
 							}
+						}
+						if displayName == "" {
+							displayName = name
 						}
 						if lang == "" {
 							lang = "all"
@@ -1839,7 +1900,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 							"source": map[string]interface{}{
 								"id":          sIdStr,
 								"name":        name,
-								"displayName": name,
+								"displayName": displayName,
 								"lang":        lang,
 								"iconUrl":     "/api/v1/source/" + sIdStr + "/icon",
 								"__typename":  "SourceType",
@@ -1883,6 +1944,21 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			}
 		}
 
+		displayName := name
+		if idNum, err := strconv.ParseInt(sourceID, 10, 64); err == nil {
+			if known, ok := database.KnownSourcesByID[idNum]; ok {
+				if name == "" || name == "Source" || strings.HasPrefix(name, "Source ") {
+					name = known.Name
+				}
+				if lang == "" || (lang == "all" && known.Lang != "all") {
+					lang = known.Lang
+				}
+				if known.DisplayName != "" {
+					displayName = known.DisplayName
+				}
+			}
+		}
+
 		if name == "" {
 			if idNum, err := strconv.ParseInt(sourceID, 10, 64); err == nil {
 				name = sources.GetSourceName(idNum)
@@ -1890,6 +1966,9 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			if name == "" {
 				name = sourceID
 			}
+		}
+		if displayName == "" {
+			displayName = name
 		}
 		if lang == "" {
 			lang = "all"
@@ -1899,7 +1978,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			"source": map[string]interface{}{
 				"id":          sourceID,
 				"name":        name,
-				"displayName": name,
+				"displayName": displayName,
 				"lang":        lang,
 				"iconUrl":     "/api/v1/source/" + sourceID + "/icon",
 				"__typename":  "SourceType",

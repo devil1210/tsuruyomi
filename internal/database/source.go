@@ -121,6 +121,7 @@ var NativeExtensionsSeed = []NativeExtensionSeed{
 		ContentWarning: 0,
 		Sources: []NativeSourceSeed{
 			{ID: 4647982373411241498, Name: "DragonTranslation", DisplayName: "DragonTranslation (ES)", Lang: "es"},
+			{ID: 7541593615312027809, Name: "DragonTranslation.net", DisplayName: "DragonTranslation.net (ES)", Lang: "es"},
 		},
 	},
 	{
@@ -299,6 +300,116 @@ var NativeExtensionsSeed = []NativeExtensionSeed{
 			{ID: 1348827658894665970, Name: "Ragnarok Scanlation", DisplayName: "Ragnarok Scanlation (ES)", Lang: "es"},
 		},
 	},
+	{
+		ID:             25,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.lmtoonline",
+		Name:           "LMTO Online",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.lmtoonline",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 3752522006902890093, Name: "LMTO Online", DisplayName: "LMTO Online (ES)", Lang: "es"},
+			{ID: 7732736838916328250, Name: "Lmtos", DisplayName: "Lmtos (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             26,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.ninemanga",
+		Name:           "NineManga",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.ninemanga",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 4097111295486074350, Name: "NineMangaEs", DisplayName: "NineManga (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             27,
+		PkgName:        "eu.kanade.tachiyomi.extension.en.ninemanga",
+		Name:           "NineManga (EN)",
+		Lang:           "en",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.en.ninemanga",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 120391793502126753, Name: "NineMangaEn", DisplayName: "NineManga (EN)", Lang: "en"},
+		},
+	},
+	{
+		ID:             28,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.manhwasnet",
+		Name:           "Manhwas.net",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.manhwasnet",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 1326771034671033762, Name: "Manhwas.net", DisplayName: "Manhwas.net (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             29,
+		PkgName:        "eu.kanade.tachiyomi.extension.all.batoto",
+		Name:           "Bato.to",
+		Lang:           "all",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.all.batoto",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 4531444389842992129, Name: "Bato.to", DisplayName: "Bato.to", Lang: "all"},
+		},
+	},
+	{
+		ID:             30,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.jobsibe",
+		Name:           "Jobsibe",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.jobsibe",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 3903750533251938295, Name: "Jobsibe", DisplayName: "Jobsibe (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             31,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.zevep",
+		Name:           "Zevep",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.zevep",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 8590845094935985528, Name: "Zevep", DisplayName: "Zevep (ES)", Lang: "es"},
+		},
+	},
+}
+
+// KnownSourceInfo contains metadata for a known source ID.
+type KnownSourceInfo struct {
+	Name        string
+	DisplayName string
+	Lang        string
+	PkgName     string
+	ExtName     string
+	IconURL     string
+}
+
+// KnownSourcesByID provides an in-memory lookup of all known native and popular source IDs.
+var KnownSourcesByID = make(map[int64]KnownSourceInfo)
+
+func init() {
+	for _, ext := range NativeExtensionsSeed {
+		for _, src := range ext.Sources {
+			dispName := src.DisplayName
+			if dispName == "" {
+				dispName = src.Name
+			}
+			KnownSourcesByID[src.ID] = KnownSourceInfo{
+				Name:        src.Name,
+				DisplayName: dispName,
+				Lang:        src.Lang,
+				PkgName:     ext.PkgName,
+				ExtName:     ext.Name,
+				IconURL:     ext.IconURL,
+			}
+		}
+	}
 }
 
 // EnsureNativeSources populates suwayomi.extension and suwayomi.source tables with native Go sources and resolves unmapped mangas.
@@ -360,6 +471,35 @@ func EnsureNativeSources(ctx context.Context) error {
 		ON CONFLICT (id) DO NOTHING;
 	`)
 
+	// Re-link sources that point to alias extension packages to canonical extension packages
+	_, _ = DB.Exec(ctx, `
+		UPDATE suwayomi.source s
+		SET extension = c.id
+		FROM suwayomi.extension a
+		JOIN suwayomi.extension c ON (
+			(a.pkg_name = 'eu.kanade.tachiyomi.extension.es.cerberuseries' AND c.pkg_name = 'eu.kanade.tachiyomi.extension.es.cerberusseries') OR
+			(a.pkg_name = 'eu.kanade.tachiyomi.extension.es.dragontranslation' AND c.pkg_name = 'eu.kanade.tachiyomi.extension.es.dragontranslationorg') OR
+			(a.pkg_name = 'eu.kanade.tachiyomi.extension.es.mangaoni' AND c.pkg_name = 'eu.kanade.tachiyomi.extension.es.mangamx') OR
+			(a.pkg_name = 'eu.kanade.tachiyomi.extension.es.lectormanga' AND c.pkg_name = 'eu.kanade.tachiyomi.extension.es.lectormangalat')
+		)
+		WHERE s.extension = a.id;
+
+		DELETE FROM suwayomi.extension
+		WHERE pkg_name IN (
+			'eu.kanade.tachiyomi.extension.es.cerberuseries',
+			'eu.kanade.tachiyomi.extension.es.dragontranslation',
+			'eu.kanade.tachiyomi.extension.es.mangaoni',
+			'eu.kanade.tachiyomi.extension.es.lectormanga'
+		);
+	`)
+
+	// Clean up and heal any leftover imported placeholder sources and extensions
+	_, _ = DB.Exec(ctx, `
+		DELETE FROM suwayomi.extension e
+		WHERE (e.pkg_name LIKE 'imported.source.%' OR e.name = 'Imported Source')
+		  AND NOT EXISTS (SELECT 1 FROM suwayomi.source s WHERE s.extension = e.id);
+	`)
+
 	// Align sequence with highest ID
 	_, _ = DB.Exec(ctx, `
 		SELECT setval('suwayomi.extension_id_seq', GREATEST(COALESCE((SELECT MAX(id) FROM suwayomi.extension), 1), 50))
@@ -405,10 +545,29 @@ func GetSourceList(ctx context.Context) ([]models.SourceDataClass, error) {
 			return nil, fmt.Errorf("scanning source row: %w", err)
 		}
 		src.ID = fmt.Sprintf("%d", idVal)
-		if src.Lang != "" && src.Lang != "all" {
-			src.DisplayName = fmt.Sprintf("%s (%s)", src.Name, strings.ToUpper(src.Lang))
-		} else {
-			src.DisplayName = src.Name
+		if known, ok := KnownSourcesByID[idVal]; ok {
+			if src.Name == "" || strings.HasPrefix(src.Name, "Source ") || src.Name == "Source" {
+				src.Name = known.Name
+			}
+			if src.Lang == "" || (src.Lang == "all" && known.Lang != "all") {
+				src.Lang = known.Lang
+			}
+			if pkgName == "" || strings.HasPrefix(pkgName, "imported.source.") {
+				pkgName = known.PkgName
+			}
+			if iconURL == "" || strings.Contains(iconURL, "/api/v1/") {
+				iconURL = known.IconURL
+			}
+			if known.DisplayName != "" {
+				src.DisplayName = known.DisplayName
+			}
+		}
+		if src.DisplayName == "" {
+			if src.Lang != "" && src.Lang != "all" {
+				src.DisplayName = fmt.Sprintf("%s (%s)", src.Name, strings.ToUpper(src.Lang))
+			} else {
+				src.DisplayName = src.Name
+			}
 		}
 		src.SupportsLatest = true
 		src.IconURL = iconURL

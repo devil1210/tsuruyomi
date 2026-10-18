@@ -69,13 +69,15 @@ var sourceToPackageMap = map[int64]string{
 	3053251231047124074: "eu.kanade.tachiyomi.extension.es.nineanime",
 	6935004473807791201: "eu.kanade.tachiyomi.extension.es.plottwistnofansub",
 	1348827658894665970: "eu.kanade.tachiyomi.extension.es.ragnarokscanlation",
+	7732736838916328250: "eu.kanade.tachiyomi.extension.es.lmtoonline",
+	8590845094935985528: "eu.kanade.tachiyomi.extension.es.zevep",
 	4097111295486074350: "eu.kanade.tachiyomi.extension.es.ninemanga",
 	3903750533251938295: "eu.kanade.tachiyomi.extension.es.jobsibe",
 	3752522006902890093: "eu.kanade.tachiyomi.extension.es.lmtoonline",
 	1326771034671033762: "eu.kanade.tachiyomi.extension.es.manhwasnet",
 	4531444389842992129: "eu.kanade.tachiyomi.extension.all.batoto",
 	120391793502126753:  "eu.kanade.tachiyomi.extension.en.ninemanga",
-	7541593615312027809: "eu.kanade.tachiyomi.extension.es.dragontranslation",
+	7541593615312027809: "eu.kanade.tachiyomi.extension.es.dragontranslationorg",
 }
 
 func getFallbackIconURL(pkgName string) string {
@@ -126,12 +128,18 @@ func getFallbackIconURL(pkgName string) string {
 		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/plottwistnofansub/res/mipmap-xhdpi/ic_launcher.png"
 	case "eu.kanade.tachiyomi.extension.es.ragnarokscanlation":
 		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/ragnarokscanlation/res/mipmap-xhdpi/ic_launcher.png"
-	case "eu.kanade.tachiyomi.extension.es.ninemanga":
-		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/ninemanga/res/mipmap-xhdpi/ic_launcher.png"
-	case "eu.kanade.tachiyomi.extension.en.ninemanga":
-		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/en/ninemanga/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.lmtoonline":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/lmtoonline/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.ninemanga", "eu.kanade.tachiyomi.extension.en.ninemanga":
+		return "https://es.ninemanga.com/favicon.ico"
 	case "eu.kanade.tachiyomi.extension.all.batoto":
-		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/all/batoto/res/mipmap-xhdpi/ic_launcher.png"
+		return "https://bato.to/favicon.ico"
+	case "eu.kanade.tachiyomi.extension.es.manhwasnet":
+		return "https://manhwas.net/favicon.ico"
+	case "eu.kanade.tachiyomi.extension.es.jobsibe":
+		return "https://jobsibe.com/wp-content/uploads/2024/02/favicon.png"
+	case "eu.kanade.tachiyomi.extension.es.zevep":
+		return "https://zevep.com/favicon.ico"
 	case "eu.kanade.tachiyomi.source.local":
 		return ""
 	}
@@ -174,7 +182,11 @@ func fetchAndServeIcon(c *fiber.Ctx, cacheKey, iconUrl string) error {
 					iconCache[cacheKey] = data
 					iconCacheMu.Unlock()
 
-					c.Set(fiber.HeaderContentType, "image/png")
+					ct := http.DetectContentType(data)
+					if ct == "" || ct == "application/octet-stream" {
+						ct = "image/png"
+					}
+					c.Set(fiber.HeaderContentType, ct)
 					c.Set(fiber.HeaderCacheControl, "public, max-age=604800")
 					return c.Send(data)
 				}
@@ -279,9 +291,14 @@ func GetSourceIcon(c *fiber.Ctx) error {
 		`, sourceId).Scan(&iconUrl, &pkgName)
 	}
 
-	if pkgName == "" && sourceId > 0 {
+	if (pkgName == "" || strings.HasPrefix(pkgName, "imported.source.")) && sourceId > 0 {
 		if mappedPkg, exists := sourceToPackageMap[sourceId]; exists {
 			pkgName = mappedPkg
+		} else if known, ok := database.KnownSourcesByID[sourceId]; ok {
+			pkgName = known.PkgName
+			if iconUrl == "" || strings.Contains(iconUrl, "/api/v1/") {
+				iconUrl = known.IconURL
+			}
 		}
 	}
 

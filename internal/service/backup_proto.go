@@ -704,19 +704,37 @@ func RestoreFromProtoBackup(ctx context.Context, pb *ProtoBackup) error {
 		var exists bool
 		_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM suwayomi.source WHERE id = $1)", src.SourceID).Scan(&exists)
 		if !exists {
+			srcName := src.Name
+			srcLang := "all"
+			pkgName := fmt.Sprintf("imported.source.%d", src.SourceID)
+			extName := "Imported Source"
+			iconURL := ""
+
+			if known, ok := database.KnownSourcesByID[src.SourceID]; ok {
+				if srcName == "" {
+					srcName = known.Name
+				}
+				srcLang = known.Lang
+				pkgName = known.PkgName
+				extName = known.ExtName
+				iconURL = known.IconURL
+			} else if srcName == "" {
+				srcName = fmt.Sprintf("Source %d", src.SourceID)
+			}
+
 			var extID int
 			errExt := tx.QueryRow(ctx, `
 				INSERT INTO suwayomi.extension (apk_name, icon_url, name, pkg_name, version_name, version_code, lang, is_installed, has_update, is_obsolete, class_name, store_index_url, extension_lib, apk_url, content_warning)
-				VALUES ('imported.apk', '', $1, $2, '1.0', 1, 'all', true, false, false, '', '', '1.0', '', 0)
+				VALUES ('imported.apk', $1, $2, $3, '1.0', 1, $4, true, false, false, '', '', '1.0', '', 0)
 				ON CONFLICT (pkg_name) DO UPDATE SET is_installed = true
 				RETURNING id
-			`, src.Name, fmt.Sprintf("imported.source.%d", src.SourceID)).Scan(&extID)
+			`, iconURL, extName, pkgName, srcLang).Scan(&extID)
 			if errExt == nil && extID > 0 {
 				_, _ = tx.Exec(ctx, `
 					INSERT INTO suwayomi.source (id, name, lang, extension, content_warning)
-					VALUES ($1, $2, 'all', $3, 0)
-					ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
-				`, src.SourceID, src.Name, extID)
+					VALUES ($1, $2, $3, $4, 0)
+					ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, lang = EXCLUDED.lang, extension = EXCLUDED.extension
+				`, src.SourceID, srcName, srcLang, extID)
 			}
 		}
 	}
@@ -835,7 +853,11 @@ func RestoreFromProtoBackup(ctx context.Context, pb *ProtoBackup) error {
 		}
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	_ = database.EnsureNativeSources(ctx)
+	return nil
 }
 
 // ExportProtoBackup builds a ProtoBackup from the current PostgreSQL database.
