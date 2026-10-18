@@ -696,6 +696,31 @@ func RestoreFromProtoBackup(ctx context.Context, pb *ProtoBackup) error {
 		ON CONFLICT (id) DO NOTHING
 	`)
 
+	// 0b. Restore Sources from backup metadata
+	for _, src := range pb.BackupSources {
+		if src.SourceID <= 0 {
+			continue
+		}
+		var exists bool
+		_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM suwayomi.source WHERE id = $1)", src.SourceID).Scan(&exists)
+		if !exists {
+			var extID int
+			errExt := tx.QueryRow(ctx, `
+				INSERT INTO suwayomi.extension (apk_name, icon_url, name, pkg_name, version_name, version_code, lang, is_installed, has_update, is_obsolete, class_name, store_index_url, extension_lib, apk_url, content_warning)
+				VALUES ('imported.apk', '', $1, $2, '1.0', 1, 'all', true, false, false, '', '', '1.0', '', 0)
+				ON CONFLICT (pkg_name) DO UPDATE SET is_installed = true
+				RETURNING id
+			`, src.Name, fmt.Sprintf("imported.source.%d", src.SourceID)).Scan(&extID)
+			if errExt == nil && extID > 0 {
+				_, _ = tx.Exec(ctx, `
+					INSERT INTO suwayomi.source (id, name, lang, extension, content_warning)
+					VALUES ($1, $2, 'all', $3, 0)
+					ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+				`, src.SourceID, src.Name, extID)
+			}
+		}
+	}
+
 	// 1. Restore Categories and build name/order mapping
 	catIDMap := make(map[int64]int64) // map backup index/order to DB category ID
 	for idx, cat := range pb.BackupCategories {

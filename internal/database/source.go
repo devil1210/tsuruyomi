@@ -3,15 +3,382 @@ package database
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"tsuruyomi/internal/models"
 )
 
+// NativeExtensionSeed defines metadata to seed native and popular extensions into suwayomi.extension.
+type NativeExtensionSeed struct {
+	ID             int
+	PkgName        string
+	Name           string
+	Lang           string
+	IconURL        string
+	ContentWarning int
+	Sources        []NativeSourceSeed
+}
+
+// NativeSourceSeed defines metadata to seed sources into suwayomi.source.
+type NativeSourceSeed struct {
+	ID             int64
+	Name           string
+	DisplayName    string
+	Lang           string
+	ContentWarning int
+}
+
+// NativeExtensionsSeed lists all out-of-the-box native Go extensions and primary sources.
+var NativeExtensionsSeed = []NativeExtensionSeed{
+	{
+		ID:             1,
+		PkgName:        "eu.kanade.tachiyomi.extension.all.mangadex",
+		Name:           "MangaDex",
+		Lang:           "all",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.all.mangadex",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 6400665728063187402, Name: "MangaDex (ES)", DisplayName: "MangaDex (ES)", Lang: "es"},
+			{ID: 2499283573021220255, Name: "MangaDex (EN)", DisplayName: "MangaDex (EN)", Lang: "en"},
+			{ID: 4938773340256184018, Name: "MangaDex (ES-419)", DisplayName: "MangaDex (ES-419)", Lang: "es-419"},
+			{ID: 4638673959522768501, Name: "MangaDex (ALL)", DisplayName: "MangaDex (ALL)", Lang: "all"},
+		},
+	},
+	{
+		ID:             2,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.mangamx",
+		Name:           "MangaOni",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.mangamx",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 2202687009511923782, Name: "MangaOni", DisplayName: "MangaOni (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             3,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.lectormangalat",
+		Name:           "LectorManga.lat",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.lectormangalat",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 7178038133263703638, Name: "LectorManga", DisplayName: "LectorManga (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             4,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.shadowmanga",
+		Name:           "Shadow Manga",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.shadowmanga",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 5649269152264667286, Name: "Shadow Manga", DisplayName: "Shadow Manga (ES)", Lang: "es", ContentWarning: 0},
+			{ID: 1340622632921674920, Name: "Shadow Manga (+18)", DisplayName: "Shadow Manga (+18) (ES)", Lang: "es", ContentWarning: 2},
+		},
+	},
+	{
+		ID:             5,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.leermanhwas",
+		Name:           "LeerManhwas",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.leermanhwas",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 8701445043633550960, Name: "LeerManhwas", DisplayName: "LeerManhwas (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             6,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.bokugentranslation",
+		Name:           "BokugenTranslation",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.bokugentranslation",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 1598762687295904337, Name: "BokugenTranslation", DisplayName: "BokugenTranslation (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             7,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.apollcomics",
+		Name:           "ApollComics",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.apollcomics",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 3044113561993269522, Name: "ApollComics", DisplayName: "ApollComics (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             8,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.dragontranslationorg",
+		Name:           "DragonTranslation",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.dragontranslationorg",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 4647982373411241498, Name: "DragonTranslation", DisplayName: "DragonTranslation (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             9,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.cerberusseries",
+		Name:           "Cerberus Series",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.cerberusseries",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 1814471239661920836, Name: "Cerberus Series", DisplayName: "Cerberus Series (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             10,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.manhwalatino",
+		Name:           "Manhwa-Latino",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.manhwalatino",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 3548601371328353875, Name: "Manhwa-Latino", DisplayName: "Manhwa-Latino (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             11,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.hadesnofansub",
+		Name:           "Hades no Fansub",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.hadesnofansub",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 8311505150576608267, Name: "Hades no Fansub", DisplayName: "Hades no Fansub (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             12,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.begatranslation",
+		Name:           "Bega Translation",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.begatranslation",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 6757330205319558057, Name: "Bega Translation", DisplayName: "Bega Translation (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             13,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.uchuujinprojects",
+		Name:           "Uchuujin Projects",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.uchuujinprojects",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 3953107753690791431, Name: "Uchuujin Projects", DisplayName: "Uchuujin Projects (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             14,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.manhwaweb",
+		Name:           "ManhwaWeb",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.manhwaweb",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 5943212552955476721, Name: "ManhwaWeb", DisplayName: "ManhwaWeb (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             15,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.submanhwa",
+		Name:           "Submanhwa",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.submanhwa",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 1136717301008230074, Name: "Submanhwa", DisplayName: "Submanhwa (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             16,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.mangasnosekai",
+		Name:           "Mangas No Sekai",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.mangasnosekai",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 829053423099062956, Name: "Mangas No Sekai", DisplayName: "Mangas No Sekai (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             17,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.ravenmanga",
+		Name:           "RavenManga",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.ravenmanga",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 698913079501532785, Name: "RavenManga", DisplayName: "RavenManga (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             18,
+		PkgName:        "eu.kanade.tachiyomi.source.local",
+		Name:           "Local Source",
+		Lang:           "all",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.source.local",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 0, Name: "Local Source", DisplayName: "Local Source", Lang: "all"},
+		},
+	},
+	{
+		ID:             19,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.tumangaonline",
+		Name:           "TuMangaOnline",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.tumangaonline",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 7925520943983324764, Name: "TuMangaOnline", DisplayName: "TuMangaOnline (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             20,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.inmanga",
+		Name:           "InManga",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.inmanga",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 4146344224513899730, Name: "InManga", DisplayName: "InManga (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             21,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.manhuaonline",
+		Name:           "Manhua Online",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.manhuaonline",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 8385948079634749158, Name: "Manhua Online", DisplayName: "Manhua Online (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             22,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.nineanime",
+		Name:           "NineAnime",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.nineanime",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 3053251231047124074, Name: "NineAnime", DisplayName: "NineAnime (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             23,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.plottwistnofansub",
+		Name:           "Plot Twist No Fansub",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.plottwistnofansub",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 6935004473807791201, Name: "Plot Twist No Fansub", DisplayName: "Plot Twist No Fansub (ES)", Lang: "es"},
+		},
+	},
+	{
+		ID:             24,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.ragnarokscanlation",
+		Name:           "Ragnarok Scanlation",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.ragnarokscanlation",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 1348827658894665970, Name: "Ragnarok Scanlation", DisplayName: "Ragnarok Scanlation (ES)", Lang: "es"},
+		},
+	},
+}
+
+// EnsureNativeSources populates suwayomi.extension and suwayomi.source tables with native Go sources and resolves unmapped mangas.
+func EnsureNativeSources(ctx context.Context) error {
+	if DB == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	for _, ext := range NativeExtensionsSeed {
+		var extID int
+		err := DB.QueryRow(ctx, `
+			INSERT INTO suwayomi.extension (id, apk_name, icon_url, name, pkg_name, version_name, version_code, lang, is_installed, has_update, is_obsolete, class_name, store_index_url, extension_lib, apk_url, content_warning)
+			VALUES ($1, $2, $3, $4, $5, '1.0-go', 100, $6, true, false, false, '', 'https://raw.githubusercontent.com/devil1210/tsuruyomi-extensions/main/index.json', '1.5', '', $7)
+			ON CONFLICT (pkg_name) DO UPDATE SET
+				name = EXCLUDED.name,
+				icon_url = EXCLUDED.icon_url,
+				lang = EXCLUDED.lang,
+				is_installed = true
+			RETURNING id
+		`, ext.ID, ext.PkgName+".apk", ext.IconURL, ext.Name, ext.PkgName, ext.Lang, ext.ContentWarning).Scan(&extID)
+		if err != nil {
+			log.Printf("[DATABASE] Warning inserting native extension %s: %v", ext.Name, err)
+			continue
+		}
+
+		for _, s := range ext.Sources {
+			_, err := DB.Exec(ctx, `
+				INSERT INTO suwayomi.source (id, name, lang, extension, content_warning)
+				VALUES ($1, $2, $3, $4, $5)
+				ON CONFLICT (id) DO UPDATE SET
+					name = EXCLUDED.name,
+					lang = EXCLUDED.lang,
+					extension = EXCLUDED.extension,
+					content_warning = EXCLUDED.content_warning
+			`, s.ID, s.Name, s.Lang, extID, s.ContentWarning)
+			if err != nil {
+				log.Printf("[DATABASE] Warning inserting native source %s (%d): %v", s.Name, s.ID, err)
+			}
+		}
+	}
+
+	// Also ensure any mangas with sources not yet in suwayomi.source have placeholder rows so foreign keys and migrations succeed
+	_, _ = DB.Exec(ctx, `
+		INSERT INTO suwayomi.extension (apk_name, icon_url, name, pkg_name, version_name, version_code, lang, is_installed, has_update, is_obsolete, class_name, store_index_url, extension_lib, apk_url, content_warning)
+		SELECT 'imported.apk', '', 'Imported Source', 'imported.source.' || m.source, '1.0', 1, 'all', true, false, false, '', '', '1.0', '', 0
+		FROM suwayomi.manga m
+		LEFT JOIN suwayomi.source s ON m.source = s.id
+		WHERE s.id IS NULL
+		GROUP BY m.source
+		ON CONFLICT (pkg_name) DO NOTHING;
+
+		INSERT INTO suwayomi.source (id, name, lang, extension, content_warning)
+		SELECT m.source, 'Source ' || m.source, 'all', e.id, 0
+		FROM suwayomi.manga m
+		LEFT JOIN suwayomi.source s ON m.source = s.id
+		LEFT JOIN suwayomi.extension e ON e.pkg_name = 'imported.source.' || m.source
+		WHERE s.id IS NULL
+		GROUP BY m.source, e.id
+		ON CONFLICT (id) DO NOTHING;
+	`)
+
+	// Align sequence with highest ID
+	_, _ = DB.Exec(ctx, `
+		SELECT setval('suwayomi.extension_id_seq', GREATEST(COALESCE((SELECT MAX(id) FROM suwayomi.extension), 1), 50))
+	`)
+
+	return nil
+}
+
 // GetSourceList returns all configured sources from the database.
 func GetSourceList(ctx context.Context) ([]models.SourceDataClass, error) {
 	if DB == nil {
 		return []models.SourceDataClass{}, nil
+	}
+
+	// If source table is empty, auto-seed native sources first
+	var count int
+	_ = DB.QueryRow(ctx, "SELECT COUNT(*) FROM suwayomi.source").Scan(&count)
+	if count == 0 {
+		_ = EnsureNativeSources(ctx)
 	}
 
 	query := `
@@ -83,6 +450,28 @@ func GetSourceByID(ctx context.Context, id int64) (*models.SourceDataClass, erro
 	var cwInt int
 	err := DB.QueryRow(ctx, query, id).Scan(&idVal, &src.Name, &src.Lang, &iconURL, &pkgName, &cwInt)
 	if err != nil {
+		// Fallback to NativeExtensionsSeed
+		for _, ext := range NativeExtensionsSeed {
+			for _, s := range ext.Sources {
+				if s.ID == id {
+					cw := "SAFE"
+					if s.ContentWarning == 2 {
+						cw = "NSFW"
+					}
+					return &models.SourceDataClass{
+						ID:             fmt.Sprintf("%d", id),
+						Name:           s.Name,
+						DisplayName:    s.DisplayName,
+						Lang:           s.Lang,
+						IconURL:        "/api/v1/source/" + fmt.Sprintf("%d", id) + "/icon",
+						PkgName:        ext.PkgName,
+						ContentWarning: cw,
+						SupportsLatest: true,
+						IsNsfw:         s.ContentWarning == 2,
+					}, nil
+				}
+			}
+		}
 		return nil, err
 	}
 

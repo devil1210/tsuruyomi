@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	_ "embed"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,9 @@ var (
 	iconCache   = make(map[string][]byte)
 )
 
+//go:embed default_icon.png
+var defaultIconPNG []byte
+
 var defaultIconStub = []byte{
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
 	0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
@@ -30,15 +34,60 @@ var defaultIconStub = []byte{
 func sendDefaultIcon(c *fiber.Ctx) error {
 	c.Set(fiber.HeaderContentType, "image/png")
 	c.Set(fiber.HeaderCacheControl, "public, max-age=86400")
+	if len(defaultIconPNG) > 0 {
+		return c.Send(defaultIconPNG)
+	}
 	return c.Send(defaultIconStub)
+}
+
+// sourceToPackageMap maps known source IDs to their Tachiyomi/Keiyoushi extension package names.
+var sourceToPackageMap = map[int64]string{
+	2499283573021220255: "eu.kanade.tachiyomi.extension.all.mangadex",
+	6400665728063187402: "eu.kanade.tachiyomi.extension.all.mangadex",
+	4938773340256184018: "eu.kanade.tachiyomi.extension.all.mangadex",
+	4638673959522768501: "eu.kanade.tachiyomi.extension.all.mangadex",
+	2202687009511923782: "eu.kanade.tachiyomi.extension.es.mangamx",
+	7178038133263703638: "eu.kanade.tachiyomi.extension.es.lectormangalat",
+	5649269152264667286: "eu.kanade.tachiyomi.extension.es.shadowmanga",
+	1340622632921674920: "eu.kanade.tachiyomi.extension.es.shadowmanga",
+	8701445043633550960: "eu.kanade.tachiyomi.extension.es.leermanhwas",
+	1598762687295904337: "eu.kanade.tachiyomi.extension.es.bokugentranslation",
+	3044113561993269522: "eu.kanade.tachiyomi.extension.es.apollcomics",
+	4647982373411241498: "eu.kanade.tachiyomi.extension.es.dragontranslationorg",
+	1814471239661920836: "eu.kanade.tachiyomi.extension.es.cerberusseries",
+	3548601371328353875: "eu.kanade.tachiyomi.extension.es.manhwalatino",
+	8311505150576608267: "eu.kanade.tachiyomi.extension.es.hadesnofansub",
+	6757330205319558057: "eu.kanade.tachiyomi.extension.es.begatranslation",
+	3953107753690791431: "eu.kanade.tachiyomi.extension.es.uchuujinprojects",
+	5943212552955476721: "eu.kanade.tachiyomi.extension.es.manhwaweb",
+	1136717301008230074: "eu.kanade.tachiyomi.extension.es.submanhwa",
+	829053423099062956:  "eu.kanade.tachiyomi.extension.es.mangasnosekai",
+	698913079501532785:  "eu.kanade.tachiyomi.extension.es.ravenmanga",
+	7925520943983324764: "eu.kanade.tachiyomi.extension.es.zonatmoto", // TuMangaOnline
+	4146344224513899730: "eu.kanade.tachiyomi.extension.es.inmanga",
+	8385948079634749158: "eu.kanade.tachiyomi.extension.es.manhuaonline",
+	3053251231047124074: "eu.kanade.tachiyomi.extension.es.nineanime",
+	6935004473807791201: "eu.kanade.tachiyomi.extension.es.plottwistnofansub",
+	1348827658894665970: "eu.kanade.tachiyomi.extension.es.ragnarokscanlation",
+	4097111295486074350: "eu.kanade.tachiyomi.extension.es.ninemanga",
+	3903750533251938295: "eu.kanade.tachiyomi.extension.es.jobsibe",
+	3752522006902890093: "eu.kanade.tachiyomi.extension.es.lmtoonline",
+	1326771034671033762: "eu.kanade.tachiyomi.extension.es.manhwasnet",
+	4531444389842992129: "eu.kanade.tachiyomi.extension.all.batoto",
+	120391793502126753:  "eu.kanade.tachiyomi.extension.en.ninemanga",
+	7541593615312027809: "eu.kanade.tachiyomi.extension.es.dragontranslation",
 }
 
 func getFallbackIconURL(pkgName string) string {
 	switch pkgName {
-	case "eu.kanade.tachiyomi.extension.es.mangamx":
+	case "eu.kanade.tachiyomi.extension.es.mangamx", "eu.kanade.tachiyomi.extension.es.mangaoni":
 		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/mangamx/res/mipmap-xhdpi/ic_launcher.png"
 	case "eu.kanade.tachiyomi.extension.all.mangadex":
 		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/all/mangadex/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.tumangaonline", "eu.kanade.tachiyomi.extension.es.zonatmoto":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/zonatmoto/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.lectormanga", "eu.kanade.tachiyomi.extension.es.lectormangalat":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/lectormangalat/res/mipmap-xhdpi/ic_launcher.png"
 	case "eu.kanade.tachiyomi.extension.es.leermanhwas":
 		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/leermanhwas/res/mipmap-xhdpi/ic_launcher.png"
 	case "eu.kanade.tachiyomi.extension.es.mangasnosekai":
@@ -55,8 +104,6 @@ func getFallbackIconURL(pkgName string) string {
 		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/submanhwa/res/mipmap-xhdpi/ic_launcher.png"
 	case "eu.kanade.tachiyomi.extension.es.uchuujinprojects":
 		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/uchuujinprojects/res/mipmap-xhdpi/ic_launcher.png"
-	case "eu.kanade.tachiyomi.extension.es.lectormangalat":
-		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/lectormangalat/res/mipmap-xhdpi/ic_launcher.png"
 	case "eu.kanade.tachiyomi.extension.es.bokugentranslation":
 		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/bokugentranslation/res/mipmap-xhdpi/ic_launcher.png"
 	case "eu.kanade.tachiyomi.extension.es.apollcomics":
@@ -69,7 +116,36 @@ func getFallbackIconURL(pkgName string) string {
 		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/hadesnofansub/res/mipmap-xhdpi/ic_launcher.png"
 	case "eu.kanade.tachiyomi.extension.es.begatranslation":
 		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/begatranslation/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.inmanga":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/inmanga/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.manhuaonline":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/manhuaonline/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.nineanime":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/nineanime/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.plottwistnofansub":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/plottwistnofansub/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.ragnarokscanlation":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/ragnarokscanlation/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.es.ninemanga":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/es/ninemanga/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.en.ninemanga":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/en/ninemanga/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.extension.all.batoto":
+		return "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/all/batoto/res/mipmap-xhdpi/ic_launcher.png"
+	case "eu.kanade.tachiyomi.source.local":
+		return ""
 	}
+
+	// Dynamic Keiyoushi fallback: eu.kanade.tachiyomi.extension.<lang>.<extName>
+	if strings.HasPrefix(pkgName, "eu.kanade.tachiyomi.extension.") {
+		parts := strings.Split(pkgName, ".")
+		if len(parts) >= 6 {
+			lang := parts[4]
+			extName := parts[5]
+			return fmt.Sprintf("https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/%s/%s/res/mipmap-xhdpi/ic_launcher.png", lang, extName)
+		}
+	}
+
 	return ""
 }
 
@@ -85,15 +161,15 @@ func fetchAndServeIcon(c *fiber.Ctx, cacheKey, iconUrl string) error {
 	}
 
 	// 2. Fetch remote icon if URL provided
-	if iconUrl != "" && strings.HasPrefix(iconUrl, "http") {
+	if iconUrl != "" && (strings.HasPrefix(iconUrl, "http://") || strings.HasPrefix(iconUrl, "https://")) {
 		req, err := http.NewRequestWithContext(c.Context(), http.MethodGet, iconUrl, nil)
 		if err == nil {
-			req.Header.Set("User-Agent", "Mozilla/5.0")
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
 			resp, err := sources.DefaultClient.Do(req)
 			if err == nil && resp.StatusCode == http.StatusOK {
 				data, err := io.ReadAll(resp.Body)
 				resp.Body.Close()
-				if err == nil && len(data) > 0 {
+				if err == nil && len(data) > 100 {
 					iconCacheMu.Lock()
 					iconCache[cacheKey] = data
 					iconCacheMu.Unlock()
@@ -169,7 +245,8 @@ func GetExtensionIcon(c *fiber.Ctx) error {
 	if database.DB != nil {
 		_ = database.DB.QueryRow(c.Context(), "SELECT COALESCE(icon_url, '') FROM suwayomi.extension WHERE pkg_name = $1", pkgName).Scan(&iconUrl)
 	}
-	if iconUrl == "" {
+
+	if (!strings.HasPrefix(iconUrl, "http://") && !strings.HasPrefix(iconUrl, "https://")) || strings.Contains(iconUrl, "/api/v1/") {
 		iconUrl = getFallbackIconURL(pkgName)
 	}
 
@@ -201,8 +278,18 @@ func GetSourceIcon(c *fiber.Ctx) error {
 			WHERE s.id = $1
 		`, sourceId).Scan(&iconUrl, &pkgName)
 	}
-	if iconUrl == "" && pkgName != "" {
-		iconUrl = getFallbackIconURL(pkgName)
+
+	if pkgName == "" && sourceId > 0 {
+		if mappedPkg, exists := sourceToPackageMap[sourceId]; exists {
+			pkgName = mappedPkg
+		}
+	}
+
+	// If iconUrl is a relative /api/v1/... URL or not a remote URL, resolve real fallback icon from Keiyoushi
+	if (!strings.HasPrefix(iconUrl, "http://") && !strings.HasPrefix(iconUrl, "https://")) || strings.Contains(iconUrl, "/api/v1/") {
+		if pkgName != "" {
+			iconUrl = getFallbackIconURL(pkgName)
+		}
 	}
 
 	return fetchAndServeIcon(c, cacheKey, iconUrl)

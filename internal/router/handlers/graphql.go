@@ -808,23 +808,18 @@ func HandleGraphQL(c *fiber.Ctx) error {
 	case "GET_SOURCES_LIST":
 		nodes := []map[string]interface{}{}
 		srcs, err := database.GetSourceList(c.Context())
+		if err == nil && len(srcs) == 0 {
+			_ = database.EnsureNativeSources(c.Context())
+			srcs, _ = database.GetSourceList(c.Context())
+		}
 		if err == nil {
 			for _, src := range srcs {
-				var srcID int64
-				_, _ = fmt.Sscan(src.ID, &srcID)
-				if !NativeGoExtensionPackages[src.PkgName] && !sources.Has(srcID) {
-					continue
-				}
-
 				cw := src.ContentWarning
 				if cw == "" {
 					cw = "SAFE"
 				}
 				pkgName := src.PkgName
-				iconURL := "/api/v1/extension/icon/" + pkgName
-				if pkgName == "custom.extension" {
-					iconURL = "/api/v1/source/" + src.ID + "/icon"
-				}
+				iconURL := "/api/v1/source/" + src.ID + "/icon"
 				nodes = append(nodes, map[string]interface{}{
 					"id":             src.ID,
 					"name":           src.Name,
@@ -838,10 +833,10 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					"meta":           []interface{}{},
 					"extension": map[string]interface{}{
 						"pkgName":       pkgName,
-						"storeIndexUrl": "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json",
+						"storeIndexUrl": DefaultExtensionStoreURL,
 						"extensionStore": map[string]interface{}{
-							"indexUrl":   "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json",
-							"name":       "Keiyoushi",
+							"indexUrl":   DefaultExtensionStoreURL,
+							"name":       DefaultExtensionStoreName,
 							"__typename": "ExtensionStoreType",
 						},
 						"__typename": "ExtensionType",
@@ -3205,10 +3200,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		if sourceID > 0 {
 			src, err := database.GetSourceByID(c.Context(), sourceID)
 			if err == nil && src != nil {
-				iconURL := "/api/v1/extension/icon/" + src.PkgName
-				if src.PkgName == "" {
-					iconURL = "/api/v1/source/" + src.ID + "/icon"
-				}
+				iconURL := "/api/v1/source/" + src.ID + "/icon"
 				srcData = map[string]interface{}{
 					"id":             src.ID,
 					"name":           src.Name,
@@ -3266,6 +3258,63 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 		var sourceId int64
 		_, _ = fmt.Sscan(sourceStr, &sourceId)
+
+		// Check if source is MangaDex for live online browsing/searching
+		if database.DB != nil && (sourceId == 2499283573021220255 || sourceId == 6400665728063187402 || sourceId == 4938773340256184018 || sourceId == 4638673959522768501) {
+			onlineItems, hasNext, errOnline := sources.FetchMangaDexOnline(c.Context(), sourceId, queryStr, page, 20)
+			if errOnline == nil && len(onlineItems) > 0 {
+				var ids []int64
+				for _, it := range onlineItems {
+					genreStr := strings.Join(it.Genres, ", ")
+					var mID int64
+					errFind := database.DB.QueryRow(c.Context(), "SELECT id FROM suwayomi.manga WHERE source = $1 AND url = $2", it.SourceID, it.URL).Scan(&mID)
+					if errFind == nil && mID > 0 {
+						_, _ = database.DB.Exec(c.Context(), `
+							UPDATE suwayomi.manga SET
+								title = $1,
+								thumbnail_url = COALESCE(NULLIF($2, ''), thumbnail_url),
+								description = $3,
+								genre = $4,
+								status = $5,
+								artist = $6,
+								author = $7
+							WHERE id = $8
+						`, it.Title, it.ThumbnailURL, it.Description, genreStr, it.Status, it.Artist, it.Author, mID)
+					} else {
+						errInsert := database.DB.QueryRow(c.Context(), `
+							INSERT INTO suwayomi.manga (source, url, title, artist, author, description, genre, status, thumbnail_url, initialized, memo)
+							VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, '{}')
+							RETURNING id
+						`, it.SourceID, it.URL, it.Title, it.Artist, it.Author, it.Description, genreStr, it.Status, it.ThumbnailURL).Scan(&mID)
+						if errInsert == nil && mID > 0 {
+							_, _ = database.DB.Exec(c.Context(), `
+								INSERT INTO suwayomi.mangauser (manga, user_id, in_library, in_library_at)
+								VALUES ($1, 1, false, 0)
+								ON CONFLICT (manga, user_id) DO NOTHING
+							`, mID)
+						}
+					}
+					if mID > 0 {
+						ids = append(ids, mID)
+					}
+				}
+				if len(ids) > 0 {
+					mNodes, errNodes := fetchMangaGraphQLNodes(c.Context(), MangaGraphQLFilter{
+						MangaIDs: ids,
+					})
+					if errNodes == nil && len(mNodes) > 0 {
+						data = map[string]interface{}{
+							"fetchSourceManga": map[string]interface{}{
+								"hasNextPage": hasNext,
+								"mangas":      mNodes,
+								"__typename":  "FetchSourceMangaPayload",
+							},
+						}
+						break
+					}
+				}
+			}
+		}
 
 		var sourceIdPtr *int64
 		if sourceId > 0 {
