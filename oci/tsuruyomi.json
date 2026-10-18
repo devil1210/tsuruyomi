@@ -1,19 +1,19 @@
 {
   "schema_version": "0.5.0",
   "kind": "proxmenux.oci-template",
-  "id": "tsuruyomi",
+  "id": "image-tsuruyomi",
   "status": "laboratory-validated",
   "catalog_ui": {
     "title": {
       "en_US": "Tsuruyomi",
-      "es_ES": "Tsuruyomi (鶴読み)"
+      "es_ES": "Tsuruyomi"
     },
     "tagline": {
-      "en_US": "Lightweight, ultra high-performance Manga Reader and OPDS Server in Go",
-      "es_ES": "Servidor de lectura de manga y catálogo OPDS ultra liviano en Go"
+      "en_US": "Lightweight Manga Reader and OPDS Server with PostgreSQL",
+      "es_ES": "Servidor de lectura de manga y catálogo OPDS ultra liviano con PostgreSQL"
     },
     "description": {
-      "en_US": "Tsuruyomi is a native Go high-performance replacement for Suwayomi-Server (Tachidesk). Consumes 95% less RAM (~40MB vs ~1.2GB JVM), starts in <50ms, provides full OPDS 1.2 / 2.0 catalogs, native scrapers, FlareSolverr bypass, and bundled web reader.",
+      "en_US": "Tsuruyomi is a native Go high-performance replacement for Suwayomi-Server. Consumes 95% less RAM (~40MB vs ~1.2GB JVM), starts in <50ms, provides full OPDS 1.2 / 2.0 catalogs, native scrapers, FlareSolverr bypass, and bundled web reader.",
       "es_ES": "Tsuruyomi es un reemplazo nativo en Go de alto rendimiento para Suwayomi-Server. Consume 95% menos RAM (~40MB vs ~1.2GB JVM), inicia en <50ms, incluye catálogos OPDS 1.2 y 2.0, scrapers nativos en Go, bypass FlareSolverr y lector web integrado."
     },
     "category": "media",
@@ -36,9 +36,9 @@
     "documentation": "https://github.com/devil1210/tsuruyomi/blob/main/README.md",
     "repository": "https://github.com/devil1210/tsuruyomi",
     "tips": [
-      "Tsuruyomi automatically initializes its PostgreSQL database schema on first start.",
+      "The installer creates Tsuruyomi and a private PostgreSQL dependency LXC.",
       "Compatible with KOReader and Moon+ Reader via /api/opds/v1.2 or /api/opds/v2.0.",
-      "Config is stored in /config/config.yaml and manga downloads in /data."
+      "Manga downloads are stored in /data and config in /config."
     ],
     "mini_changelog": [],
     "display_version": "1.0.0",
@@ -49,7 +49,6 @@
     "repository": "https://github.com/devil1210/tsuruyomi",
     "default_branch": "main",
     "revision": "latest",
-    "readme_raw_url": "https://raw.githubusercontent.com/devil1210/tsuruyomi/main/README.md",
     "image_repository_url": "https://ghcr.io/devil1210/tsuruyomi",
     "readme_pushed_at": "2026-10-17T00:00:00Z",
     "compose_sha256": "tsuruyomi-sha256",
@@ -69,68 +68,72 @@
     "environment": [
       {
         "name": "DATABASE_DSN",
-        "example": "postgres://tsuruyomi:tsuruyomi_pass@localhost:5432/tsuruyomi?sslmode=disable",
+        "example": "postgres://tsuruyomi:secret@tsuruyomi-postgres:5432/tsuruyomi?sslmode=disable",
         "required": true,
         "sensitive": true,
-        "source": "compose"
+        "source": "docker-compose"
       },
       {
         "name": "SERVER_PORT",
         "example": "7654",
         "required": true,
         "sensitive": false,
-        "source": "compose"
+        "source": "docker-compose"
       },
       {
-        "name": "FLARESOLVERR_ENABLED",
-        "example": "false",
-        "required": false,
+        "name": "TZ",
+        "example": "$TZ",
+        "required": true,
         "sensitive": false,
-        "source": "compose"
-      },
-      {
-        "name": "FLARESOLVERR_URL",
-        "example": "http://flaresolverr:8191",
-        "required": false,
-        "sensitive": false,
-        "source": "compose"
+        "source": "docker-compose"
       },
       {
         "name": "SIDECAR_ENABLED",
         "example": "false",
         "required": false,
         "sensitive": false,
-        "source": "compose"
+        "source": "docker-compose"
       },
       {
-        "name": "SIDECAR_BASE_URL",
-        "example": "",
+        "name": "FLARESOLVERR_ENABLED",
+        "example": "false",
         "required": false,
         "sensitive": false,
-        "source": "compose"
-      },
-      {
-        "name": "TZ",
-        "example": "America/Santiago",
-        "required": true,
-        "sensitive": false,
-        "source": "compose"
+        "source": "docker-compose"
       }
     ],
     "volumes": [
       {
+        "id": "volume-config",
         "container_path": "/config",
-        "mount_type": "managed-volume",
+        "compose_source_example": "/DATA/AppData/$AppID/config",
+        "read_only": false,
         "required": true,
-        "default_size_gib": 2,
-        "backup": true
+        "installation_choice": [
+          "managed-volume",
+          "host-bind"
+        ],
+        "default": "managed-volume",
+        "managed_volume": {
+          "backup": true,
+          "default_size_gb": 2
+        }
       },
       {
+        "id": "volume-data",
         "container_path": "/data",
-        "mount_type": "managed-volume",
+        "compose_source_example": "/DATA/AppData/$AppID/data",
+        "read_only": false,
         "required": true,
-        "default_size_gib": 32,
-        "backup": false
+        "installation_choice": [
+          "managed-volume",
+          "host-bind"
+        ],
+        "default": "managed-volume",
+        "managed_volume": {
+          "backup": false,
+          "default_size_gb": 32
+        }
       }
     ],
     "ports": [
@@ -142,20 +145,317 @@
         "proxmox_behavior": "listener-on-dedicated-lxc-address-no-nat"
       }
     ],
-    "related_services": [],
+    "related_services": [
+      {
+        "name": "tsuruyomi-postgres",
+        "image": "postgres:16-alpine"
+      }
+    ],
     "restart": "unless-stopped",
-    "stop_grace_period": 10,
-    "original_compose": "services:\n  tsuruyomi:\n    image: ghcr.io/devil1210/tsuruyomi:latest\n    container_name: tsuruyomi\n    ports:\n      - 7654:7654\n    restart: unless-stopped\n"
+    "stop_grace_period": null,
+    "original_compose": "name: tsuruyomi\nservices:\n  tsuruyomi:\n    image: ghcr.io/devil1210/tsuruyomi:latest\n    container_name: tsuruyomi\n    restart: unless-stopped\n    networks:\n    - tsuruyomi-net\n    depends_on:\n      tsuruyomi-postgres:\n        condition: service_healthy\n    ports:\n    - target: 7654\n      published: '7654'\n      protocol: tcp\n    environment:\n      SERVER_PORT: '7654'\n      DATABASE_DSN: postgres://tsuruyomi:${GENERATED_POSTGRES_PASSWORD}@tsuruyomi-postgres:5432/tsuruyomi?sslmode=disable\n      SIDECAR_ENABLED: 'false'\n      FLARESOLVERR_ENABLED: 'false'\n      TZ: $TZ\n    volumes:\n    - type: bind\n      source: /DATA/AppData/$AppID/config\n      target: /config\n    - type: bind\n      source: /DATA/AppData/$AppID/data\n      target: /data\n  tsuruyomi-postgres:\n    image: postgres:16-alpine\n    container_name: tsuruyomi-postgres\n    restart: unless-stopped\n    environment:\n      POSTGRES_DB: tsuruyomi\n      POSTGRES_USER: tsuruyomi\n      POSTGRES_PASSWORD: ${GENERATED_POSTGRES_PASSWORD}\n      TZ: $TZ\n    networks:\n    - tsuruyomi-net\n    volumes:\n    - type: bind\n      source: /DATA/AppData/$AppID/postgres_data\n      target: /var/lib/postgresql/data\n    healthcheck:\n      test:\n      - CMD\n      - pg_isready\n      - -U\n      - tsuruyomi\n      - -d\n      - tsuruyomi\n      interval: 5s\n      timeout: 10s\n      retries: 5\nnetworks:\n  tsuruyomi-net:\n    driver: bridge\n"
+  },
+  "compose_stack": {
+    "project_name": "tsuruyomi",
+    "deployment_model": "one-native-oci-lxc-per-compose-service",
+    "user_experience": "single-application-install",
+    "main_service": "tsuruyomi",
+    "service_count": 2,
+    "services": [
+      {
+        "name": "tsuruyomi-postgres",
+        "image": "postgres:16-alpine",
+        "is_main": false,
+        "role": "dependency",
+        "vmid_offset": 1,
+        "depends_on": [],
+        "frontend_network": false,
+        "private_network": true,
+        "compose": {
+          "image": "postgres:16-alpine",
+          "container_name": "tsuruyomi-postgres",
+          "restart": "unless-stopped",
+          "environment": {
+            "POSTGRES_DB": "tsuruyomi",
+            "POSTGRES_USER": "tsuruyomi",
+            "POSTGRES_PASSWORD": "${GENERATED_POSTGRES_PASSWORD}",
+            "TZ": "$TZ"
+          },
+          "networks": [
+            "tsuruyomi-net"
+          ],
+          "volumes": [
+            {
+              "type": "bind",
+              "source": "/DATA/AppData/$AppID/postgres_data",
+              "target": "/var/lib/postgresql/data"
+            }
+          ],
+          "deploy": {
+            "resources": {
+              "reservations": {
+                "memory": "256m"
+              }
+            }
+          },
+          "healthcheck": {
+            "test": [
+              "CMD",
+              "pg_isready",
+              "-U",
+              "tsuruyomi",
+              "-d",
+              "tsuruyomi"
+            ],
+            "interval": "5s",
+            "timeout": "10s",
+            "retries": 5
+          }
+        }
+      },
+      {
+        "name": "tsuruyomi",
+        "image": "ghcr.io/devil1210/tsuruyomi:latest",
+        "is_main": true,
+        "role": "frontend",
+        "vmid_offset": 0,
+        "depends_on": [
+          "tsuruyomi-postgres"
+        ],
+        "frontend_network": true,
+        "private_network": true,
+        "compose": {
+          "image": "ghcr.io/devil1210/tsuruyomi:latest",
+          "container_name": "tsuruyomi",
+          "restart": "unless-stopped",
+          "networks": [
+            "tsuruyomi-net"
+          ],
+          "depends_on": {
+            "tsuruyomi-postgres": {
+              "condition": "service_healthy"
+            }
+          },
+          "ports": [
+            {
+              "target": 7654,
+              "published": "7654",
+              "protocol": "tcp"
+            }
+          ],
+          "environment": {
+            "SERVER_PORT": "7654",
+            "DATABASE_DSN": "postgres://tsuruyomi:${GENERATED_POSTGRES_PASSWORD}@tsuruyomi-postgres:5432/tsuruyomi?sslmode=disable",
+            "SIDECAR_ENABLED": "false",
+            "FLARESOLVERR_ENABLED": "false",
+            "TZ": "$TZ"
+          },
+          "volumes": [
+            {
+              "type": "bind",
+              "source": "/DATA/AppData/$AppID/config",
+              "target": "/config"
+            },
+            {
+              "type": "bind",
+              "source": "/DATA/AppData/$AppID/data",
+              "target": "/data"
+            }
+          ],
+          "deploy": {
+            "resources": {
+              "reservations": {
+                "memory": "256m"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "top_level": {
+      "name": "tsuruyomi",
+      "networks": {
+        "tsuruyomi-net": {
+          "driver": "bridge"
+        }
+      }
+    },
+    "networking": {
+      "frontend": "selected-proxmox-bridge",
+      "private_required": true,
+      "private_creation": "automatic-create-if-missing",
+      "private_address_allocation": "automatic-static-address-per-service",
+      "service_discovery": "private-addresses-with-compose-service-host-aliases",
+      "dependency_external_access": "disabled-unless-service-publishes-ports",
+      "prompt_user_for_private_network": false
+    },
+    "storage": [
+      {
+        "id": "tsuruyomi-volume-config",
+        "service": "tsuruyomi",
+        "container_path": "/config",
+        "mode": "managed-volume",
+        "user_selectable": false,
+        "backup": true,
+        "shared_with_other_lxc": false,
+        "source_path": null,
+        "source_path_prompt": null
+      },
+      {
+        "id": "tsuruyomi-volume-data",
+        "service": "tsuruyomi",
+        "container_path": "/data",
+        "mode": "managed-volume",
+        "user_selectable": true,
+        "backup": false,
+        "shared_with_other_lxc": false,
+        "source_path": null,
+        "source_path_prompt": null
+      },
+      {
+        "id": "tsuruyomi-postgres-volume-0",
+        "service": "tsuruyomi-postgres",
+        "container_path": "/var/lib/postgresql/data",
+        "mode": "managed-volume",
+        "user_selectable": false,
+        "backup": true,
+        "shared_with_other_lxc": false,
+        "source_path": null,
+        "source_path_prompt": null
+      }
+    ],
+    "orchestration": {
+      "reserve_vmids_atomically": 2,
+      "start_order": [
+        "tsuruyomi-postgres",
+        "tsuruyomi"
+      ],
+      "stop_order": [
+        "tsuruyomi",
+        "tsuruyomi-postgres"
+      ],
+      "dependency_readiness": "compose-healthcheck-then-port-or-process-fallback",
+      "rollback_on_failure": "remove-new-rootfs-preserve-created-persistent-volumes"
+    },
+    "installer_inputs": {
+      "prompted": [
+        "stack_name",
+        "base_vmid",
+        "rootfs_storage",
+        "persistent_data_destinations",
+        "frontend_bridge",
+        "frontend_ipv4_mode"
+      ],
+      "automatic": [
+        "dependent_vmids",
+        "private_bridge",
+        "private_subnet",
+        "private_service_addresses",
+        "compose_service_aliases",
+        "generated_secrets",
+        "dependency_start_and_stop_order"
+      ],
+      "generated_secrets": [
+        {
+          "id": "postgres-password",
+          "strategy": "generate-cryptographically-random-at-install",
+          "bindings": [
+            {
+              "service": "tsuruyomi-postgres",
+              "environment_variable": "POSTGRES_PASSWORD"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "first_run": {
+    "endpoints": [
+      {
+        "label": "Web UI",
+        "scheme": "http",
+        "port": 7654,
+        "path": "/",
+        "source": "compose-metadata"
+      }
+    ],
+    "credentials": []
+  },
+  "proxmox": {
+    "runtime": "native-oci-lxc",
+    "technology_status": "proxmox-technology-preview",
+    "defaults": {
+      "unprivileged": true,
+      "ostype": "auto-from-image",
+      "cores": 2,
+      "memory_mb": 512,
+      "swap_mb": 512,
+      "rootfs_size_gb": 4,
+      "rootfs_storage": "local-lvm",
+      "volume_storage": "local-lvm",
+      "template_storage": "local",
+      "bridge": "vmbr0",
+      "ipv4": "dhcp",
+      "firewall": true,
+      "host_managed_network": true,
+      "onboot": false,
+      "features": [
+        "nesting=1"
+      ],
+      "shutdown_timeout_seconds": 30
+    },
+    "image_metadata_policy": {
+      "entrypoint": "import-from-oci-image",
+      "cmd": "import-from-oci-image",
+      "environment": "import-image-env-then-apply-compose-overrides",
+      "user": "import-from-oci-image",
+      "working_dir": "import-from-oci-image",
+      "stop_signal": "import-from-oci-image"
+    },
+    "installer_profile": {
+      "stack_driver": "generic-multi-lxc-stack"
+    }
+  },
+  "compatibility": {
+    "automatic_install_candidate": true,
+    "validated": true,
+    "supported_compose_keys": [
+      "container_name",
+      "deploy",
+      "depends_on",
+      "environment",
+      "healthcheck",
+      "image",
+      "networks",
+      "ports",
+      "restart",
+      "volumes"
+    ],
+    "untranslated_blockers": []
+  },
+  "validation": {
+    "schema": "passed-at-generation",
+    "clean_install": "passed",
+    "service_health": "passed",
+    "restart_persistence": "passed",
+    "backup_restore": "passed",
+    "update_preserves_data": "passed"
   },
   "lifecycle": {
-    "update_strategy": "replace-rootfs-from-new-oci-image-preserve-managed-volumes",
+    "update_strategy": "resolve-latest-image-then-apply-reviewed-native-lxc-update",
     "registry_state": {
       "resolved_architecture": null,
       "resolved_digest": null,
       "image_version_label": null,
       "image_created": null
     },
-    "change_detection": "compare-resolved-architecture-digest",
-    "automatic_unattended_updates": false
+    "change_detection": "compare-compose-sha256-and-resolved-latest-image-digest",
+    "automatic_unattended_updates": false,
+    "dependency_lifecycle": {
+      "implementation": "proxmox-hookscript",
+      "trigger": "main-lxc-pre-start",
+      "waits_for_dependency_healthchecks": true,
+      "stops_dependencies_with_main": false
+    }
   }
 }
