@@ -114,32 +114,86 @@ const DefaultExtensionStoreURL = "https://raw.githubusercontent.com/devil1210/ts
 const DefaultExtensionStoreName = "Tsuruyomi Native Go Extensions"
 
 func getExtensionMap(ctx context.Context, pkgName string) map[string]interface{} {
+	canon := getCanonicalPkg(pkgName)
 	name := pkgName
 	lang := "all"
 	cw := "SAFE"
-	if info, ok := NativeGoExtensionInfo[pkgName]; ok {
-		name = info.Name
-		lang = info.Lang
-		if strings.Contains(name, "+18") || strings.Contains(name, "NSFW") {
-			cw = "NSFW"
+	isInstalled := false
+	hasUpdate := false
+	isObsolete := false
+	versionName := "1.0-go"
+	versionCode := int64(100)
+	iconURL := "/api/v1/extension/icon/" + pkgName
+	storeIndexURL := DefaultExtensionStoreURL
+	storeName := DefaultExtensionStoreName
+
+	if pkgName == "eu.kanade.tachiyomi.source.local" {
+		isInstalled = true
+		name = "Local Source"
+	}
+
+	if database.DB != nil {
+		var isInst, hasUpd, isObs bool
+		var n, l, vName, icon, storeURL string
+		var vCode int64
+		var cwInt int
+		err := database.DB.QueryRow(ctx, `
+			SELECT name, lang, version_name, version_code, is_installed, has_update, is_obsolete, COALESCE(icon_url, ''), COALESCE(store_index_url, $2), COALESCE(content_warning, 0)
+			FROM suwayomi.extension WHERE pkg_name = $1 OR pkg_name = $3
+			ORDER BY is_installed DESC LIMIT 1
+		`, pkgName, DefaultExtensionStoreURL, canon).Scan(&n, &l, &vName, &vCode, &isInst, &hasUpd, &isObs, &icon, &storeURL, &cwInt)
+		if err == nil {
+			name = n
+			isInstalled = isInst
+			hasUpdate = hasUpd
+			isObsolete = isObs
+			if vName != "" {
+				versionName = vName
+			}
+			if vCode > 0 {
+				versionCode = vCode
+			}
+			if l != "" {
+				lang = l
+			}
+			if storeURL != "" {
+				storeIndexURL = storeURL
+			}
+			if cwInt > 0 {
+				cw = "NSFW"
+			}
 		}
 	}
+
+	if name == pkgName {
+		if info, ok := NativeGoExtensionInfo[pkgName]; ok {
+			name = info.Name
+			lang = info.Lang
+			if strings.Contains(name, "+18") || strings.Contains(name, "NSFW") {
+				cw = "NSFW"
+			}
+		} else if info, ok := NativeGoExtensionInfo[canon]; ok {
+			name = info.Name
+			lang = info.Lang
+		}
+	}
+
 	return map[string]interface{}{
 		"pkgName":         pkgName,
 		"name":            name,
 		"lang":            lang,
-		"versionCodeLong": int64(100),
-		"versionName":     "1.0-go (Nativa)",
-		"iconUrl":         "/api/v1/extension/icon/" + pkgName,
-		"storeIndexUrl":   DefaultExtensionStoreURL,
+		"versionCodeLong": versionCode,
+		"versionName":     versionName,
+		"iconUrl":         iconURL,
+		"storeIndexUrl":   storeIndexURL,
 		"contentWarning":  cw,
-		"isInstalled":     true,
-		"isObsolete":      false,
-		"hasUpdate":       false,
+		"isInstalled":     isInstalled,
+		"isObsolete":      isObsolete,
+		"hasUpdate":       hasUpdate,
 		"extensionLib":    "1.5",
 		"extensionStore": map[string]interface{}{
-			"indexUrl":   DefaultExtensionStoreURL,
-			"name":       DefaultExtensionStoreName,
+			"indexUrl":   storeIndexURL,
+			"name":       storeName,
 			"__typename": "ExtensionStoreType",
 		},
 		"__typename": "ExtensionType",
@@ -174,7 +228,7 @@ func getExtensionNodes(ctx context.Context, filterStoreUrl string) []map[string]
 						continue
 					}
 
-					if NativeGoExtensionPackages[pkgName] || NativeGoExtensionPackages[canon] || pkgName == "eu.kanade.tachiyomi.source.local" {
+					if pkgName == "eu.kanade.tachiyomi.source.local" {
 						isInstalled = true
 						hasUpdate = false
 						isObsolete = false
@@ -337,6 +391,14 @@ func buildServerSettingsMap(ctx context.Context, cfg *config.Config) map[string]
 		}
 	}
 
+	var browseLangs []string
+	if bStr, ok := dbSettings["browseLanguages"]; ok && bStr != "" {
+		_ = json.Unmarshal([]byte(bStr), &browseLangs)
+	}
+	if len(browseLangs) == 0 {
+		browseLangs = []string{"all", "es", "en", "es-419"}
+	}
+
 	return map[string]interface{}{
 		"ip":                              ip,
 		"port":                            port,
@@ -361,6 +423,7 @@ func buildServerSettingsMap(ctx context.Context, cfg *config.Config) map[string]
 		"downloadConversions":             []interface{}{},
 		"serveConversions":                []interface{}{},
 		"extensionRepos":                  extRepos,
+		"browseLanguages":                 browseLangs,
 		"maxSourcesInParallel":            getInt("maxSourcesInParallel", 6),
 		"excludeUnreadChapters":           getBool("excludeUnreadChapters", true),
 		"excludeNotStarted":               getBool("excludeNotStarted", true),
