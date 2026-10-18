@@ -15,7 +15,7 @@ server:
   subpath: "${SERVER_SUBPATH:-}"
 
 database:
-  dsn: "${DATABASE_DSN:-postgres://devil:suwayomi@192.168.1.150:5432/suwayomi?sslmode=disable}"
+  dsn: "${DATABASE_DSN:-postgres://tsuruyomi:tsuruyomi_pass@postgres:5432/tsuruyomi?sslmode=disable}"
   max_conns: 20
   min_conns: 2
 
@@ -35,11 +35,11 @@ logging:
 
 sidecar:
   enabled: ${SIDECAR_ENABLED:-false}
-  base_url: "${SIDECAR_BASE_URL:-http://192.168.1.104:4567}"
+  base_url: "${SIDECAR_BASE_URL:-}"
 
 flaresolverr:
-  enabled: ${FLARESOLVERR_ENABLED:-true}
-  url: "${FLARESOLVERR_URL:-http://192.168.1.136:8191}"
+  enabled: ${FLARESOLVERR_ENABLED:-false}
+  url: "${FLARESOLVERR_URL:-http://flaresolverr:8191}"
   timeout: 90
 EOF
 fi

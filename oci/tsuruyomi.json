@@ -69,7 +69,7 @@
     "environment": [
       {
         "name": "DATABASE_DSN",
-        "example": "postgres://devil:suwayomi@192.168.1.150:5432/suwayomi?sslmode=disable",
+        "example": "postgres://tsuruyomi:tsuruyomi_pass@localhost:5432/tsuruyomi?sslmode=disable",
         "required": true,
         "sensitive": true,
         "source": "compose"
@@ -83,28 +83,28 @@
       },
       {
         "name": "FLARESOLVERR_ENABLED",
-        "example": "true",
+        "example": "false",
         "required": false,
         "sensitive": false,
         "source": "compose"
       },
       {
         "name": "FLARESOLVERR_URL",
-        "example": "http://192.168.1.136:8191",
+        "example": "http://flaresolverr:8191",
         "required": false,
         "sensitive": false,
         "source": "compose"
       },
       {
         "name": "SIDECAR_ENABLED",
-        "example": "true",
+        "example": "false",
         "required": false,
         "sensitive": false,
         "source": "compose"
       },
       {
         "name": "SIDECAR_BASE_URL",
-        "example": "http://192.168.1.104:4567",
+        "example": "",
         "required": false,
         "sensitive": false,
         "source": "compose"
