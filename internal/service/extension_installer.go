@@ -377,3 +377,57 @@ func UninstallExtension(ctx context.Context, cfg *config.Config, pkgName string)
 func UpdateExtension(ctx context.Context, cfg *config.Config, pkgName string) error {
 	return InstallExtension(ctx, cfg, pkgName)
 }
+
+// InstallExtensionsForSources looks up extension package names for the given source IDs across native seeds and configured stores, and installs them.
+func InstallExtensionsForSources(ctx context.Context, cfg *config.Config, sourceIDs []int64) ([]string, []string) {
+	if len(sourceIDs) == 0 {
+		return nil, nil
+	}
+
+	pkgSet := make(map[string]bool)
+
+	// 1. Check in KnownSourcesByID
+	for _, srcID := range sourceIDs {
+		if known, ok := database.KnownSourcesByID[srcID]; ok && known.PkgName != "" {
+			pkgSet[known.PkgName] = true
+		}
+	}
+
+	// 2. Check in configured extension stores
+	stores, _ := database.GetExtensionStores(ctx)
+	if len(stores) == 0 {
+		stores = database.DefaultExtensionStores
+	}
+	for _, store := range stores {
+		if !strings.HasSuffix(store.IndexURL, ".json") {
+			continue
+		}
+		entries, err := FetchRepoIndex(ctx, store.IndexURL)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			for _, s := range e.Sources {
+				for _, srcID := range sourceIDs {
+					if s.ID == srcID && e.Pkg != "" {
+						pkgSet[e.Pkg] = true
+					}
+				}
+			}
+		}
+	}
+
+	var installed []string
+	var failed []string
+	for pkg := range pkgSet {
+		if err := InstallExtension(ctx, cfg, pkg); err != nil {
+			log.Printf("[EXTENSIONS] Failed to auto-install %s: %v", pkg, err)
+			failed = append(failed, pkg)
+		} else {
+			log.Printf("[EXTENSIONS] Successfully auto-installed %s", pkg)
+			installed = append(installed, pkg)
+		}
+	}
+
+	return installed, failed
+}

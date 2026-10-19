@@ -142,6 +142,8 @@ func Setup(cfg *config.Config) *fiber.App {
 	extGroup.Get("/list", handlers.ListExtensions)
 	extGroup.Get("/install/:pkgName", handlers.InstallExtension)
 	extGroup.Post("/install", handlers.InstallExtensionFile)
+	extGroup.Post("/install-missing", handlers.InstallMissingExtensions)
+	api.Post("/extension/install-missing", handlers.InstallMissingExtensions)
 	extGroup.Get("/update/:pkgName", handlers.UpdateExtension)
 	extGroup.Get("/uninstall/:pkgName", handlers.UninstallExtension)
 

@@ -8,10 +8,23 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/models"
 )
+
+// MissingSourceInfo represents a source present in a backup whose extension is not installed.
+type MissingSourceInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// ValidateBackupResult contains the results of validating a backup against installed sources and extensions.
+type ValidateBackupResult struct {
+	MissingSources  []MissingSourceInfo `json:"missingSources"`
+	MissingTrackers []interface{}       `json:"missingTrackers"`
+}
 
 // BackupPayload is the legacy backup format structure for exporting and importing JSON data.
 type BackupPayload struct {
@@ -158,4 +171,100 @@ func jsonPayloadToProto(p *BackupPayload) *ProtoBackup {
 	}
 
 	return pb
+}
+
+// ValidateBackup inspects the backup data and identifies sources whose extensions are missing or not installed.
+func ValidateBackup(ctx context.Context, data []byte) (*ValidateBackupResult, error) {
+	res := &ValidateBackupResult{
+		MissingSources:  []MissingSourceInfo{},
+		MissingTrackers: []interface{}{},
+	}
+	if len(data) == 0 {
+		return res, nil
+	}
+
+	// 1. Decompress if gzipped (.tachibk / .proto.gz)
+	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+		zr, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("decompressing gzip backup: %w", err)
+		}
+		defer zr.Close()
+		decompressed, err := io.ReadAll(zr)
+		if err != nil {
+			return nil, fmt.Errorf("reading decompressed backup data: %w", err)
+		}
+		data = decompressed
+	}
+
+	var pb *ProtoBackup
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+		var payload BackupPayload
+		if err := json.Unmarshal(trimmed, &payload); err != nil {
+			return nil, fmt.Errorf("decoding legacy backup JSON: %w", err)
+		}
+		pb = jsonPayloadToProto(&payload)
+	} else {
+		var err error
+		pb, err = DecodeProtoBackup(data)
+		if err != nil {
+			return nil, fmt.Errorf("decoding protobuf backup: %w", err)
+		}
+	}
+
+	sourceMap := make(map[int64]string)
+	for _, s := range pb.BackupSources {
+		if s.SourceID > 0 {
+			sourceMap[s.SourceID] = s.Name
+		}
+	}
+	for _, m := range pb.BackupManga {
+		if m.Source > 0 {
+			if _, ok := sourceMap[m.Source]; !ok {
+				sourceMap[m.Source] = ""
+			}
+		}
+	}
+
+	if database.DB == nil {
+		return res, nil
+	}
+
+	for srcID, srcName := range sourceMap {
+		if srcID == 0 { // Local source is always available
+			continue
+		}
+
+		var isInstalled bool
+		var pkgName, dbName string
+		err := database.DB.QueryRow(ctx, `
+			SELECT COALESCE(e.is_installed, false), COALESCE(e.pkg_name, ''), COALESCE(s.name, '')
+			FROM suwayomi.source s
+			LEFT JOIN suwayomi.extension e ON s.extension = e.id
+			WHERE s.id = $1
+		`, srcID).Scan(&isInstalled, &pkgName, &dbName)
+
+		if err != nil || !isInstalled || strings.HasPrefix(pkgName, "imported.source.") {
+			finalName := srcName
+			if finalName == "" && dbName != "" {
+				finalName = dbName
+			}
+			if finalName == "" {
+				if known, ok := database.KnownSourcesByID[srcID]; ok && known.Name != "" {
+					finalName = known.Name
+				}
+			}
+			if finalName == "" {
+				finalName = fmt.Sprintf("Source %d", srcID)
+			}
+
+			res.MissingSources = append(res.MissingSources, MissingSourceInfo{
+				ID:   strconv.FormatInt(srcID, 10),
+				Name: finalName,
+			})
+		}
+	}
+
+	return res, nil
 }

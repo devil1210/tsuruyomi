@@ -53,12 +53,36 @@ func ImportBackupFile(c *fiber.Ctx) error {
 
 // ValidateBackup validates backup content from a URL or body payload.
 func ValidateBackup(c *fiber.Ctx) error {
-	return c.SendStatus(fiber.StatusOK) // Stub success
+	res, err := service.ValidateBackup(c.Context(), c.Body())
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(res)
 }
 
 // ValidateBackupFile validates backup content from an uploaded file.
 func ValidateBackupFile(c *fiber.Ctx) error {
-	return c.SendStatus(fiber.StatusOK) // Stub success
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to get file: " + err.Error()})
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to open file: " + err.Error()})
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file: " + err.Error()})
+	}
+
+	res, err := service.ValidateBackup(c.Context(), data)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(res)
 }
 
 // ExportBackup exports backup data.

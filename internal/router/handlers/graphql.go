@@ -3750,9 +3750,48 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "VALIDATE_BACKUP", "validateBackup":
+		var dataBytes []byte
+		if form, err := c.MultipartForm(); err == nil && form != nil {
+			for _, files := range form.File {
+				for _, fh := range files {
+					if f, err := fh.Open(); err == nil {
+						dataBytes, _ = io.ReadAll(f)
+						f.Close()
+						if len(dataBytes) > 0 {
+							break
+						}
+					}
+				}
+				if len(dataBytes) > 0 {
+					break
+				}
+			}
+		}
+		if len(dataBytes) == 0 {
+			dataBytes = c.Body()
+		}
+
+		res, err := service.ValidateBackup(c.Context(), dataBytes)
+		if err != nil {
+			log.Printf("[BACKUP] Warning validating backup: %v", err)
+			res = &service.ValidateBackupResult{
+				MissingSources:  []service.MissingSourceInfo{},
+				MissingTrackers: []interface{}{},
+			}
+		}
+
+		missingSrcNodes := []map[string]interface{}{}
+		for _, s := range res.MissingSources {
+			missingSrcNodes = append(missingSrcNodes, map[string]interface{}{
+				"id":         s.ID,
+				"name":       s.Name,
+				"__typename": "SourceType",
+			})
+		}
+
 		data = map[string]interface{}{
 			"validateBackup": map[string]interface{}{
-				"missingSources":  []interface{}{},
+				"missingSources":  missingSrcNodes,
 				"missingTrackers": []interface{}{},
 				"__typename":      "ValidateBackupPayload",
 			},

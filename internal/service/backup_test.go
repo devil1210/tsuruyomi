@@ -160,3 +160,35 @@ func TestDecodeExportedBackup(t *testing.T) {
 	}
 	t.Logf("Total Chapters in backup: %d", totalChapters)
 }
+
+func TestValidateBackup_EmptyAndProtobuf(t *testing.T) {
+	// Empty data should return empty missing sources without error
+	res, err := ValidateBackup(t.Context(), []byte{})
+	if err != nil {
+		t.Fatalf("ValidateBackup empty data error: %v", err)
+	}
+	if len(res.MissingSources) != 0 {
+		t.Errorf("Expected 0 missing sources for empty data, got %d", len(res.MissingSources))
+	}
+
+	// Create backup with a source
+	original := &ProtoBackup{
+		BackupManga: []ProtoBackupManga{
+			{Source: 99999999, Title: "Test Manga", URL: "/test"},
+		},
+		BackupSources: []ProtoBackupSource{
+			{Name: "Uninstalled Source", SourceID: 99999999},
+		},
+	}
+	encoded := EncodeProtoBackup(original)
+
+	// Since DB is nil in unit tests, ValidateBackup returns empty without panic
+	res, err = ValidateBackup(t.Context(), encoded)
+	if err != nil {
+		t.Fatalf("ValidateBackup encoded data error: %v", err)
+	}
+	if res == nil {
+		t.Fatalf("Expected non-nil result from ValidateBackup")
+	}
+}
+

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -228,6 +229,30 @@ func InstallExtensionFile(c *fiber.Ctx) error {
 	}
 	_ = file // suppress unused warning
 	return c.SendStatus(fiber.StatusCreated)
+}
+
+// InstallMissingExtensions installs extensions corresponding to a list of source IDs.
+func InstallMissingExtensions(c *fiber.Ctx) error {
+	var body struct {
+		SourceIDs []string `json:"sourceIds"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid json body"})
+	}
+
+	cfg, _ := c.Locals("config").(*config.Config)
+	var intSourceIDs []int64
+	for _, idStr := range body.SourceIDs {
+		if id, err := strconv.ParseInt(idStr, 10, 64); err == nil && id > 0 {
+			intSourceIDs = append(intSourceIDs, id)
+		}
+	}
+
+	installed, failed := service.InstallExtensionsForSources(c.Context(), cfg, intSourceIDs)
+	return c.JSON(fiber.Map{
+		"installed": installed,
+		"failed":    failed,
+	})
 }
 
 // UpdateExtension updates an extension by package name.

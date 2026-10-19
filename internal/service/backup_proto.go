@@ -696,21 +696,38 @@ func RestoreFromProtoBackup(ctx context.Context, pb *ProtoBackup) error {
 		ON CONFLICT (id) DO NOTHING
 	`)
 
-	// 0b. Restore Sources from backup metadata
+	// 0b. Restore Sources from backup metadata (both BackupSources and BackupManga)
+	allSources := make(map[int64]string)
 	for _, src := range pb.BackupSources {
-		if src.SourceID <= 0 {
-			continue
+		if src.SourceID > 0 {
+			allSources[src.SourceID] = src.Name
 		}
+	}
+	for _, m := range pb.BackupManga {
+		if m.Source > 0 {
+			if _, exists := allSources[m.Source]; !exists {
+				allSources[m.Source] = ""
+			}
+		}
+	}
+
+	for srcID, srcName := range allSources {
 		var exists bool
-		_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM suwayomi.source WHERE id = $1)", src.SourceID).Scan(&exists)
-		if !exists {
-			srcName := src.Name
+		var isInstalled bool
+		_ = tx.QueryRow(ctx, `
+			SELECT true, COALESCE(e.is_installed, false)
+			FROM suwayomi.source s
+			LEFT JOIN suwayomi.extension e ON s.extension = e.id
+			WHERE s.id = $1
+		`, srcID).Scan(&exists, &isInstalled)
+
+		if !exists || !isInstalled {
 			srcLang := "all"
-			pkgName := fmt.Sprintf("imported.source.%d", src.SourceID)
+			pkgName := fmt.Sprintf("imported.source.%d", srcID)
 			extName := "Imported Source"
 			iconURL := ""
 
-			if known, ok := database.KnownSourcesByID[src.SourceID]; ok {
+			if known, ok := database.KnownSourcesByID[srcID]; ok {
 				if srcName == "" {
 					srcName = known.Name
 				}
@@ -719,7 +736,7 @@ func RestoreFromProtoBackup(ctx context.Context, pb *ProtoBackup) error {
 				extName = known.ExtName
 				iconURL = known.IconURL
 			} else if srcName == "" {
-				srcName = fmt.Sprintf("Source %d", src.SourceID)
+				srcName = fmt.Sprintf("Source %d", srcID)
 			}
 
 			var extID int
@@ -734,7 +751,7 @@ func RestoreFromProtoBackup(ctx context.Context, pb *ProtoBackup) error {
 					INSERT INTO suwayomi.source (id, name, lang, extension, content_warning)
 					VALUES ($1, $2, $3, $4, 0)
 					ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, lang = EXCLUDED.lang, extension = EXCLUDED.extension
-				`, src.SourceID, srcName, srcLang, extID)
+				`, srcID, srcName, srcLang, extID)
 			}
 		}
 	}
