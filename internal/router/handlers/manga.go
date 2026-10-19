@@ -62,6 +62,18 @@ func isKnownDeadDomain(rawUrl string) bool {
 }
 
 func downloadImageRaw(ctx context.Context, cfg *config.Config, imgURL string) ([]byte, string, error) {
+	if imgURL == "" {
+		return nil, "", fmt.Errorf("empty image URL")
+	}
+
+	// Fast-path: If FlareSolverr is enabled and we already have a cached session for this domain, use it directly!
+	if cfg != nil && cfg.FlareSolverr.Enabled && util.HasSession(util.ExtractDomain(imgURL)) {
+		fsData, mimeType, fsErr := util.DownloadWithFlareSolverrAndReferer(ctx, cfg, imgURL, imgURL)
+		if fsErr == nil && len(fsData) > 0 {
+			return fsData, mimeType, nil
+		}
+	}
+
 	req, reqErr := http.NewRequestWithContext(ctx, "GET", imgURL, nil)
 	if reqErr != nil {
 		return nil, "", reqErr
@@ -640,12 +652,30 @@ func GetPageImage(c *fiber.Ctx) error {
 
 	// If we have an image URL, fetch it directly via Go HTTP client (Zero JVM!)
 	if imageURL != "" {
+		ref := ""
+		if manga != nil && manga.RealURL != nil {
+			ref = *manga.RealURL
+		}
+
+		// Fast-path: If FlareSolverr is enabled and we already have a cached session for this domain,
+		// use DownloadWithFlareSolverrAndReferer directly to leverage cached cookies immediately!
+		if cfg != nil && cfg.FlareSolverr.Enabled && util.HasSession(util.ExtractDomain(imageURL)) {
+			fsData, mimeType, fsErr := util.DownloadWithFlareSolverrAndReferer(ctx, cfg, imageURL, ref)
+			if fsErr == nil && len(fsData) > 0 {
+				_ = os.MkdirAll(cacheDir, 0755)
+				_ = os.WriteFile(cachePath, fsData, 0644)
+				c.Set(fiber.HeaderContentType, mimeType)
+				c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
+				return c.Send(fsData)
+			}
+		}
+
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
 		if err == nil {
 			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
 			req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
-			if manga != nil && manga.RealURL != nil && *manga.RealURL != "" {
-				req.Header.Set("Referer", *manga.RealURL)
+			if ref != "" {
+				req.Header.Set("Referer", ref)
 			}
 
 			resp, err := sources.DefaultClient.Do(req)
@@ -667,10 +697,6 @@ func GetPageImage(c *fiber.Ctx) error {
 					}
 				} else if (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusServiceUnavailable) && cfg != nil && cfg.FlareSolverr.Enabled {
 					log.Printf("[PAGES] Cloudflare challenge on page %d (HTTP %d). Requesting FlareSolverr bypass...", index, resp.StatusCode)
-					ref := ""
-					if manga != nil && manga.RealURL != nil {
-						ref = *manga.RealURL
-					}
 					fsData, mimeType, fsErr := util.DownloadWithFlareSolverrAndReferer(ctx, cfg, imageURL, ref)
 					if fsErr == nil && len(fsData) > 0 {
 						_ = os.MkdirAll(cacheDir, 0755)
@@ -682,10 +708,6 @@ func GetPageImage(c *fiber.Ctx) error {
 					log.Printf("[PAGES] FlareSolverr bypass error for page %d: %v", index, fsErr)
 				}
 			} else if cfg != nil && cfg.FlareSolverr.Enabled {
-				ref := ""
-				if manga != nil && manga.RealURL != nil {
-					ref = *manga.RealURL
-				}
 				fsData, mimeType, fsErr := util.DownloadWithFlareSolverrAndReferer(ctx, cfg, imageURL, ref)
 				if fsErr == nil && len(fsData) > 0 {
 					_ = os.MkdirAll(cacheDir, 0755)
