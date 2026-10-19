@@ -37,34 +37,8 @@ var DefaultExtensionStores = []models.ExtensionStore{
 	},
 }
 
-// EnsureDefaultExtensionStores seeds the extensionstore table if it is currently empty.
+// EnsureDefaultExtensionStores is a no-op to keep clean installations clean without default repositories.
 func EnsureDefaultExtensionStores(ctx context.Context) error {
-	if DB == nil {
-		return fmt.Errorf("database not initialized")
-	}
-
-	var count int
-	err := DB.QueryRow(ctx, "SELECT COUNT(*) FROM suwayomi.extensionstore").Scan(&count)
-	if err != nil {
-		return err
-	}
-
-	if count == 0 {
-		log.Println("[DATABASE] Seeding default extension repositories...")
-		for _, s := range DefaultExtensionStores {
-			query := `
-				INSERT INTO suwayomi.extensionstore 
-				(index_url, name, badge_label, signing_key, contact_website, contact_discord, is_legacy, extension_list_url)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-				ON CONFLICT (index_url) DO NOTHING
-			`
-			_, err := DB.Exec(ctx, query, s.IndexURL, s.Name, s.BadgeLabel, s.SigningKey, s.ContactWebsite, s.ContactDiscord, s.IsLegacy, s.ExtensionListURL)
-			if err != nil {
-				log.Printf("[DATABASE] Warning inserting default extension store %s: %v\n", s.Name, err)
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -73,9 +47,6 @@ func GetExtensionStores(ctx context.Context) ([]models.ExtensionStore, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-
-	// Make sure defaults are present if completely empty
-	_ = EnsureDefaultExtensionStores(ctx)
 
 	rows, err := DB.Query(ctx, `
 		SELECT id, index_url, name, badge_label, signing_key, contact_website, 

@@ -91,7 +91,7 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("database.min_conns", 2)
 	v.SetDefault("data.root_dir", "./data")
 	v.SetDefault("auth.mode", "none")
-	v.SetDefault("extensions.repo_url", "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json")
+	v.SetDefault("extensions.repo_url", "")
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("sidecar.enabled", false)
 	v.SetDefault("sidecar.base_url", "http://127.0.0.1:4568")
@@ -124,6 +124,60 @@ func Load(cfgFile string) (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
+	}
+
+	// Standard container / 12-factor environment variable overrides
+	if envDSN := os.Getenv("DATABASE_DSN"); envDSN != "" {
+		cfg.Database.DSN = envDSN
+	} else if envURL := os.Getenv("DATABASE_URL"); envURL != "" {
+		cfg.Database.DSN = envURL
+	} else if os.Getenv("DBUSER") != "" || os.Getenv("DBHOST") != "" {
+		user := os.Getenv("DBUSER")
+		if user == "" {
+			user = "tsuruyomi"
+		}
+		pass := os.Getenv("DBPASS")
+		if pass == "" {
+			pass = "tsuruyomi_pass"
+		}
+		host := os.Getenv("DBHOST")
+		if host == "" {
+			host = "postgres"
+		}
+		port := os.Getenv("DBPORT")
+		if port == "" {
+			port = "5432"
+		}
+		dbname := os.Getenv("DBNAME")
+		if dbname == "" {
+			dbname = "tsuruyomi"
+		}
+		cfg.Database.DSN = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, pass, host, port, dbname)
+	}
+
+	if envPort := os.Getenv("SERVER_PORT"); envPort != "" {
+		var p int
+		if _, err := fmt.Sscan(envPort, &p); err == nil && p > 0 {
+			cfg.Server.Port = p
+		}
+	} else if envPort := os.Getenv("PORT"); envPort != "" {
+		var p int
+		if _, err := fmt.Sscan(envPort, &p); err == nil && p > 0 {
+			cfg.Server.Port = p
+		}
+	}
+
+	if envSidecar := os.Getenv("SIDECAR_ENABLED"); envSidecar != "" {
+		cfg.Sidecar.Enabled = (envSidecar == "true" || envSidecar == "1")
+	}
+	if envSidecarURL := os.Getenv("SIDECAR_BASE_URL"); envSidecarURL != "" {
+		cfg.Sidecar.BaseURL = envSidecarURL
+	}
+	if envFlare := os.Getenv("FLARESOLVERR_ENABLED"); envFlare != "" {
+		cfg.FlareSolverr.Enabled = (envFlare == "true" || envFlare == "1")
+	}
+	if envFlareURL := os.Getenv("FLARESOLVERR_URL"); envFlareURL != "" {
+		cfg.FlareSolverr.URL = envFlareURL
 	}
 
 	// Normalize subpath

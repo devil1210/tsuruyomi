@@ -4,16 +4,16 @@ services:
     container_name: tsuruyomi
     restart: unless-stopped
     ports:
-      - "7654:7654"
+      - "${SERVER_PORT:-7654}:${SERVER_PORT:-7654}"
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      - DATABASE_DSN=postgres://tsuruyomi:tsuruyomi_pass@postgres:5432/tsuruyomi?sslmode=disable
-      - SERVER_PORT=7654
-      - SIDECAR_ENABLED=false
-      - FLARESOLVERR_ENABLED=false
-      - TZ=America/Santiago
+      - DATABASE_DSN=${DATABASE_DSN:-postgres://${DBUSER:-tsuruyomi}:${DBPASS:-tsuruyomi_pass}@${DBHOST:-postgres}:${DBPORT:-5432}/${DBNAME:-tsuruyomi}?sslmode=disable}
+      - SERVER_PORT=${SERVER_PORT:-7654}
+      - SIDECAR_ENABLED=${SIDECAR_ENABLED:-false}
+      - FLARESOLVERR_ENABLED=${FLARESOLVERR_ENABLED:-false}
+      - TZ=${TZ:-America/Santiago}
     volumes:
       - tsuruyomi_config:/config
       - tsuruyomi_data:/data
@@ -23,13 +23,13 @@ services:
     container_name: tsuruyomi-db
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=tsuruyomi
-      - POSTGRES_PASSWORD=tsuruyomi_pass
-      - POSTGRES_DB=tsuruyomi
+      - POSTGRES_USER=${DBUSER:-tsuruyomi}
+      - POSTGRES_PASSWORD=${DBPASS:-tsuruyomi_pass}
+      - POSTGRES_DB=${DBNAME:-tsuruyomi}
     volumes:
       - tsuruyomi_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tsuruyomi -d tsuruyomi"]
+      test: ["CMD-SHELL", "pg_isready -U ${DBUSER:-tsuruyomi} -d ${DBNAME:-tsuruyomi}"]
       interval: 5s
       timeout: 5s
       retries: 5

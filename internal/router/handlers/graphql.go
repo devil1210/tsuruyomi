@@ -284,30 +284,42 @@ func getExtensionNodes(ctx context.Context, filterStoreUrl string) []map[string]
 		}
 	}
 
-	// 2. Add all native Go extensions
-	type extItem struct {
-		pkgName string
-		info    NativeExtInfo
-	}
-	var sortedExts []extItem
-	for pkg, info := range NativeGoExtensionInfo {
-		if _, isAlias := ExtensionPackageAliases[pkg]; isAlias {
-			continue
+	// 2. Add native Go extensions ONLY if the Tsuruyomi store is configured
+	hasTsuruStore := false
+	if stores, err := database.GetExtensionStores(ctx); err == nil {
+		for _, s := range stores {
+			if strings.Contains(s.IndexURL, "tsuruyomi") || strings.Contains(s.IndexURL, "devil1210") {
+				hasTsuruStore = true
+				break
+			}
 		}
-		sortedExts = append(sortedExts, extItem{pkgName: pkg, info: info})
 	}
-	sort.Slice(sortedExts, func(i, j int) bool {
-		return sortedExts[i].info.Name < sortedExts[j].info.Name
-	})
 
-	for _, item := range sortedExts {
-		canon := getCanonicalPkg(item.pkgName)
-		nameKey := strings.ToLower(strings.TrimSpace(item.info.Name)) + "::" + strings.ToLower(strings.TrimSpace(item.info.Lang))
-		if !seenPkg[item.pkgName] && !seenPkg[canon] && !seenNameLang[nameKey] {
-			seenPkg[item.pkgName] = true
-			seenPkg[canon] = true
-			seenNameLang[nameKey] = true
-			nodes = append(nodes, getExtensionMap(ctx, item.pkgName))
+	if hasTsuruStore && (filterStoreUrl == "" || filterStoreUrl == DefaultExtensionStoreURL) {
+		type extItem struct {
+			pkgName string
+			info    NativeExtInfo
+		}
+		var sortedExts []extItem
+		for pkg, info := range NativeGoExtensionInfo {
+			if _, isAlias := ExtensionPackageAliases[pkg]; isAlias {
+				continue
+			}
+			sortedExts = append(sortedExts, extItem{pkgName: pkg, info: info})
+		}
+		sort.Slice(sortedExts, func(i, j int) bool {
+			return sortedExts[i].info.Name < sortedExts[j].info.Name
+		})
+
+		for _, item := range sortedExts {
+			canon := getCanonicalPkg(item.pkgName)
+			nameKey := strings.ToLower(strings.TrimSpace(item.info.Name)) + "::" + strings.ToLower(strings.TrimSpace(item.info.Lang))
+			if !seenPkg[item.pkgName] && !seenPkg[canon] && !seenNameLang[nameKey] {
+				seenPkg[item.pkgName] = true
+				seenPkg[canon] = true
+				seenNameLang[nameKey] = true
+				nodes = append(nodes, getExtensionMap(ctx, item.pkgName))
+			}
 		}
 	}
 
@@ -321,8 +333,6 @@ func buildServerSettingsMap(ctx context.Context, cfg *config.Config) map[string]
 		for _, s := range stores {
 			extRepos = append(extRepos, s.IndexURL)
 		}
-	} else {
-		extRepos = []string{DefaultExtensionStoreURL, "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb"}
 	}
 
 	dbSettings, _ := database.GetAllServerSettings(ctx)
@@ -1351,10 +1361,6 @@ func HandleGraphQL(c *fiber.Ctx) error {
 	case "GET_SOURCES_LIST":
 		nodes := []map[string]interface{}{}
 		srcs, err := database.GetSourceList(c.Context())
-		if err == nil && len(srcs) == 0 {
-			_ = database.EnsureNativeSources(c.Context())
-			srcs, _ = database.GetSourceList(c.Context())
-		}
 		if err == nil {
 			for _, src := range srcs {
 				if sid, errSid := strconv.ParseInt(src.ID, 10, 64); errSid == nil && sid > 0 {
@@ -2391,9 +2397,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 	case "GET_EXTENSION_STORES":
 		dbStores, err := database.GetExtensionStores(c.Context())
-		if err != nil || len(dbStores) == 0 {
-			_ = database.EnsureDefaultExtensionStores(c.Context())
-			dbStores, _ = database.GetExtensionStores(c.Context())
+		if err != nil {
+			dbStores = []models.ExtensionStore{}
 		}
 
 		stores := []map[string]interface{}{}

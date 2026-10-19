@@ -97,10 +97,7 @@ func EnsureSchema(ctx context.Context) error {
 		ON CONFLICT (id) DO NOTHING
 	`)
 
-	// Ensure default extension repositories are present if table is empty
-	_ = EnsureDefaultExtensionStores(ctx)
-
-	// Ensure all native Go extensions and sources are seeded into database
+	// Ensure library manga placeholder sources exist if DB was restored with mangas
 	_ = EnsureNativeSources(ctx)
 
 	// Ensure server settings table exists

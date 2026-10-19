@@ -5,6 +5,13 @@ CONFIG_FILE="${CONFIG_PATH:-/config/config.yaml}"
 
 mkdir -p /config /data
 
+DBUSER="${DBUSER:-tsuruyomi}"
+DBPASS="${DBPASS:-tsuruyomi_pass}"
+DBHOST="${DBHOST:-postgres}"
+DBPORT="${DBPORT:-5432}"
+DBNAME="${DBNAME:-tsuruyomi}"
+DEFAULT_DSN="postgres://${DBUSER}:${DBPASS}@${DBHOST}:${DBPORT}/${DBNAME}?sslmode=disable"
+
 # If config.yaml does not exist in the persistent volume, create a default one
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "[TSURUYOMI] Initializing default configuration at $CONFIG_FILE..."
@@ -15,7 +22,7 @@ server:
   subpath: "${SERVER_SUBPATH:-}"
 
 database:
-  dsn: "${DATABASE_DSN:-postgres://tsuruyomi:tsuruyomi_pass@postgres:5432/tsuruyomi?sslmode=disable}"
+  dsn: "${DATABASE_DSN:-$DEFAULT_DSN}"
   max_conns: 20
   min_conns: 2
 
@@ -28,7 +35,7 @@ auth:
   password: "${AUTH_PASSWORD:-}"
 
 extensions:
-  repo_url: "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
+  repo_url: "${EXTENSIONS_REPO_URL:-}"
 
 logging:
   level: "${LOG_LEVEL:-info}"

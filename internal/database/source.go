@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 
 	"tsuruyomi/internal/models"
@@ -421,46 +420,13 @@ func init() {
 	}
 }
 
-// EnsureNativeSources populates suwayomi.extension and suwayomi.source tables with native Go sources and resolves unmapped mangas.
+// EnsureNativeSources resolves placeholder rows for any existing library mangas without pre-installing sources.
 func EnsureNativeSources(ctx context.Context) error {
 	if DB == nil {
 		return fmt.Errorf("database not initialized")
 	}
 
-	for _, ext := range NativeExtensionsSeed {
-		var extID int
-		err := DB.QueryRow(ctx, `
-			INSERT INTO suwayomi.extension (id, apk_name, icon_url, name, pkg_name, version_name, version_code, lang, is_installed, has_update, is_obsolete, class_name, store_index_url, extension_lib, apk_url, content_warning)
-			VALUES ($1, $2, $3, $4, $5, '1.0-go', 100, $6, true, false, false, '', 'https://raw.githubusercontent.com/devil1210/tsuruyomi-extensions/main/index.json', '1.5', '', $7)
-			ON CONFLICT (pkg_name) DO UPDATE SET
-				name = EXCLUDED.name,
-				icon_url = EXCLUDED.icon_url,
-				lang = EXCLUDED.lang,
-				is_installed = true
-			RETURNING id
-		`, ext.ID, ext.PkgName+".apk", ext.IconURL, ext.Name, ext.PkgName, ext.Lang, ext.ContentWarning).Scan(&extID)
-		if err != nil {
-			log.Printf("[DATABASE] Warning inserting native extension %s: %v", ext.Name, err)
-			continue
-		}
-
-		for _, s := range ext.Sources {
-			_, err := DB.Exec(ctx, `
-				INSERT INTO suwayomi.source (id, name, lang, extension, content_warning)
-				VALUES ($1, $2, $3, $4, $5)
-				ON CONFLICT (id) DO UPDATE SET
-					name = EXCLUDED.name,
-					lang = EXCLUDED.lang,
-					extension = EXCLUDED.extension,
-					content_warning = EXCLUDED.content_warning
-			`, s.ID, s.Name, s.Lang, extID, s.ContentWarning)
-			if err != nil {
-				log.Printf("[DATABASE] Warning inserting native source %s (%d): %v", s.Name, s.ID, err)
-			}
-		}
-	}
-
-	// Also ensure any mangas with sources not yet in suwayomi.source have placeholder rows so foreign keys and migrations succeed
+	// Ensure any mangas with sources not yet in suwayomi.source have placeholder rows so foreign keys and migrations succeed
 	_, _ = DB.Exec(ctx, `
 		INSERT INTO suwayomi.extension (apk_name, icon_url, name, pkg_name, version_name, version_code, lang, is_installed, has_update, is_obsolete, class_name, store_index_url, extension_lib, apk_url, content_warning)
 		SELECT 'imported.apk', '', 'Imported Source', 'imported.source.' || m.source, '1.0', 1, 'all', false, false, false, '', '', '1.0', '', 0
@@ -524,13 +490,6 @@ func EnsureNativeSources(ctx context.Context) error {
 func GetSourceList(ctx context.Context) ([]models.SourceDataClass, error) {
 	if DB == nil {
 		return []models.SourceDataClass{}, nil
-	}
-
-	// If source table is empty, auto-seed native sources first
-	var count int
-	_ = DB.QueryRow(ctx, "SELECT COUNT(*) FROM suwayomi.source").Scan(&count)
-	if count == 0 {
-		_ = EnsureNativeSources(ctx)
 	}
 
 	query := `

@@ -114,7 +114,7 @@ func SyncExtensionRepositories(ctx context.Context, cfg *config.Config) error {
 
 	stores, err := database.GetExtensionStores(ctx)
 	if err != nil || len(stores) == 0 {
-		stores = database.DefaultExtensionStores
+		return nil
 	}
 
 	for _, store := range stores {
@@ -170,9 +170,6 @@ func InstallExtension(ctx context.Context, cfg *config.Config, pkgName string) e
 
 	// 1. Locate extension entry in configured extension stores
 	stores, _ := database.GetExtensionStores(ctx)
-	if len(stores) == 0 {
-		stores = database.DefaultExtensionStores
-	}
 
 	var foundEntry *RepoIndexEntry
 	var foundStoreURL string
@@ -450,9 +447,6 @@ func InstallExtensionsForSources(ctx context.Context, cfg *config.Config, source
 
 	// 2. Check in configured extension stores
 	stores, _ := database.GetExtensionStores(ctx)
-	if len(stores) == 0 {
-		stores = database.DefaultExtensionStores
-	}
 	for _, store := range stores {
 		if !strings.HasSuffix(store.IndexURL, ".json") {
 			continue

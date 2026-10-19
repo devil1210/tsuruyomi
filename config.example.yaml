@@ -28,8 +28,8 @@ auth:
   password: "changeme"
 
 extensions:
-  # Mihon/Tachiyomi extension repository index
-  repo_url: "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
+  # Mihon/Tachiyomi extension repository index (leave empty for clean install, or specify repo URL)
+  repo_url: ""
 
 logging:
   # Log level: "debug", "info", "warn", "error"
