@@ -13,6 +13,7 @@ import (
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/extensions"
 	"tsuruyomi/internal/router"
+	"tsuruyomi/internal/service"
 	"tsuruyomi/internal/sources"
 )
 
@@ -64,6 +65,9 @@ func main() {
 		log.Printf("Warning: failed to load installed extensions: %v", err)
 	}
 
+	// Start background periodic library update scheduler
+	service.GlobalUpdateManager.StartScheduler(context.Background())
+
 	// Initialize Fiber app setup
 	app := router.Setup(cfg)
 
@@ -81,6 +85,9 @@ func main() {
 	// Wait for termination signal
 	<-shutdown
 	log.Println("Gracefully shutting down...")
+
+	// Cancel any running library updates
+	service.GlobalUpdateManager.CancelUpdate()
 
 	// Shutdown fiber app with a timeout of 10s
 	if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {

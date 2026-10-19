@@ -638,6 +638,12 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						} else if i, ok := v.(int); ok {
 							cfg.Server.Port = i
 						}
+					case "globalUpdateInterval":
+						if f, ok := v.(float64); ok {
+							service.GlobalUpdateManager.SetInterval(f)
+						} else if i, ok := v.(int); ok {
+							service.GlobalUpdateManager.SetInterval(float64(i))
+						}
 					case "ip":
 						if s, ok := v.(string); ok && s != "" {
 							cfg.Server.Host = s
@@ -1218,18 +1224,24 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 	case "GET_UPDATE_STATUS", "GET_GLOBAL_UPDATE_SUMMARY":
 		data = map[string]interface{}{
-			"libraryUpdateStatus": map[string]interface{}{
-				"jobsInfo": map[string]interface{}{
-					"isRunning":              false,
-					"totalJobs":              0,
-					"finishedJobs":           0,
-					"skippedCategoriesCount": 0,
-					"skippedMangasCount":     0,
-					"__typename":             "UpdaterJobsInfoType",
-				},
-				"categoryUpdates": []interface{}{},
-				"mangaUpdates":    []interface{}{},
-				"__typename":      "LibraryUpdateStatus",
+			"libraryUpdateStatus": service.GlobalUpdateManager.GetStatusGraphQL(),
+		}
+
+	case "UPDATE_LIBRARY", "updateLibrary":
+		service.GlobalUpdateManager.StartUpdate()
+		data = map[string]interface{}{
+			"updateLibrary": map[string]interface{}{
+				"updateStatus": service.GlobalUpdateManager.GetStatusGraphQL(),
+				"__typename":   "UpdateLibraryPayload",
+			},
+		}
+
+	case "STOP_UPDATER", "updateStop":
+		service.GlobalUpdateManager.CancelUpdate()
+		data = map[string]interface{}{
+			"updateStop": map[string]interface{}{
+				"clientMutationId": nil,
+				"__typename":       "UpdateStopPayload",
 			},
 		}
 
