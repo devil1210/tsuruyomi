@@ -41,8 +41,8 @@
       "Manga downloads are stored in /data and config in /config."
     ],
     "mini_changelog": [],
-    "display_version": "1.0.0",
-    "updated_at": "2026-10-17"
+    "display_version": "1.0.1",
+    "updated_at": "2026-10-19"
   },
   "source": {
     "provider": "official",
@@ -148,12 +148,12 @@
     "related_services": [
       {
         "name": "tsuruyomi-postgres",
-        "image": "postgres:16-alpine"
+        "image": "postgres:17-alpine"
       }
     ],
     "restart": "unless-stopped",
     "stop_grace_period": null,
-    "original_compose": "name: tsuruyomi\nservices:\n  tsuruyomi:\n    image: ghcr.io/devil1210/tsuruyomi:latest\n    container_name: tsuruyomi\n    restart: unless-stopped\n    networks:\n    - tsuruyomi-net\n    depends_on:\n      tsuruyomi-postgres:\n        condition: service_healthy\n    ports:\n    - target: 7654\n      published: '7654'\n      protocol: tcp\n    environment:\n      SERVER_PORT: '7654'\n      DATABASE_DSN: postgres://tsuruyomi:${GENERATED_POSTGRES_PASSWORD}@tsuruyomi-postgres:5432/tsuruyomi?sslmode=disable\n      SIDECAR_ENABLED: 'false'\n      FLARESOLVERR_ENABLED: 'false'\n      TZ: $TZ\n    volumes:\n    - type: bind\n      source: /DATA/AppData/$AppID/config\n      target: /config\n    - type: bind\n      source: /DATA/AppData/$AppID/data\n      target: /data\n  tsuruyomi-postgres:\n    image: postgres:16-alpine\n    container_name: tsuruyomi-postgres\n    restart: unless-stopped\n    environment:\n      POSTGRES_DB: tsuruyomi\n      POSTGRES_USER: tsuruyomi\n      POSTGRES_PASSWORD: ${GENERATED_POSTGRES_PASSWORD}\n      TZ: $TZ\n    networks:\n    - tsuruyomi-net\n    volumes:\n    - type: bind\n      source: /DATA/AppData/$AppID/postgres_data\n      target: /var/lib/postgresql/data\n    healthcheck:\n      test:\n      - CMD\n      - pg_isready\n      - -U\n      - tsuruyomi\n      - -d\n      - tsuruyomi\n      interval: 5s\n      timeout: 10s\n      retries: 5\nnetworks:\n  tsuruyomi-net:\n    driver: bridge\n"
+    "original_compose": "name: tsuruyomi\nservices:\n  tsuruyomi:\n    image: ghcr.io/devil1210/tsuruyomi:latest\n    container_name: tsuruyomi\n    restart: unless-stopped\n    networks:\n    - tsuruyomi-net\n    depends_on:\n      tsuruyomi-postgres:\n        condition: service_healthy\n    ports:\n    - target: 7654\n      published: '7654'\n      protocol: tcp\n    environment:\n      SERVER_PORT: '7654'\n      DATABASE_DSN: postgres://tsuruyomi:${GENERATED_POSTGRES_PASSWORD}@tsuruyomi-postgres:5432/tsuruyomi?sslmode=disable\n      SIDECAR_ENABLED: 'false'\n      FLARESOLVERR_ENABLED: 'false'\n      TZ: $TZ\n    volumes:\n    - type: bind\n      source: /DATA/AppData/$AppID/config\n      target: /config\n    - type: bind\n      source: /DATA/AppData/$AppID/data\n      target: /data\n  tsuruyomi-postgres:\n    image: postgres:17-alpine\n    container_name: tsuruyomi-postgres\n    restart: unless-stopped\n    environment:\n      POSTGRES_DB: tsuruyomi\n      POSTGRES_USER: tsuruyomi\n      POSTGRES_PASSWORD: ${GENERATED_POSTGRES_PASSWORD}\n      TZ: $TZ\n    networks:\n    - tsuruyomi-net\n    volumes:\n    - type: bind\n      source: /DATA/AppData/$AppID/postgres_data\n      target: /var/lib/postgresql/data\n    healthcheck:\n      test:\n      - CMD\n      - pg_isready\n      - -U\n      - tsuruyomi\n      - -d\n      - tsuruyomi\n      interval: 5s\n      timeout: 10s\n      retries: 5\nnetworks:\n  tsuruyomi-net:\n    driver: bridge\n"
   },
   "compose_stack": {
     "project_name": "tsuruyomi",
@@ -164,7 +164,7 @@
     "services": [
       {
         "name": "postgres",
-        "image": "postgres:16-alpine",
+        "image": "postgres:17-alpine",
         "is_main": false,
         "role": "dependency",
         "vmid_offset": 1,
@@ -172,7 +172,7 @@
         "frontend_network": false,
         "private_network": true,
         "compose": {
-          "image": "postgres:16-alpine",
+          "image": "postgres:17-alpine",
           "container_name": "postgres",
           "restart": "unless-stopped",
           "environment": {
