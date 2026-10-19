@@ -881,6 +881,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					"name":              cat.Name,
 					"order":             cat.Order,
 					"default":           cat.Default,
+					"isDefaultCategory": cat.ID == 0,
 					"includeInUpdate":   cat.IncludeInUpdate.GraphQLEnum(),
 					"includeInDownload": cat.IncludeInDownload.GraphQLEnum(),
 					"mangas": map[string]interface{}{
@@ -2475,7 +2476,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 		data = map[string]interface{}{
 			"category": map[string]interface{}{
-				"id": categoryId,
+				"id":                categoryId,
+				"isDefaultCategory": categoryId == 0,
 				"mangas": map[string]interface{}{
 					"nodes":      nodes,
 					"totalCount": len(nodes),
@@ -3310,6 +3312,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			"name":              "",
 			"order":             0,
 			"default":           false,
+			"isDefaultCategory": catID == 0,
 			"includeInUpdate":   "UNSET",
 			"includeInDownload": "UNSET",
 			"__typename":        "CategoryType",
@@ -3377,6 +3380,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						"name":              cat.Name,
 						"order":             cat.Order,
 						"default":           cat.Default,
+						"isDefaultCategory": cat.ID == 0,
 						"includeInUpdate":   cat.IncludeInUpdate.GraphQLEnum(),
 						"includeInDownload": cat.IncludeInDownload.GraphQLEnum(),
 						"__typename":        "CategoryType",
@@ -3415,6 +3419,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			"name":              catName,
 			"order":             0,
 			"default":           false,
+			"isDefaultCategory": newID == 0,
 			"includeInUpdate":   "UNSET",
 			"includeInDownload": "UNSET",
 			"__typename":        "CategoryType",
@@ -3453,8 +3458,9 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		data = map[string]interface{}{
 			"deleteCategory": map[string]interface{}{
 				"category": map[string]interface{}{
-					"id":         catID,
-					"__typename": "CategoryType",
+					"id":                catID,
+					"isDefaultCategory": catID == 0,
+					"__typename":        "CategoryType",
 				},
 				"__typename": "DeleteCategoryPayload",
 			},
@@ -3496,9 +3502,10 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		cats, _ := database.GetCategoryList(c.Context())
 		for _, cat := range cats {
 			catOrderPayload = append(catOrderPayload, map[string]interface{}{
-				"id":         cat.ID,
-				"order":      cat.Order,
-				"__typename": "CategoryType",
+				"id":                cat.ID,
+				"order":             cat.Order,
+				"isDefaultCategory": cat.ID == 0,
+				"__typename":        "CategoryType",
 			})
 		}
 		if catOrderPayload == nil {
@@ -4209,8 +4216,9 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 			catNodes := make([]map[string]interface{}, 0, len(catList))
 			for _, cId := range catList {
 				catNodes = append(catNodes, map[string]interface{}{
-					"id":         cId,
-					"__typename": "CategoryType",
+					"id":                cId,
+					"isDefaultCategory": cId == 0,
+					"__typename":        "CategoryType",
 				})
 			}
 			node["categories"] = map[string]interface{}{
@@ -4416,7 +4424,8 @@ func updateMangaCategoriesInDB(ctx context.Context, mangaID int64, inputMap map[
 		var count int
 		if err := rows.Scan(&cId, &count); err == nil {
 			nodes = append(nodes, map[string]interface{}{
-				"id": cId,
+				"id":                cId,
+				"isDefaultCategory": cId == 0,
 				"mangas": map[string]interface{}{
 					"totalCount": count,
 					"__typename": "MangaNodeList",

@@ -3025,7 +3025,7 @@ To suppress this warning, you need to explicitly provide the \`palette.${t}Chann
             }
         }
     }
-`,ZG=(e,t,n,r,i=!1)=>{if(!t)return t;if(i)return t.filter(t=>e.some(({key:e})=>e===n(`key`,t)));let a=e.filter(({key:e})=>t.every(t=>n(`key`,t)!==e)).map(r);return[...t,...a]},QG=K`
+`,ZG=(e,t,n,r,i=!1)=>{if(!t)return t;if(i)return t.filter(t=>e.some(({key:e})=>e===n(`key`,t)));let m=new Map();e.forEach(x=>{let res=r(x);m.set(x.key,res??x)});let a=t.map(item=>{let k=n("key",item);if(m.has(k)){let ref=m.get(k);m.delete(k);return ref}return item});return[...a,...m.values()]},QG=K`
     mutation USER_LOGIN($password: String!, $username: String!) {
         login(input: { password: $password, username: $username }) {
             accessToken
