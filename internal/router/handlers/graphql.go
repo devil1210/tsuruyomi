@@ -223,6 +223,9 @@ func getExtensionNodes(ctx context.Context, filterStoreUrl string) []map[string]
 				var cwInt int
 				err := rows.Scan(&name, &pkgName, &versionName, &versionCode, &lang, &iconUrl, &isInstalled, &hasUpdate, &isObsolete, &storeIndexUrl, &cwInt, &extLib)
 				if err == nil {
+					if strings.HasPrefix(pkgName, "imported.source.") || name == "Imported Source" {
+						continue
+					}
 					canon := getCanonicalPkg(pkgName)
 					nameKey := strings.ToLower(strings.TrimSpace(name)) + "::" + strings.ToLower(strings.TrimSpace(lang))
 
@@ -630,6 +633,10 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				break
 			}
 		}
+	}
+
+	if req.OperationName == "" && req.Query == "" {
+		return c.JSON(fiber.Map{"data": nil})
 	}
 
 	log.Printf("GraphQL Dispatcher — Operation: %q, Query: %q, Variables: %v\n", req.OperationName, req.Query, req.Variables)
@@ -1120,6 +1127,34 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
+	case "UPDATE_WEBUI", "updateWebUI":
+		data = map[string]interface{}{
+			"updateWebUI": map[string]interface{}{
+				"getWebUIUpdateStatus": map[string]interface{}{
+					"channel":    "PREVIEW",
+					"tag":        webuiVersion,
+					"progress":   100,
+					"state":      "IDLE",
+					"__typename": "WebUIUpdateStatus",
+				},
+				"__typename": "UpdateWebUIPayload",
+			},
+		}
+
+	case "GET_GLOBAL_METADATA":
+		key, _ := req.Variables["key"].(string)
+		var val string
+		if database.DB != nil && key != "" {
+			_ = database.DB.QueryRow(c.Context(), "SELECT value FROM suwayomi.globalmeta WHERE user_id = 1 AND meta_key = $1", key).Scan(&val)
+		}
+		data = map[string]interface{}{
+			"meta": map[string]interface{}{
+				"key":        key,
+				"value":      val,
+				"__typename": "GlobalMetaType",
+			},
+		}
+
 	case "GET_GLOBAL_METADATAS":
 		nodes := []map[string]interface{}{}
 		if database.DB != nil {
@@ -1322,6 +1357,9 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 		if err == nil {
 			for _, src := range srcs {
+				if sid, errSid := strconv.ParseInt(src.ID, 10, 64); errSid == nil && sid > 0 {
+					sources.RestoreNative(sid)
+				}
 				cw := src.ContentWarning
 				if cw == "" {
 					cw = "SAFE"
@@ -2314,6 +2352,43 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 		data = resMap
 
+	case "GET_EXTENSION_STORE":
+		indexUrl, _ := req.Variables["indexUrl"].(string)
+		store := map[string]interface{}{
+			"id":               1,
+			"name":             "Extension Store",
+			"indexUrl":         indexUrl,
+			"isLegacy":         false,
+			"badgeLabel":       "",
+			"signingKey":       "",
+			"contactWebsite":   "",
+			"contactDiscord":   "",
+			"extensionListUrl": nil,
+			"extensions": map[string]interface{}{
+				"totalCount": 0,
+			},
+			"__typename": "ExtensionStoreType",
+		}
+		if dbStores, err := database.GetExtensionStores(c.Context()); err == nil {
+			for _, s := range dbStores {
+				if s.IndexURL == indexUrl {
+					store["id"] = s.ID
+					store["name"] = s.Name
+					store["badgeLabel"] = s.BadgeLabel
+					store["signingKey"] = s.SigningKey
+					store["contactWebsite"] = s.ContactWebsite
+					store["contactDiscord"] = s.ContactDiscord
+					store["extensions"] = map[string]interface{}{
+						"totalCount": s.TotalCount,
+					}
+					break
+				}
+			}
+		}
+		data = map[string]interface{}{
+			"extensionStore": store,
+		}
+
 	case "GET_EXTENSION_STORES":
 		dbStores, err := database.GetExtensionStores(c.Context())
 		if err != nil || len(dbStores) == 0 {
@@ -2705,7 +2780,51 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_MANGAS_LIBRARY", "GET_MANGAS":
+	case "TRACKER_BIND", "TRACKER_FETCH_BIND", "TRACKER_UPDATE_BIND":
+		data = map[string]interface{}{
+			"bindTrack": map[string]interface{}{
+				"trackRecord": map[string]interface{}{
+					"id":        1,
+					"trackerId": 1,
+					"manga": map[string]interface{}{
+						"id":         0,
+						"__typename": "MangaType",
+					},
+					"__typename": "TrackRecordType",
+				},
+				"__typename": "BindTrackPayload",
+			},
+		}
+
+	case "TRACKER_LOGIN_CREDENTIALS", "TRACKER_LOGIN_OAUTH", "TRACKER_LOGOUT":
+		data = map[string]interface{}{
+			"login": map[string]interface{}{
+				"tracker": map[string]interface{}{
+					"id":         1,
+					"name":       "Tracker",
+					"isLoggedIn": false,
+					"__typename": "TrackerType",
+				},
+				"__typename": "LoginPayload",
+			},
+		}
+
+	case "TRACKER_SEARCH":
+		data = map[string]interface{}{
+			"search": map[string]interface{}{
+				"nodes":      []interface{}{},
+				"totalCount": 0,
+				"__typename": "TrackSearchNodeList",
+			},
+		}
+
+	case "START_SYNC", "startSync", "KO_SYNC_LOGIN", "koSyncLogin", "KO_SYNC_LOGOUT", "koSyncLogout", "REFRESH_ACCESS_TOKEN", "refreshAccessToken", "USER_LOGIN", "userLogin", "USER_REFRESH", "userRefresh":
+		data = map[string]interface{}{
+			"success":    true,
+			"__typename": "SyncPayload",
+		}
+
+	case "GET_MANGAS_LIBRARY", "GET_MANGAS", "GET_MANGAS_BASE", "GET_MANGAS_DUPLICATES":
 		var sourceIDFilter *int64
 		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
 			if sIdF, ok := cond["sourceId"].(float64); ok {
@@ -3081,42 +3200,48 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			"manga": mangaData,
 		}
 
-	case "GET_CHAPTERS_MANGA", "GET_CHAPTERS_READER":
-		var mangaId int64
+	case "GET_CHAPTERS_MANGA", "GET_CHAPTERS_READER", "GET_MANGAS_CHAPTER_IDS_WITH_STATE":
+		var mangaIDs []int64
 		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
 			if val, ok := cond["mangaId"].(float64); ok {
-				mangaId = int64(val)
+				mangaIDs = append(mangaIDs, int64(val))
 			}
 		}
-		if mangaId == 0 {
-			if filterMap, ok := req.Variables["filter"].(map[string]interface{}); ok {
-				if mFilter, ok := filterMap["mangaId"].(map[string]interface{}); ok {
-					if eq, ok := mFilter["equalTo"].(float64); ok {
-						mangaId = int64(eq)
+		if filterMap, ok := req.Variables["filter"].(map[string]interface{}); ok {
+			if mFilter, ok := filterMap["mangaId"].(map[string]interface{}); ok {
+				if eq, ok := mFilter["equalTo"].(float64); ok {
+					mangaIDs = append(mangaIDs, int64(eq))
+				}
+				if inArr, ok := mFilter["in"].([]interface{}); ok {
+					for _, item := range inArr {
+						if idF, ok := item.(float64); ok {
+							mangaIDs = append(mangaIDs, int64(idF))
+						}
 					}
 				}
 			}
 		}
-		if mangaId == 0 {
+		if len(mangaIDs) == 0 {
 			if idx := strings.Index(req.Query, "mangaId:"); idx != -1 {
 				sub := req.Query[idx:]
 				var id int64
 				if _, err := fmt.Sscan(strings.TrimLeft(sub[len("mangaId:"):], " \t\r\n"), &id); err == nil {
-					mangaId = id
+					mangaIDs = append(mangaIDs, id)
 				}
 			}
 		}
 
-		nodes, _ := fetchChapterGraphQLNodes(c.Context(), mangaId)
+		nodes, _ := fetchChaptersForMangaIDs(c.Context(), mangaIDs)
 		// If no chapters found in DB, auto-fetch if source has native handler
-		if len(nodes) == 0 && mangaId > 0 && database.DB != nil {
+		if len(nodes) == 0 && len(mangaIDs) == 1 && mangaIDs[0] > 0 && database.DB != nil {
+			mangaId := mangaIDs[0]
 			var sourceID int64
 			var mangaURL string
 			if err := database.DB.QueryRow(c.Context(), "SELECT source, url FROM suwayomi.manga WHERE id = $1", mangaId).Scan(&sourceID, &mangaURL); err == nil {
 				if sources.Has(sourceID) {
 					log.Printf("[SOURCES] Auto-fetching chapters for manga %d (source %d, url %s)...", mangaId, sourceID, mangaURL)
 					if _, err := sources.FetchAndSaveMangaChapters(c.Context(), sourceID, mangaId, mangaURL); err == nil {
-						nodes, _ = fetchChapterGraphQLNodes(c.Context(), mangaId)
+						nodes, _ = fetchChaptersForMangaIDs(c.Context(), mangaIDs)
 					}
 				}
 			}
@@ -4050,6 +4175,43 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			"source": srcData,
 		}
 
+	case "UPDATE_SOURCE_PREFERENCES", "updateSourcePreference":
+		var sourceID int64
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if sID, ok := input["sourceId"].(string); ok {
+				_, _ = fmt.Sscan(sID, &sourceID)
+			} else if idF, ok := input["sourceId"].(float64); ok {
+				sourceID = int64(idF)
+			}
+		}
+		var srcData map[string]interface{}
+		if sourceID > 0 {
+			src, err := database.GetSourceByID(c.Context(), sourceID)
+			if err == nil && src != nil {
+				iconURL := "/api/v1/source/" + src.ID + "/icon"
+				srcData = map[string]interface{}{
+					"id":             src.ID,
+					"name":           src.Name,
+					"displayName":    src.DisplayName,
+					"lang":           src.Lang,
+					"iconUrl":        iconURL,
+					"homeUrl":        "",
+					"isConfigurable": false,
+					"supportsLatest": src.SupportsLatest,
+					"meta":           []interface{}{},
+					"filters":        []interface{}{},
+					"preferences":    []interface{}{},
+					"__typename":     "SourceType",
+				}
+			}
+		}
+		data = map[string]interface{}{
+			"updateSourcePreference": map[string]interface{}{
+				"source":     srcData,
+				"__typename": "UpdateSourcePreferencePayload",
+			},
+		}
+
 	case "GET_SOURCE_MANGAS_FETCH", "GET_MIGRATION_SOURCE_MANGAS_FETCH":
 		var sourceStr string
 		var queryStr string
@@ -4304,8 +4466,15 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	default:
-		log.Printf("[DEBUG] Hit default case for operation: %q. Proxying to Java server.", req.OperationName)
-		return proxyToJava(c, req, cfg)
+		log.Printf("[DEBUG] Hit default case for operation: %q", req.OperationName)
+		if cfg != nil && cfg.Sidecar.Enabled && cfg.Sidecar.BaseURL != "" {
+			return proxyToJava(c, req, cfg)
+		}
+		if req.OperationName == "" && req.Query == "" {
+			return c.JSON(fiber.Map{"data": nil})
+		}
+		log.Printf("[WARN] Unhandled GraphQL operation in Go: %q", req.OperationName)
+		return c.JSON(fiber.Map{"data": nil})
 	}
 
 	return c.JSON(fiber.Map{"data": data})
@@ -4749,22 +4918,29 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 }
 
 func fetchChapterGraphQLNodes(ctx context.Context, mangaId int64) ([]map[string]interface{}, error) {
-	if database.DB == nil || mangaId <= 0 {
+	if mangaId <= 0 {
+		return []map[string]interface{}{}, nil
+	}
+	return fetchChaptersForMangaIDs(ctx, []int64{mangaId})
+}
+
+func fetchChaptersForMangaIDs(ctx context.Context, mangaIDs []int64) ([]map[string]interface{}, error) {
+	if database.DB == nil || len(mangaIDs) == 0 {
 		return []map[string]interface{}{}, nil
 	}
 
 	query := `
 		SELECT c.id, COALESCE(c.name, ''), COALESCE(c.scanlator, ''), COALESCE(c.real_url, ''), c.source_order, c.chapter_number, 
 		       COALESCE(cu.read, false), COALESCE(cu.is_downloaded, false), COALESCE(cu.bookmark, false), c.fetched_at, c.date_upload, COALESCE(cu.last_read_at, 0),
-		       COALESCE(cu.last_page_read, 0), COALESCE(c.page_count, -1)
+		       COALESCE(cu.last_page_read, 0), COALESCE(c.page_count, -1), c.manga
 		FROM suwayomi.chapter c
 		LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
-		WHERE c.manga = $1
+		WHERE c.manga = ANY($1)
 		ORDER BY c.source_order DESC
 	`
-	rows, err := database.DB.Query(ctx, query, mangaId)
+	rows, err := database.DB.Query(ctx, query, mangaIDs)
 	if err != nil {
-		log.Printf("[ERROR] fetchChapterGraphQLNodes query error: %v", err)
+		log.Printf("[ERROR] fetchChaptersForMangaIDs query error: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -4778,18 +4954,19 @@ func fetchChapterGraphQLNodes(ctx context.Context, mangaId int64) ([]map[string]
 		var read, isDownloaded, bookmark bool
 		var fetchedAt, dateUpload, lastReadAt int64
 		var lastPageRead, pageCount int
+		var mId int64
 		err := rows.Scan(
 			&id, &name, &scanlator, &realUrl, &sourceOrder, &chapterNumber,
 			&read, &isDownloaded, &bookmark, &fetchedAt, &dateUpload, &lastReadAt,
-			&lastPageRead, &pageCount,
+			&lastPageRead, &pageCount, &mId,
 		)
 		if err == nil {
 			nodes = append(nodes, map[string]interface{}{
 				"id":            id,
 				"name":          name,
-				"mangaId":       mangaId,
+				"mangaId":       mId,
 				"manga": map[string]interface{}{
-					"id":         mangaId,
+					"id":         mId,
 					"__typename": "MangaType",
 				},
 				"scanlator":     scanlator,

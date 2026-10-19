@@ -410,6 +410,15 @@ func init() {
 			}
 		}
 	}
+	// Well-known third-party / legacy Tachiyomi source mappings from backups
+	KnownSourcesByID[1424373335432920755] = KnownSourceInfo{
+		Name:        "YugenMangas",
+		DisplayName: "YugenMangas (ES)",
+		Lang:        "es",
+		PkgName:     "eu.kanade.tachiyomi.extension.es.yugenmangas",
+		ExtName:     "YugenMangas",
+		IconURL:     "",
+	}
 }
 
 // EnsureNativeSources populates suwayomi.extension and suwayomi.source tables with native Go sources and resolves unmapped mangas.
@@ -426,7 +435,8 @@ func EnsureNativeSources(ctx context.Context) error {
 			ON CONFLICT (pkg_name) DO UPDATE SET
 				name = EXCLUDED.name,
 				icon_url = EXCLUDED.icon_url,
-				lang = EXCLUDED.lang
+				lang = EXCLUDED.lang,
+				is_installed = true
 			RETURNING id
 		`, ext.ID, ext.PkgName+".apk", ext.IconURL, ext.Name, ext.PkgName, ext.Lang, ext.ContentWarning).Scan(&extID)
 		if err != nil {
@@ -453,12 +463,12 @@ func EnsureNativeSources(ctx context.Context) error {
 	// Also ensure any mangas with sources not yet in suwayomi.source have placeholder rows so foreign keys and migrations succeed
 	_, _ = DB.Exec(ctx, `
 		INSERT INTO suwayomi.extension (apk_name, icon_url, name, pkg_name, version_name, version_code, lang, is_installed, has_update, is_obsolete, class_name, store_index_url, extension_lib, apk_url, content_warning)
-		SELECT 'imported.apk', '', 'Imported Source', 'imported.source.' || m.source, '1.0', 1, 'all', true, false, false, '', '', '1.0', '', 0
+		SELECT 'imported.apk', '', 'Imported Source', 'imported.source.' || m.source, '1.0', 1, 'all', false, false, false, '', '', '1.0', '', 0
 		FROM suwayomi.manga m
 		LEFT JOIN suwayomi.source s ON m.source = s.id
 		WHERE s.id IS NULL
 		GROUP BY m.source
-		ON CONFLICT (pkg_name) DO NOTHING;
+		ON CONFLICT (pkg_name) DO UPDATE SET is_installed = false;
 
 		INSERT INTO suwayomi.source (id, name, lang, extension, content_warning)
 		SELECT m.source, 'Source ' || m.source, 'all', e.id, 0
@@ -468,6 +478,9 @@ func EnsureNativeSources(ctx context.Context) error {
 		WHERE s.id IS NULL
 		GROUP BY m.source, e.id
 		ON CONFLICT (id) DO NOTHING;
+
+		UPDATE suwayomi.extension SET is_installed = false WHERE pkg_name LIKE 'imported.source.%' OR name = 'Imported Source';
+		UPDATE suwayomi.source SET name = 'YugenMangas', lang = 'es' WHERE id = 1424373335432920755;
 	`)
 
 	// Re-link sources that point to alias extension packages to canonical extension packages
@@ -524,7 +537,7 @@ func GetSourceList(ctx context.Context) ([]models.SourceDataClass, error) {
 		SELECT s.id, s.name, s.lang, COALESCE(e.icon_url, ''), COALESCE(e.pkg_name, ''), COALESCE(s.content_warning, e.content_warning, 0)
 		FROM suwayomi.source s
 		LEFT JOIN suwayomi.extension e ON s.extension = e.id
-		WHERE COALESCE(e.is_installed, true) = true OR s.id = 0
+		WHERE s.id = 0 OR (COALESCE(e.is_installed, false) = true AND COALESCE(e.pkg_name, '') NOT LIKE 'imported.source.%')
 		ORDER BY s.name ASC
 	`
 
