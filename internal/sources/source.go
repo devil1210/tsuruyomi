@@ -86,6 +86,7 @@ type SourceHandler interface {
 var (
 	registryMu sync.RWMutex
 	registry   = make(map[int64]SourceHandler)
+	allNative  = make(map[int64]SourceHandler)
 )
 
 // Register associates a source ID with its native Go handler.
@@ -93,13 +94,25 @@ func Register(sourceID int64, handler SourceHandler) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	registry[sourceID] = handler
+	allNative[sourceID] = handler
 }
 
-// Unregister removes a source ID from the registry.
+// Unregister removes a source ID from the active registry.
 func Unregister(sourceID int64) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	delete(registry, sourceID)
+}
+
+// RestoreNative restores a compiled native source handler to the active registry if it was previously registered.
+func RestoreNative(sourceID int64) bool {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if h, ok := allNative[sourceID]; ok {
+		registry[sourceID] = h
+		return true
+	}
+	return false
 }
 
 // Get returns the native Go handler for a given source ID if one exists.

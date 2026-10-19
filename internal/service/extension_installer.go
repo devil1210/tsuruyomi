@@ -38,6 +38,17 @@ var (
 	repoCacheTime = make(map[string]time.Time)
 )
 
+var extensionPackageAliases = map[string]string{
+	"eu.kanade.tachiyomi.extension.es.cerberuseries":        "eu.kanade.tachiyomi.extension.es.cerberusseries",
+	"eu.kanade.tachiyomi.extension.es.cerberusseries":       "eu.kanade.tachiyomi.extension.es.cerberuseries",
+	"eu.kanade.tachiyomi.extension.es.dragontranslation":    "eu.kanade.tachiyomi.extension.es.dragontranslationorg",
+	"eu.kanade.tachiyomi.extension.es.dragontranslationorg": "eu.kanade.tachiyomi.extension.es.dragontranslation",
+	"eu.kanade.tachiyomi.extension.es.mangaoni":             "eu.kanade.tachiyomi.extension.es.mangamx",
+	"eu.kanade.tachiyomi.extension.es.mangamx":              "eu.kanade.tachiyomi.extension.es.mangaoni",
+	"eu.kanade.tachiyomi.extension.es.lectormanga":          "eu.kanade.tachiyomi.extension.es.lectormangalat",
+	"eu.kanade.tachiyomi.extension.es.lectormangalat":       "eu.kanade.tachiyomi.extension.es.lectormanga",
+}
+
 // FetchRepoIndex retrieves the index.json catalog from a repository URL with caching.
 func FetchRepoIndex(ctx context.Context, repoURL string) ([]RepoIndexEntry, error) {
 	cleanURL := strings.TrimSpace(repoURL)
@@ -330,6 +341,29 @@ func InstallExtension(ctx context.Context, cfg *config.Config, pkgName string) e
 
 	// 7. Register sources into memory runtime
 	extensions.RegisterManifestSources(&manifest)
+
+	alias := extensionPackageAliases[cleanPkg]
+	if alias == "" {
+		alias = cleanPkg
+	}
+	_, _ = database.DB.Exec(ctx, "UPDATE suwayomi.extension SET is_installed = true WHERE pkg_name = $1 OR pkg_name = $2", cleanPkg, alias)
+
+	// Restore any compiled native sources associated with this extension
+	rowsRestore, errRestore := database.DB.Query(ctx, `
+		SELECT s.id FROM suwayomi.source s
+		JOIN suwayomi.extension e ON s.extension = e.id
+		WHERE e.pkg_name = $1 OR e.pkg_name = $2
+	`, cleanPkg, alias)
+	if errRestore == nil {
+		defer rowsRestore.Close()
+		for rowsRestore.Next() {
+			var sid int64
+			if err := rowsRestore.Scan(&sid); err == nil {
+				sources.RestoreNative(sid)
+			}
+		}
+	}
+
 	log.Printf("[EXTENSIONS] Successfully installed and activated extension %s (%s) with %d sources", foundEntry.Name, cleanPkg, len(foundEntry.Sources))
 
 	return nil
@@ -363,13 +397,34 @@ func UninstallExtension(ctx context.Context, cfg *config.Config, pkgName string)
 	_ = os.Remove(manifestPath)
 	_ = os.Remove(filepath.Join(rootDir, "extensions", cleanPkg+".js"))
 
-	// Mark as uninstalled in DB
-	_, err := database.DB.Exec(ctx, "UPDATE suwayomi.extension SET is_installed = false WHERE pkg_name = $1", cleanPkg)
+	alias := extensionPackageAliases[cleanPkg]
+	if alias == "" {
+		alias = cleanPkg
+	}
+
+	// Mark as uninstalled in DB for both package name and any alias
+	_, err := database.DB.Exec(ctx, "UPDATE suwayomi.extension SET is_installed = false WHERE pkg_name = $1 OR pkg_name = $2", cleanPkg, alias)
 	if err != nil {
 		return fmt.Errorf("marking %s uninstalled in DB: %w", cleanPkg, err)
 	}
 
-	log.Printf("[EXTENSIONS] Successfully uninstalled extension %s", cleanPkg)
+	// Unregister any active sources associated with this extension
+	rows, errQuery := database.DB.Query(ctx, `
+		SELECT s.id FROM suwayomi.source s
+		JOIN suwayomi.extension e ON s.extension = e.id
+		WHERE e.pkg_name = $1 OR e.pkg_name = $2
+	`, cleanPkg, alias)
+	if errQuery == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var sid int64
+			if err := rows.Scan(&sid); err == nil {
+				sources.Unregister(sid)
+			}
+		}
+	}
+
+	log.Printf("[EXTENSIONS] Successfully uninstalled extension %s (alias: %s)", cleanPkg, alias)
 	return nil
 }
 

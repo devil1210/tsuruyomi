@@ -602,12 +602,17 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 		if req.OperationName == "" && req.Query == "" {
-			if err := c.BodyParser(&req); err != nil {
-				req.OperationName = c.Query("operationName")
-				req.Query = c.Query("query")
-				vars := c.Query("variables")
-				if vars != "" {
-					_ = json.Unmarshal([]byte(vars), &req.Variables)
+			if len(c.Body()) > 0 {
+				_ = json.Unmarshal(c.Body(), &req)
+			}
+			if req.OperationName == "" && req.Query == "" {
+				if err := c.BodyParser(&req); err != nil {
+					req.OperationName = c.Query("operationName")
+					req.Query = c.Query("query")
+					vars := c.Query("variables")
+					if vars != "" {
+						_ = json.Unmarshal([]byte(vars), &req.Variables)
+					}
 				}
 			}
 		}
@@ -1408,20 +1413,60 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		var pkgName string
 		var install, uninstall, update bool
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
-			pkgName, _ = input["pkgName"].(string)
-			install, _ = input["install"].(bool)
-			uninstall, _ = input["uninstall"].(bool)
-			update, _ = input["update"].(bool)
+			if p, ok := input["pkgName"].(string); ok && p != "" {
+				pkgName = p
+			} else if idStr, ok := input["id"].(string); ok && idStr != "" {
+				pkgName = idStr
+			} else if idNum, ok := input["id"].(float64); ok {
+				if database.DB != nil {
+					_ = database.DB.QueryRow(c.Context(), "SELECT pkg_name FROM suwayomi.extension WHERE id = $1", int(idNum)).Scan(&pkgName)
+				}
+				if pkgName == "" {
+					pkgName = fmt.Sprintf("%.0f", idNum)
+				}
+			}
+
+			if patch, ok := input["patch"].(map[string]interface{}); ok {
+				if p, ok := patch["pkgName"].(string); ok && p != "" {
+					pkgName = p
+				}
+				if u, ok := patch["uninstall"].(bool); ok && u {
+					uninstall = true
+				}
+				if i, ok := patch["install"].(bool); ok && i {
+					install = true
+				}
+				if up, ok := patch["update"].(bool); ok && up {
+					update = true
+				}
+			}
+
+			if !install && !uninstall && !update {
+				install, _ = input["install"].(bool)
+				uninstall, _ = input["uninstall"].(bool)
+				update, _ = input["update"].(bool)
+			}
 		}
 
 		if pkgName != "" {
-			if install {
-				if err := service.InstallExtension(c.Context(), cfg, pkgName); err != nil {
-					log.Printf("[EXTENSIONS] Failed to install %s: %v", pkgName, err)
+			if idVal, err := strconv.Atoi(pkgName); err == nil && database.DB != nil {
+				var p string
+				if err := database.DB.QueryRow(c.Context(), "SELECT pkg_name FROM suwayomi.extension WHERE id = $1", idVal).Scan(&p); err == nil && p != "" {
+					pkgName = p
 				}
-			} else if uninstall {
+			}
+		}
+
+		log.Printf("[EXTENSIONS] UPDATE_EXTENSION: pkg=%s install=%v uninstall=%v update=%v", pkgName, install, uninstall, update)
+
+		if pkgName != "" {
+			if uninstall {
 				if err := service.UninstallExtension(c.Context(), cfg, pkgName); err != nil {
 					log.Printf("[EXTENSIONS] Failed to uninstall %s: %v", pkgName, err)
+				}
+			} else if install {
+				if err := service.InstallExtension(c.Context(), cfg, pkgName); err != nil {
+					log.Printf("[EXTENSIONS] Failed to install %s: %v", pkgName, err)
 				}
 			} else if update {
 				if err := service.UpdateExtension(c.Context(), cfg, pkgName); err != nil {
@@ -1439,6 +1484,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 	case "UPDATE_EXTENSIONS", "updateExtensions":
 		var pkgs []string
+		var isUninstall bool
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if list, ok := input["pkgNames"].([]interface{}); ok {
 				for _, p := range list {
@@ -1447,10 +1493,43 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					}
 				}
 			}
+			if list, ok := input["ids"].([]interface{}); ok {
+				for _, p := range list {
+					if s, ok := p.(string); ok {
+						if idVal, err := strconv.Atoi(s); err == nil && database.DB != nil {
+							var pName string
+							_ = database.DB.QueryRow(c.Context(), "SELECT pkg_name FROM suwayomi.extension WHERE id = $1", idVal).Scan(&pName)
+							if pName != "" {
+								pkgs = append(pkgs, pName)
+								continue
+							}
+						}
+						pkgs = append(pkgs, s)
+					} else if f, ok := p.(float64); ok && database.DB != nil {
+						var pName string
+						_ = database.DB.QueryRow(c.Context(), "SELECT pkg_name FROM suwayomi.extension WHERE id = $1", int(f)).Scan(&pName)
+						if pName != "" {
+							pkgs = append(pkgs, pName)
+						}
+					}
+				}
+			}
+			if patch, ok := input["patch"].(map[string]interface{}); ok {
+				if u, ok := patch["uninstall"].(bool); ok && u {
+					isUninstall = true
+				}
+			}
+			if u, ok := input["uninstall"].(bool); ok && u {
+				isUninstall = true
+			}
 		}
 		extList := []interface{}{}
 		for _, p := range pkgs {
-			_ = service.UpdateExtension(c.Context(), cfg, p)
+			if isUninstall {
+				_ = service.UninstallExtension(c.Context(), cfg, p)
+			} else {
+				_ = service.UpdateExtension(c.Context(), cfg, p)
+			}
 			extList = append(extList, getExtensionMap(c.Context(), p))
 		}
 		data = map[string]interface{}{
@@ -2627,31 +2706,51 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "GET_MANGAS_LIBRARY", "GET_MANGAS":
-		// Check if it's a source catalog search query
-		isCatalogQuery := false
+		var sourceIDFilter *int64
 		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
-			if _, ok := cond["sourceId"]; ok {
-				isCatalogQuery = true
+			if sIdF, ok := cond["sourceId"].(float64); ok {
+				sid := int64(sIdF)
+				sourceIDFilter = &sid
+			} else if sIdStr, ok := cond["sourceId"].(string); ok {
+				var sid int64
+				if _, err := fmt.Sscan(sIdStr, &sid); err == nil && sid > 0 {
+					sourceIDFilter = &sid
+				}
 			}
 		}
-		if !isCatalogQuery && strings.Contains(req.Query, "sourceId:") {
-			isCatalogQuery = true
+		if sourceIDFilter == nil && strings.Contains(req.Query, "sourceId:") {
+			idx := strings.Index(req.Query, "sourceId:")
+			sub := strings.TrimLeft(req.Query[idx+len("sourceId:"):], " \t\r\n")
+			var sid int64
+			if _, err := fmt.Sscan(sub, &sid); err == nil && sid > 0 {
+				sourceIDFilter = &sid
+			}
 		}
 
-		if isCatalogQuery {
-			log.Printf("[DEBUG] GET_MANGAS is a source catalog query. Proxying to Java.")
-			return proxyToJava(c, req, cfg)
+		var inLibraryFilter *bool
+		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
+			if val, ok := cond["inLibrary"].(bool); ok {
+				inLibraryFilter = &val
+			}
+		}
+		if inLibraryFilter == nil {
+			if strings.Contains(req.Query, "inLibrary: false") {
+				f := false
+				inLibraryFilter = &f
+			} else if strings.Contains(req.Query, "inLibrary: true") {
+				t := true
+				inLibraryFilter = &t
+			} else if sourceIDFilter == nil {
+				t := true
+				inLibraryFilter = &t
+			}
 		}
 
-		inLibrary := true // Default to true for library queries
 		var categoryIds []int64
 		var titleSearch string
 
 		// 1. Try parsing from variables condition
 		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
-			if val, ok := cond["inLibrary"].(bool); ok {
-				inLibrary = val
-			}
 			if catIds, ok := cond["categoryIds"].([]interface{}); ok {
 				for _, idVal := range catIds {
 					if idF, ok := idVal.(float64); ok {
@@ -2667,16 +2766,18 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 		// 2. Try parsing inLibrary from inline query string
 		if strings.Contains(req.Query, "inLibrary: false") {
-			inLibrary = false
+			f := false
+			inLibraryFilter = &f
 		} else if strings.Contains(req.Query, "inLibrary: true") {
-			inLibrary = true
+			t := true
+			inLibraryFilter = &t
 		}
 
 		// 3. Try parsing from variables filter
 		if filterMap, ok := req.Variables["filter"].(map[string]interface{}); ok {
-			if inLibFilter, ok := filterMap["inLibrary"].(map[string]interface{}); ok {
-				if eq, ok := inLibFilter["equalTo"].(bool); ok {
-					inLibrary = eq
+			if inLibMap, ok := filterMap["inLibrary"].(map[string]interface{}); ok {
+				if eq, ok := inLibMap["equalTo"].(bool); ok {
+					inLibraryFilter = &eq
 				}
 			}
 			if catFilter, ok := filterMap["categoryId"].(map[string]interface{}); ok {
@@ -2771,7 +2872,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 		nodes, _ := fetchMangaGraphQLNodes(c.Context(), MangaGraphQLFilter{
-			InLibrary:   &inLibrary,
+			InLibrary:   inLibraryFilter,
+			SourceID:    sourceIDFilter,
 			CategoryIDs: categoryIds,
 			TitleSearch: titleSearch,
 			OrderBy:     orderByClause,
@@ -3915,14 +4017,6 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "GET_SOURCE_BROWSE", "GET_SOURCE_SETTINGS":
-		if cfg != nil && cfg.Sidecar.Enabled && cfg.Sidecar.BaseURL != "" {
-			err := proxyToJava(c, req, cfg)
-			if err == nil {
-				return nil
-			}
-			log.Printf("[DEBUG] proxyToJava failed for %s: %v", req.OperationName, err)
-		}
-
 		var sourceID int64
 		if sID, ok := req.Variables["id"].(string); ok {
 			_, _ = fmt.Sscan(sID, &sourceID)
@@ -3957,33 +4051,25 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "GET_SOURCE_MANGAS_FETCH", "GET_MIGRATION_SOURCE_MANGAS_FETCH":
-		// Ensure input has "source" key (Java sidecar expects "source", not "sourceId")
-		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
-			if sId, ok := input["sourceId"]; ok && input["source"] == nil {
-				input["source"] = sId
-			}
-		}
-
-		if cfg != nil && cfg.Sidecar.Enabled && cfg.Sidecar.BaseURL != "" {
-			err := proxyToJava(c, req, cfg)
-			if err == nil {
-				return nil
-			}
-			log.Printf("[DEBUG] proxyToJava failed for %s: %v", req.OperationName, err)
-		}
-
-		// Fallback: query database for existing mangas from this source matching search query
 		var sourceStr string
 		var queryStr string
+		var typeStr string = "POPULAR"
 		var page int = 1
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if s, ok := input["source"].(string); ok {
 				sourceStr = s
 			} else if s, ok := input["sourceId"].(string); ok {
 				sourceStr = s
+			} else if f, ok := input["source"].(float64); ok {
+				sourceStr = fmt.Sprintf("%.0f", f)
+			} else if f, ok := input["sourceId"].(float64); ok {
+				sourceStr = fmt.Sprintf("%.0f", f)
 			}
 			if q, ok := input["query"].(string); ok {
 				queryStr = q
+			}
+			if t, ok := input["type"].(string); ok && t != "" {
+				typeStr = t
 			}
 			if p, ok := input["page"].(float64); ok && p > 0 {
 				page = int(p)
@@ -4003,6 +4089,12 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				if queryStr != "" {
 					if searcher, ok := h.(sources.MangaSearcher); ok {
 						onlineItems, hasNext, errOnline = searcher.SearchManga(c.Context(), queryStr, page)
+					}
+				} else if typeStr == "LATEST" {
+					if latest, ok := h.(sources.LatestLister); ok {
+						onlineItems, hasNext, errOnline = latest.GetLatestManga(c.Context(), page)
+					} else if pop, ok := h.(sources.PopularLister); ok {
+						onlineItems, hasNext, errOnline = pop.GetPopularManga(c.Context(), page)
 					}
 				} else {
 					if pop, ok := h.(sources.PopularLister); ok {
@@ -4236,16 +4328,21 @@ func proxyToJava(c *fiber.Ctx, req GraphQLRequest, cfg *config.Config) error {
 	}
 	reqJava.Header.Set("Content-Type", "application/json")
 
-	respJava, err := http.DefaultClient.Do(reqJava)
+	client := &http.Client{Timeout: 5 * time.Second}
+	respJava, err := client.Do(reqJava)
 	if err != nil {
 		log.Printf("[ERROR] Java proxy failed: %v", err)
-		return c.JSON(fiber.Map{"data": map[string]interface{}{}})
+		return fmt.Errorf("java proxy unreachable: %w", err)
 	}
 	defer respJava.Body.Close()
 
+	if respJava.StatusCode >= 400 {
+		return fmt.Errorf("java proxy returned status %d", respJava.StatusCode)
+	}
+
 	var respMap map[string]interface{}
 	if err := json.NewDecoder(respJava.Body).Decode(&respMap); err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return fmt.Errorf("decoding java proxy response: %w", err)
 	}
 
 	return c.Status(respJava.StatusCode).JSON(respMap)

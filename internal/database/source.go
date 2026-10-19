@@ -426,8 +426,7 @@ func EnsureNativeSources(ctx context.Context) error {
 			ON CONFLICT (pkg_name) DO UPDATE SET
 				name = EXCLUDED.name,
 				icon_url = EXCLUDED.icon_url,
-				lang = EXCLUDED.lang,
-				is_installed = true
+				lang = EXCLUDED.lang
 			RETURNING id
 		`, ext.ID, ext.PkgName+".apk", ext.IconURL, ext.Name, ext.PkgName, ext.Lang, ext.ContentWarning).Scan(&extID)
 		if err != nil {
@@ -525,6 +524,7 @@ func GetSourceList(ctx context.Context) ([]models.SourceDataClass, error) {
 		SELECT s.id, s.name, s.lang, COALESCE(e.icon_url, ''), COALESCE(e.pkg_name, ''), COALESCE(s.content_warning, e.content_warning, 0)
 		FROM suwayomi.source s
 		LEFT JOIN suwayomi.extension e ON s.extension = e.id
+		WHERE COALESCE(e.is_installed, true) = true OR s.id = 0
 		ORDER BY s.name ASC
 	`
 

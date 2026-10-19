@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
 func init() {
@@ -231,6 +233,96 @@ func (h *MangaOniHandler) SearchManga(ctx context.Context, query string, page in
 	}
 
 	return items, false, nil
+}
+
+// GetPopularManga retrieves popular mangas from MangaOni top / directory.
+func (h *MangaOniHandler) GetPopularManga(ctx context.Context, page int) ([]MangaItem, bool, error) {
+	if page <= 0 {
+		page = 1
+	}
+	targetURL := "https://manga-oni.com/top/"
+	if page > 1 {
+		targetURL = fmt.Sprintf("https://manga-oni.com/directorio/?p=%d", page)
+	}
+	return h.fetchHTMLMangaList(ctx, targetURL)
+}
+
+// GetLatestManga retrieves recently updated mangas from MangaOni.
+func (h *MangaOniHandler) GetLatestManga(ctx context.Context, page int) ([]MangaItem, bool, error) {
+	if page <= 0 {
+		page = 1
+	}
+	targetURL := "https://manga-oni.com/recientes/"
+	if page > 1 {
+		targetURL = fmt.Sprintf("https://manga-oni.com/recientes/?p=%d", page)
+	}
+	return h.fetchHTMLMangaList(ctx, targetURL)
+}
+
+func (h *MangaOniHandler) fetchHTMLMangaList(ctx context.Context, targetURL string) ([]MangaItem, bool, error) {
+	html, err := FetchHTML(ctx, targetURL, "https://manga-oni.com/")
+	if err != nil {
+		return nil, false, err
+	}
+
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil, false, err
+	}
+
+	var items []MangaItem
+	seen := make(map[string]bool)
+
+	doc.Find("a").Each(func(i int, s *goquery.Selection) {
+		href, exists := s.Attr("href")
+		if !exists || href == "" {
+			return
+		}
+		if !strings.Contains(href, "/manga/") && !strings.Contains(href, "/manhua/") {
+			return
+		}
+		if strings.HasSuffix(href, "/manga/") || strings.HasSuffix(href, "/top/") || strings.HasSuffix(href, "/directorio/") || strings.HasSuffix(href, "/recientes/") {
+			return
+		}
+
+		relURL := href
+		if idx := strings.Index(relURL, "manga-oni.com"); idx != -1 {
+			relURL = relURL[idx+len("manga-oni.com"):]
+		}
+		relURL = "/" + strings.Trim(relURL, "/") + "/"
+		if seen[relURL] {
+			return
+		}
+
+		img := s.Find("img").First()
+		thumbURL, _ := img.Attr("data-src")
+		if thumbURL == "" {
+			thumbURL, _ = img.Attr("src")
+		}
+		title, _ := img.Attr("alt")
+		if title == "" {
+			title = strings.TrimSpace(s.Find("h2, h3, .entry-title").Text())
+		}
+		if title == "" {
+			title = strings.TrimSpace(s.Text())
+		}
+
+		if title == "" || strings.HasPrefix(title, "Capítulo") {
+			return
+		}
+
+		seen[relURL] = true
+		items = append(items, MangaItem{
+			Title:        title,
+			URL:          relURL,
+			ThumbnailURL: thumbURL,
+			SourceID:     2202687009511923782,
+			Status:       1,
+		})
+	})
+
+	hasNext := len(items) >= 10
+	return items, hasNext, nil
 }
 
 
