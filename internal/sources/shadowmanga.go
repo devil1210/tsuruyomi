@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"tsuruyomi/internal/util"
 )
+
 
 func init() {
 	// Register Shadow Manga native Go handlers with canonical source IDs
@@ -38,6 +40,68 @@ func NewShadowMangaHandler(name, baseURL string, isNSFW bool) *ShadowMangaHandle
 func (h *ShadowMangaHandler) Name() string {
 	return h.name
 }
+
+type shadowSeriesSummary struct {
+	ID            int64  `json:"id"`
+	PublicID      string `json:"publicId"`
+	Titulo        string `json:"titulo"`
+	Autor         string `json:"autor"`
+	PortadaURL    string `json:"portadaUrl"`
+	EsMayorDeEdad bool   `json:"esMayorDeEdad"`
+	Generos       string `json:"generos"`
+}
+
+func (h *ShadowMangaHandler) GetPopularManga(ctx context.Context, page int) ([]MangaItem, bool, error) {
+	if page <= 0 {
+		page = 1
+	}
+	apiURL := fmt.Sprintf("%s/api/series-locales?page=%d&limit=24", h.baseURL, page)
+	return h.fetchSeriesList(ctx, apiURL)
+}
+
+func (h *ShadowMangaHandler) GetLatestManga(ctx context.Context, page int) ([]MangaItem, bool, error) {
+	return h.GetPopularManga(ctx, page)
+}
+
+func (h *ShadowMangaHandler) SearchManga(ctx context.Context, query string, page int) ([]MangaItem, bool, error) {
+	if page <= 0 {
+		page = 1
+	}
+	apiURL := fmt.Sprintf("%s/api/series-locales?page=%d&limit=24&q=%s", h.baseURL, page, url.QueryEscape(query))
+	return h.fetchSeriesList(ctx, apiURL)
+}
+
+func (h *ShadowMangaHandler) fetchSeriesList(ctx context.Context, apiURL string) ([]MangaItem, bool, error) {
+	var list []shadowSeriesSummary
+	if err := h.doJSONGet(ctx, apiURL, &list); err != nil {
+		return nil, false, err
+	}
+	var items []MangaItem
+	for _, it := range list {
+		if it.EsMayorDeEdad != h.isNSFW {
+			continue
+		}
+		var genres []string
+		if it.Generos != "" {
+			for _, g := range strings.Split(it.Generos, ",") {
+				if tg := strings.TrimSpace(g); tg != "" {
+					genres = append(genres, tg)
+				}
+			}
+		}
+		items = append(items, MangaItem{
+			Title:        it.Titulo,
+			URL:          fmt.Sprintf("serie/local/%d", it.ID),
+			ThumbnailURL: it.PortadaURL,
+			Author:       it.Autor,
+			Artist:       it.Autor,
+			Genres:       genres,
+			Status:       1,
+		})
+	}
+	return items, len(list) >= 24, nil
+}
+
 
 type shadowChapter struct {
 	ID             int64   `json:"id"`

@@ -397,6 +397,13 @@ func GetMangaURL(sourceID int64, mangaURL string) string {
 	case 698913079501532785: // RavenManga
 		return "https://ravenmanga.com/" + strings.TrimLeft(cleanURL, "/")
 
+	case 3548601371328353875: // Manhwa-Latino
+		return "https://manhwalatino.org/" + strings.TrimLeft(cleanURL, "/")
+
+	case 8311505150576608267: // Hades no Fansub
+		return "https://lectorhades.latamtoon.com/" + strings.TrimLeft(cleanURL, "/")
+
+
 	default:
 		if strings.HasPrefix(cleanURL, "/") {
 			return cleanURL
