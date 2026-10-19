@@ -3,9 +3,12 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"sync"
+	"time"
 
 	fiberWS "github.com/gofiber/websocket/v2"
+	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/models"
 	"tsuruyomi/internal/websocket"
@@ -13,11 +16,13 @@ import (
 
 // DownloadManager handles the downloads queue and notifies active WebSocket clients.
 type DownloadManager struct {
-	mu           sync.Mutex
-	status       string // "Started" or "Stopped"
-	queue        []models.DownloadQueueItem
-	hub          *websocket.Hub
-	hubStarted   bool
+	mu            sync.Mutex
+	status        string // "Started" or "Stopped"
+	queue         []models.DownloadQueueItem
+	hub           *websocket.Hub
+	hubStarted    bool
+	workerRunning bool
+	cfg           *config.Config
 }
 
 // GlobalDownloadManager is the shared download manager instance.
@@ -96,12 +101,115 @@ func (dm *DownloadManager) GetOldStatus(ctx context.Context) (models.OldDownload
 	}, nil
 }
 
-// Start starts queue execution.
+// SetConfig sets the server configuration used for downloads.
+func (dm *DownloadManager) SetConfig(cfg *config.Config) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+	dm.cfg = cfg
+}
+
+// Start starts queue execution and initiates the background worker if not already running.
 func (dm *DownloadManager) Start() {
 	dm.mu.Lock()
 	dm.status = "Started"
+	if !dm.workerRunning {
+		dm.workerRunning = true
+		go dm.workerLoop()
+	}
 	dm.mu.Unlock()
 	dm.BroadcastStatus()
+}
+
+// workerLoop continuously processes queued chapters until stopped or the queue is drained.
+func (dm *DownloadManager) workerLoop() {
+	defer func() {
+		dm.mu.Lock()
+		dm.workerRunning = false
+		dm.mu.Unlock()
+	}()
+
+	for {
+		dm.mu.Lock()
+		if dm.status != "Started" {
+			dm.mu.Unlock()
+			return
+		}
+
+		// Look for next queued item
+		var nextIdx = -1
+		for i := range dm.queue {
+			if dm.queue[i].State == models.DownloadStateQueued {
+				nextIdx = i
+				break
+			}
+		}
+
+		if nextIdx == -1 {
+			// No more items queued right now
+			dm.mu.Unlock()
+			time.Sleep(1 * time.Second)
+			dm.mu.Lock()
+			// If still nothing queued after sleep and still running, check again
+			hasQueued := false
+			for i := range dm.queue {
+				if dm.queue[i].State == models.DownloadStateQueued {
+					hasQueued = true
+					break
+				}
+			}
+			if !hasQueued {
+				dm.mu.Unlock()
+				return
+			}
+			dm.mu.Unlock()
+			continue
+		}
+
+		// Mark as downloading
+		dm.queue[nextIdx].State = models.DownloadStateDownloading
+		chID := dm.queue[nextIdx].ChapterID
+		cfg := dm.cfg
+		dm.mu.Unlock()
+		dm.BroadcastStatus()
+
+		log.Printf("[DOWNLOAD_MANAGER] Starting download for chapter %d...", chID)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		cbzPath, err := EnsureChapterCBZ(ctx, cfg, chID)
+		cancel()
+
+		dm.mu.Lock()
+		// Re-find item
+		currIdx := -1
+		for i := range dm.queue {
+			if dm.queue[i].ChapterID == chID {
+				currIdx = i
+				break
+			}
+		}
+
+		if err != nil {
+			log.Printf("[DOWNLOAD_MANAGER] Download error for chapter %d: %v", chID, err)
+			if currIdx != -1 {
+				dm.queue[currIdx].Tries++
+				if dm.queue[currIdx].Tries >= 3 {
+					dm.queue[currIdx].State = models.DownloadStateError
+				} else {
+					dm.queue[currIdx].State = models.DownloadStateQueued
+				}
+			}
+		} else {
+			log.Printf("[DOWNLOAD_MANAGER] Successfully downloaded chapter %d to %s", chID, cbzPath)
+			if currIdx != -1 {
+				// Remove finished item from queue
+				dm.queue = append(dm.queue[:currIdx], dm.queue[currIdx+1:]...)
+				for i := range dm.queue {
+					dm.queue[i].Position = i
+				}
+			}
+		}
+		dm.mu.Unlock()
+		dm.BroadcastStatus()
+	}
 }
 
 // Stop stops/pauses queue execution.
@@ -158,6 +266,11 @@ func (dm *DownloadManager) Enqueue(ctx context.Context, chapterIDs []int) error 
 			Progress:     0,
 			Tries:        0,
 		})
+	}
+
+	if dm.status == "Started" && !dm.workerRunning {
+		dm.workerRunning = true
+		go dm.workerLoop()
 	}
 
 	go dm.BroadcastStatus()
@@ -240,6 +353,39 @@ func (dm *DownloadManager) Reorder(mangaID, chapterIndex, to int) {
 	}
 
 	// Recalculate positions
+	for i := range dm.queue {
+		dm.queue[i].Position = i
+	}
+
+	go dm.BroadcastStatus()
+}
+
+// ReorderByID moves an item to another position in queue using chapter ID.
+func (dm *DownloadManager) ReorderByID(chapterID, to int) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	idx := -1
+	for i, item := range dm.queue {
+		if item.ChapterID == chapterID {
+			idx = i
+			break
+		}
+	}
+
+	if idx == -1 || to < 0 || to >= len(dm.queue) {
+		return
+	}
+
+	target := dm.queue[idx]
+	dm.queue = append(dm.queue[:idx], dm.queue[idx+1:]...)
+
+	if to >= len(dm.queue) {
+		dm.queue = append(dm.queue, target)
+	} else {
+		dm.queue = append(dm.queue[:to], append([]models.DownloadQueueItem{target}, dm.queue[to:]...)...)
+	}
+
 	for i := range dm.queue {
 		dm.queue[i].Position = i
 	}

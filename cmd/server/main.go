@@ -65,6 +65,9 @@ func main() {
 		log.Printf("Warning: failed to load installed extensions: %v", err)
 	}
 
+	// Initialize download manager with config
+	service.GlobalDownloadManager.SetConfig(cfg)
+
 	// Start background periodic library update scheduler
 	service.GlobalUpdateManager.StartScheduler(context.Background())
 

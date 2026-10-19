@@ -25,9 +25,9 @@ type Hub struct {
 func NewHub() *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
-		broadcast:  make(chan []byte),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
+		broadcast:  make(chan []byte, 64),
+		register:   make(chan *Client, 16),
+		unregister: make(chan *Client, 16),
 	}
 }
 
@@ -63,9 +63,15 @@ func (h *Hub) Run() {
 	}
 }
 
-// Broadcast sends a message payload to all registered clients.
+// Broadcast sends a message payload to all registered clients without blocking.
 func (h *Hub) Broadcast(message []byte) {
-	h.broadcast <- message
+	if h == nil || h.broadcast == nil {
+		return
+	}
+	select {
+	case h.broadcast <- message:
+	default:
+	}
 }
 
 // AddClient registers a new websocket client connection with the hub.

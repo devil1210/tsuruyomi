@@ -3,11 +3,14 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -491,6 +494,81 @@ func buildServerSettingsMap(ctx context.Context, cfg *config.Config) map[string]
 	}
 }
 
+// buildGraphQLDownloadStatus maps the active DownloadManager state and queue to GraphQL schema.
+func buildGraphQLDownloadStatus(ctx context.Context) map[string]interface{} {
+	status := service.GlobalDownloadManager.GetStatus()
+	state := "STOPPED"
+	if strings.EqualFold(status.Status, "Started") {
+		state = "STARTED"
+	}
+
+	queue := make([]map[string]interface{}, 0, len(status.Queue))
+	for _, item := range status.Queue {
+		var chName string
+		var chNumber float64
+		var chURL, mTitle, mThumb string
+		var mSourceID int64
+		var mSourceName string
+		var isDownloaded bool
+		var pageCount int
+
+		if database.DB != nil {
+			query := `
+				SELECT c.name, c.chapter_number, c.url, c.is_downloaded, COALESCE(c.page_count, -1),
+				       m.title, COALESCE(m.thumbnail_url, ''), m.source, COALESCE(s.name, 'Unknown')
+				FROM suwayomi.chapter c
+				JOIN suwayomi.manga m ON c.manga = m.id
+				LEFT JOIN suwayomi.source s ON m.source = s.id
+				WHERE c.id = $1
+				LIMIT 1`
+			_ = database.DB.QueryRow(ctx, query, item.ChapterID).Scan(
+				&chName, &chNumber, &chURL, &isDownloaded, &pageCount,
+				&mTitle, &mThumb, &mSourceID, &mSourceName,
+			)
+		}
+
+		itemState := strings.ToUpper(string(item.State))
+		if itemState == "" {
+			itemState = "QUEUED"
+		}
+
+		queue = append(queue, map[string]interface{}{
+			"chapter": map[string]interface{}{
+				"id":            item.ChapterID,
+				"name":          chName,
+				"chapterNumber": chNumber,
+				"url":           chURL,
+				"isDownloaded":  isDownloaded,
+				"pageCount":     pageCount,
+				"__typename":    "ChapterType",
+			},
+			"manga": map[string]interface{}{
+				"id":            item.MangaID,
+				"title":         mTitle,
+				"thumbnailUrl":  mThumb,
+				"downloadCount": 0,
+				"source": map[string]interface{}{
+					"id":         fmt.Sprintf("%d", mSourceID),
+					"name":       mSourceName,
+					"__typename": "SourceType",
+				},
+				"__typename": "MangaType",
+			},
+			"state":      itemState,
+			"progress":   item.Progress,
+			"tries":      item.Tries,
+			"position":   item.Position,
+			"__typename": "DownloadType",
+		})
+	}
+
+	return map[string]interface{}{
+		"state":      state,
+		"queue":      queue,
+		"__typename": "DownloadStatus",
+	}
+}
+
 // GraphQLRequest maps incoming query parameters or POST bodies.
 type GraphQLRequest struct {
 	OperationName string                 `json:"operationName"`
@@ -648,6 +726,18 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						if s, ok := v.(string); ok && s != "" {
 							cfg.Server.Host = s
 						}
+					case "authMode":
+						if s, ok := v.(string); ok {
+							cfg.Auth.Mode = strings.ToLower(s)
+						}
+					case "authUsername":
+						if s, ok := v.(string); ok {
+							cfg.Auth.Username = s
+						}
+					case "authPassword":
+						if s, ok := v.(string); ok {
+							cfg.Auth.Password = s
+						}
 					}
 				}
 			}
@@ -731,10 +821,237 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 	case "GET_DOWNLOAD_STATUS":
 		data = map[string]interface{}{
-			"downloadStatus": map[string]interface{}{
-				"state":      "STOPPED",
-				"queue":      []interface{}{},
-				"__typename": "DownloadStatus",
+			"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+		}
+
+	case "START_DOWNLOADER", "startDownloader":
+		service.GlobalDownloadManager.Start()
+		data = map[string]interface{}{
+			"startDownloader": map[string]interface{}{
+				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+				"__typename":     "StartDownloaderPayload",
+			},
+		}
+
+	case "STOP_DOWNLOADER", "stopDownloader":
+		service.GlobalDownloadManager.Stop()
+		data = map[string]interface{}{
+			"stopDownloader": map[string]interface{}{
+				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+				"__typename":     "StopDownloaderPayload",
+			},
+		}
+
+	case "CLEAR_DOWNLOADER", "clearDownloader":
+		service.GlobalDownloadManager.Clear()
+		data = map[string]interface{}{
+			"clearDownloader": map[string]interface{}{
+				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+				"__typename":     "ClearDownloaderPayload",
+			},
+		}
+
+	case "ENQUEUE_CHAPTER_DOWNLOAD", "enqueueChapterDownload":
+		var chID int
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if idF, ok := input["id"].(float64); ok {
+				chID = int(idF)
+			} else if idF, ok := input["chapterId"].(float64); ok {
+				chID = int(idF)
+			}
+		}
+		if chID > 0 {
+			_ = service.GlobalDownloadManager.Enqueue(c.Context(), []int{chID})
+		}
+		data = map[string]interface{}{
+			"enqueueChapterDownload": map[string]interface{}{
+				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+				"__typename":     "EnqueueChapterDownloadPayload",
+			},
+		}
+
+	case "ENQUEUE_CHAPTER_DOWNLOADS", "enqueueChapterDownloads":
+		var chIDs []int
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if ids, ok := input["ids"].([]interface{}); ok {
+				for _, idVal := range ids {
+					if idF, ok := idVal.(float64); ok {
+						chIDs = append(chIDs, int(idF))
+					}
+				}
+			}
+		}
+		if len(chIDs) > 0 {
+			_ = service.GlobalDownloadManager.Enqueue(c.Context(), chIDs)
+		}
+		data = map[string]interface{}{
+			"enqueueChapterDownloads": map[string]interface{}{
+				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+				"__typename":     "EnqueueChapterDownloadsPayload",
+			},
+		}
+
+	case "DEQUEUE_CHAPTER_DOWNLOAD", "dequeueChapterDownload":
+		var chID int
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if idF, ok := input["id"].(float64); ok {
+				chID = int(idF)
+			} else if idF, ok := input["chapterId"].(float64); ok {
+				chID = int(idF)
+			}
+		}
+		if chID > 0 {
+			service.GlobalDownloadManager.Dequeue([]int{chID})
+		}
+		data = map[string]interface{}{
+			"dequeueChapterDownload": map[string]interface{}{
+				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+				"__typename":     "DequeueChapterDownloadPayload",
+			},
+		}
+
+	case "DEQUEUE_CHAPTER_DOWNLOADS", "dequeueChapterDownloads":
+		var chIDs []int
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if ids, ok := input["ids"].([]interface{}); ok {
+				for _, idVal := range ids {
+					if idF, ok := idVal.(float64); ok {
+						chIDs = append(chIDs, int(idF))
+					}
+				}
+			}
+		}
+		if len(chIDs) > 0 {
+			service.GlobalDownloadManager.Dequeue(chIDs)
+		}
+		data = map[string]interface{}{
+			"dequeueChapterDownloads": map[string]interface{}{
+				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+				"__typename":     "DequeueChapterDownloadsPayload",
+			},
+		}
+
+	case "REORDER_CHAPTER_DOWNLOAD", "reorderChapterDownload":
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			chID := 0
+			if idF, ok := input["chapterId"].(float64); ok {
+				chID = int(idF)
+			}
+			to := 0
+			if toF, ok := input["to"].(float64); ok {
+				to = int(toF)
+			}
+			if chID > 0 {
+				service.GlobalDownloadManager.ReorderByID(chID, to)
+			}
+		}
+		data = map[string]interface{}{
+			"reorderChapterDownload": map[string]interface{}{
+				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+				"__typename":     "ReorderChapterDownloadPayload",
+			},
+		}
+
+	case "REORDER_CHAPTER_DOWNLOADS", "reorderChapterDownloads":
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if reorders, ok := input["reorders"].([]interface{}); ok {
+				for _, rItem := range reorders {
+					if rMap, ok := rItem.(map[string]interface{}); ok {
+						chID := 0
+						if idF, ok := rMap["chapterId"].(float64); ok {
+							chID = int(idF)
+						}
+						to := 0
+						if toF, ok := rMap["to"].(float64); ok {
+							to = int(toF)
+						}
+						if chID > 0 {
+							service.GlobalDownloadManager.ReorderByID(chID, to)
+						}
+					}
+				}
+			}
+		}
+		data = map[string]interface{}{
+			"reorderChapterDownloads": map[string]interface{}{
+				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+				"__typename":     "ReorderChapterDownloadsPayload",
+			},
+		}
+
+	case "CLEAR_SERVER_CACHE", "clearCachedImages":
+		var clearPages, clearThumbs, clearDownloadedThumbs bool = true, true, true
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if b, ok := input["clearCachedPages"].(bool); ok {
+				clearPages = b
+			}
+			if b, ok := input["clearCachedThumbnails"].(bool); ok {
+				clearThumbs = b
+			}
+			if b, ok := input["clearDownloadedThumbnails"].(bool); ok {
+				clearDownloadedThumbs = b
+			}
+		}
+
+		var countPages, countThumbs, countDownloadedThumbs int
+		if cfg != nil {
+			if clearPages {
+				pagesDir := filepath.Join(cfg.Data.RootDir, "cache", "pages")
+				if entries, err := os.ReadDir(pagesDir); err == nil {
+					countPages = len(entries)
+					_ = os.RemoveAll(pagesDir)
+					_ = os.MkdirAll(pagesDir, 0755)
+				}
+			}
+			if clearThumbs {
+				cacheThumbDir := filepath.Join(cfg.Data.RootDir, "cache", "thumbnails")
+				if entries, err := os.ReadDir(cacheThumbDir); err == nil {
+					countThumbs = len(entries)
+					_ = os.RemoveAll(cacheThumbDir)
+					_ = os.MkdirAll(cacheThumbDir, 0755)
+				}
+			}
+			if clearDownloadedThumbs {
+				downThumbDir := filepath.Join(cfg.Data.RootDir, "downloads", "thumbnails")
+				if entries, err := os.ReadDir(downThumbDir); err == nil {
+					countDownloadedThumbs = len(entries)
+					_ = os.RemoveAll(downThumbDir)
+					_ = os.MkdirAll(downThumbDir, 0755)
+				}
+			}
+		}
+
+		data = map[string]interface{}{
+			"clearCachedImages": map[string]interface{}{
+				"cachedPages":          countPages,
+				"cachedThumbnails":     countThumbs,
+				"downloadedThumbnails": countDownloadedThumbs,
+				"__typename":           "ClearCachedImagesPayload",
+			},
+		}
+
+	case "RESET_WEBUI_UPDATE_STATUS", "resetWebUIUpdateStatus":
+		data = map[string]interface{}{
+			"resetWebUIUpdateStatus": map[string]interface{}{
+				"getWebUIUpdateStatus": map[string]interface{}{
+					"info": map[string]interface{}{
+						"channel":    "PREVIEW",
+						"tag":        webuiVersion,
+						"__typename": "WebUIUpdateInfo",
+					},
+					"progress":   0,
+					"state":      "IDLE",
+					"__typename": "WebUIUpdateStatus",
+				},
+				"__typename": "ResetWebUIUpdateStatusPayload",
+			},
+		}
+
+	case "WEBVIEW_CLEAR_CACHE_COOKIES", "clearCacheCookies":
+		data = map[string]interface{}{
+			"clearCacheCookies": map[string]interface{}{
+				"success":    true,
+				"__typename": "ClearCacheCookiesPayload",
 			},
 		}
 
@@ -3531,7 +3848,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "DELETE_DOWNLOADED_CHAPTERS":
+	case "DELETE_DOWNLOADED_CHAPTER", "DELETE_DOWNLOADED_CHAPTERS", "deleteDownloadedChapter", "deleteDownloadedChapters":
 		var chapterIDs []int64
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if ids, ok := input["ids"].([]interface{}); ok {
@@ -3542,16 +3859,35 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				}
 			} else if idF, ok := input["ids"].(float64); ok {
 				chapterIDs = append(chapterIDs, int64(idF))
+			} else if idF, ok := input["id"].(float64); ok {
+				chapterIDs = append(chapterIDs, int64(idF))
+			} else if idF, ok := input["chapterId"].(float64); ok {
+				chapterIDs = append(chapterIDs, int64(idF))
 			}
 		}
 
 		deletedChapters := []map[string]interface{}{}
 		if len(chapterIDs) > 0 && database.DB != nil {
-			_, _ = database.DB.Exec(c.Context(), "UPDATE suwayomi.chapteruser SET is_downloaded = false WHERE chapter = ANY($1)", chapterIDs)
-			_, _ = database.DB.Exec(c.Context(), "UPDATE suwayomi.chapter SET is_downloaded = false WHERE id = ANY($1)", chapterIDs)
 			for _, cid := range chapterIDs {
 				var chMangaID int64
-				_ = database.DB.QueryRow(c.Context(), "SELECT manga FROM suwayomi.chapter WHERE id = $1", cid).Scan(&chMangaID)
+				var chName, mTitle, sourceName sql.NullString
+				var scanlator sql.NullString
+				query := `
+					SELECT c.manga, c.name, c.scanlator, m.title, s.name
+					FROM suwayomi.chapter c
+					JOIN suwayomi.manga m ON c.manga = m.id
+					LEFT JOIN suwayomi.source s ON m.source = s.id
+					WHERE c.id = $1`
+				_ = database.DB.QueryRow(c.Context(), query, cid).Scan(&chMangaID, &chName, &scanlator, &mTitle, &sourceName)
+
+				if cfg != nil && chName.Valid && mTitle.Valid && sourceName.Valid {
+					cbzPath := util.GetChapterPath(cfg, sourceName.String, mTitle.String, chName.String, scanlator.String) + ".cbz"
+					_ = os.Remove(cbzPath)
+					// Also clean cached pages folder for this chapter
+					cacheDir := filepath.Join(cfg.Data.RootDir, "cache", "pages", fmt.Sprintf("%d", chMangaID), fmt.Sprintf("ch_%d", cid))
+					_ = os.RemoveAll(cacheDir)
+				}
+
 				deletedChapters = append(deletedChapters, map[string]interface{}{
 					"id":           cid,
 					"isDownloaded": false,
@@ -3563,12 +3899,18 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					"__typename": "ChapterType",
 				})
 			}
+			_, _ = database.DB.Exec(c.Context(), "UPDATE suwayomi.chapteruser SET is_downloaded = false WHERE chapter = ANY($1)", chapterIDs)
+			_, _ = database.DB.Exec(c.Context(), "UPDATE suwayomi.chapter SET is_downloaded = false WHERE id = ANY($1)", chapterIDs)
 		}
 
 		data = map[string]interface{}{
 			"deleteDownloadedChapters": map[string]interface{}{
 				"chapters":   deletedChapters,
 				"__typename": "DeleteDownloadedChaptersPayload",
+			},
+			"deleteDownloadedChapter": map[string]interface{}{
+				"chapters":   deletedChapters,
+				"__typename": "DeleteDownloadedChapterPayload",
 			},
 		}
 
