@@ -385,6 +385,9 @@ func GetMangaURL(sourceID int64, mangaURL string) string {
 	case 3953107753690791431: // Uchuujin Projects
 		return "https://uchuujinmangas.com/" + strings.TrimLeft(cleanURL, "/")
 
+	case 1598762687295904337: // BokugenTranslation
+		return "https://bokugents.com/" + strings.TrimLeft(cleanURL, "/")
+
 	case 5943212552955476721: // ManhwaWeb
 		return "https://manhwa-web.com/" + strings.TrimLeft(cleanURL, "/")
 

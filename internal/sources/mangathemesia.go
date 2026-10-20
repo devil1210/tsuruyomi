@@ -15,7 +15,7 @@ func init() {
 	// Register MangaThemesia family sources
 	Register(3953107753690791431, NewMangaThemesiaHandler("Uchuujin Projects", "https://uchuujinmangas.com"))
 	Register(5943212552955476721, NewMangaThemesiaHandler("ManhwaWeb", "https://manhwa-web.com"))
-	Register(1136717301008230074, NewMangaThemesiaHandler("Submanhwa", "https://submanhwa.com"))
+	Register(1598762687295904337, NewMangaThemesiaHandler("BokugenTranslation", "https://bokugents.com"))
 	Register(829053423099062956, NewMangaThemesiaHandler("Mangas No Sekai", "https://mangasnosekai.com"))
 	Register(698913079501532785, NewMangaThemesiaHandler("RavenManga", "https://ravenmanga.com"))
 }

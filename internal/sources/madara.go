@@ -13,7 +13,6 @@ import (
 func init() {
 	// Register Madara family sources
 	Register(8701445043633550960, NewMadaraHandlerWithPath("LeerManhwas", "https://leermanhwas.com", "leer-manhwa-18"))
-	Register(1598762687295904337, NewMadaraHandler("BokugenTranslation", "https://bokugentranslation.com"))
 	Register(3044113561993269522, NewMadaraHandler("ApollComics", "https://apollcomics.xyz"))
 	Register(4647982373411241498, NewMadaraHandler("DragonTranslation.org", "https://dragontranslation.org"))
 	Register(1814471239661920836, NewMadaraHandler("Cerberus Series", "https://cerberuseries.com"))

@@ -79,6 +79,10 @@ func RegisterManifestSources(m *Manifest) {
 		if s.ID == 0 {
 			continue
 		}
+		// If a compiled native source already handles this ID, prefer the native handler
+		if _, ok := sources.Get(s.ID); ok {
+			continue
+		}
 		switch strings.ToLower(s.Engine) {
 		case "madara":
 			sources.Register(s.ID, sources.NewMadaraHandler(s.Name, s.BaseURL))
