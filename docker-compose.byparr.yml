@@ -1,0 +1,63 @@
+# ==============================================================================
+# Tsuruyomi Stack with Byparr (Cloudflare Turnstile Bypass)
+#
+# Usage:
+#   docker compose -f docker-compose.byparr.yml up -d
+# ==============================================================================
+
+services:
+  tsuruyomi:
+    image: ghcr.io/devil1210/tsuruyomi:latest
+    container_name: tsuruyomi
+    restart: unless-stopped
+    ports:
+      - "${SERVER_PORT:-7654}:${SERVER_PORT:-7654}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      byparr:
+        condition: service_started
+    environment:
+      - DATABASE_DSN=${DATABASE_DSN:-postgres://${DBUSER:-tsuruyomi}:${DBPASS:-tsuruyomi_pass}@${DBHOST:-postgres}:${DBPORT:-5432}/${DBNAME:-tsuruyomi}?sslmode=disable}
+      - SERVER_PORT=${SERVER_PORT:-7654}
+      - SIDECAR_ENABLED=${SIDECAR_ENABLED:-false}
+      - FLARESOLVERR_ENABLED=${FLARESOLVERR_ENABLED:-true}
+      - FLARESOLVERR_URL=${FLARESOLVERR_URL:-http://byparr:8191}
+      - TZ=${TZ:-America/Santiago}
+    volumes:
+      - tsuruyomi_config:/config
+      - tsuruyomi_data:/data
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: tsuruyomi-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${DBUSER:-tsuruyomi}
+      - POSTGRES_PASSWORD=${DBPASS:-tsuruyomi_pass}
+      - POSTGRES_DB=${DBNAME:-tsuruyomi}
+    volumes:
+      - tsuruyomi_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DBUSER:-tsuruyomi} -d ${DBNAME:-tsuruyomi}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  byparr:
+    image: ghcr.io/thephaseless/byparr:latest
+    container_name: tsuruyomi-byparr
+    restart: unless-stopped
+    environment:
+      - PORT=8191
+      - LOG_LEVEL=${BYPARR_LOG_LEVEL:-INFO}
+      - USE_HEADLESS=true
+      - TIMEOUT=60
+      - TZ=${TZ:-America/Santiago}
+    ports:
+      - "${BYPARR_PORT:-8191}:8191"
+
+volumes:
+  tsuruyomi_config:
+  tsuruyomi_data:
+  tsuruyomi_pgdata:
