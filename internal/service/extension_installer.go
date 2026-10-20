@@ -49,9 +49,27 @@ var extensionPackageAliases = map[string]string{
 	"eu.kanade.tachiyomi.extension.es.lectormangalat":       "eu.kanade.tachiyomi.extension.es.lectormanga",
 }
 
+// NormalizeRepoURL converts human GitHub repo or blob URLs into the raw index.json endpoint.
+func NormalizeRepoURL(repoURL string) string {
+	clean := strings.TrimSpace(repoURL)
+	if strings.Contains(clean, "github.com/") && strings.Contains(clean, "/blob/") {
+		clean = strings.Replace(clean, "github.com/", "raw.githubusercontent.com/", 1)
+		clean = strings.Replace(clean, "/blob/", "/", 1)
+	}
+	if strings.HasPrefix(clean, "https://github.com/") && !strings.Contains(clean, "/raw/") && !strings.HasSuffix(clean, ".json") {
+		clean = strings.TrimSuffix(clean, "/") + "/raw/main/index.json"
+		clean = strings.Replace(clean, "github.com/", "raw.githubusercontent.com/", 1)
+		clean = strings.Replace(clean, "/raw/", "/", 1)
+	}
+	if strings.HasPrefix(clean, "https://raw.githubusercontent.com/") && !strings.HasSuffix(clean, ".json") {
+		clean = strings.TrimSuffix(clean, "/") + "/index.json"
+	}
+	return clean
+}
+
 // FetchRepoIndex retrieves the index.json catalog from a repository URL with caching.
 func FetchRepoIndex(ctx context.Context, repoURL string) ([]RepoIndexEntry, error) {
-	cleanURL := strings.TrimSpace(repoURL)
+	cleanURL := NormalizeRepoURL(repoURL)
 	if cleanURL == "" {
 		return nil, fmt.Errorf("empty repo URL")
 	}

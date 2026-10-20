@@ -3059,6 +3059,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			}
 		}
 
+		url = service.NormalizeRepoURL(url)
+
 		name := "Custom Extension Store"
 		badge := "REPO"
 		if strings.Contains(url, "tsuruyomi") || strings.Contains(url, "devil1210") {
@@ -3074,6 +3076,13 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			Name:       name,
 			BadgeLabel: badge,
 		})
+
+		// Trigger background sync immediately so new extensions appear
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			_ = service.SyncExtensionRepositories(ctx, cfg)
+		}()
 
 		data = map[string]interface{}{
 			"addExtensionStore": map[string]interface{}{
@@ -4439,6 +4448,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 		if restoreErr != nil {
+			log.Printf("[BACKUP] Error starting async restore: %v", restoreErr)
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"errors": []fiber.Map{{"message": restoreErr.Error()}},
 			})
