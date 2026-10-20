@@ -679,6 +679,11 @@ func encodeBackupSource(src *ProtoBackupSource) []byte {
 
 // RestoreFromProtoBackup restores all categories, mangas, chapters, and history from a ProtoBackup into the database.
 func RestoreFromProtoBackup(ctx context.Context, pb *ProtoBackup) error {
+	return RestoreFromProtoBackupWithProgress(ctx, pb, nil)
+}
+
+// RestoreFromProtoBackupWithProgress restores all categories, mangas, chapters, and history from a ProtoBackup into the database while invoking onProgress.
+func RestoreFromProtoBackupWithProgress(ctx context.Context, pb *ProtoBackup, onProgress func(current int, total int)) error {
 	if database.DB == nil {
 		return fmt.Errorf("database not initialized")
 	}
@@ -778,7 +783,8 @@ func RestoreFromProtoBackup(ctx context.Context, pb *ProtoBackup) error {
 	}
 
 	// 2. Restore Mangas and Chapters
-	for _, m := range pb.BackupManga {
+	totalManga := len(pb.BackupManga)
+	for idx, m := range pb.BackupManga {
 		var mangaID int64
 		err := tx.QueryRow(ctx, "SELECT id FROM suwayomi.manga WHERE source = $1 AND url = $2", m.Source, m.URL).Scan(&mangaID)
 		if err != nil || mangaID == 0 {
@@ -867,6 +873,10 @@ func RestoreFromProtoBackup(ctx context.Context, pb *ProtoBackup) error {
 					  AND user_id = 1
 				`, h.LastRead, mangaID, h.URL)
 			}
+		}
+
+		if onProgress != nil {
+			onProgress(idx+1, totalManga)
 		}
 	}
 

@@ -10,22 +10,26 @@ import (
 	"tsuruyomi/internal/service"
 )
 
-// ImportBackup handles importing a backup from a URL or body payload.
+// ImportBackup handles importing a backup from a URL or body payload asynchronously.
 func ImportBackup(c *fiber.Ctx) error {
 	body := c.Body()
 	if len(body) == 0 {
 		return c.Status(fiber.StatusBadRequest).SendString("Empty backup payload")
 	}
 
-	err := service.ImportBackup(c.Context(), body)
+	jobID, totalManga, err := service.GlobalRestoreManager.StartAsyncRestore(body)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
 	}
 
-	return c.SendStatus(fiber.StatusOK)
+	return c.JSON(fiber.Map{
+		"id":         jobID,
+		"state":      "RUNNING",
+		"totalManga": totalManga,
+	})
 }
 
-// ImportBackupFile handles importing a backup via file upload.
+// ImportBackupFile handles importing a backup via file upload asynchronously.
 func ImportBackupFile(c *fiber.Ctx) error {
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
@@ -43,12 +47,23 @@ func ImportBackupFile(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).SendString("Failed to read file: " + err.Error())
 	}
 
-	err = service.ImportBackup(c.Context(), data)
+	jobID, totalManga, err := service.GlobalRestoreManager.StartAsyncRestore(data)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
 	}
 
-	return c.SendStatus(fiber.StatusOK)
+	return c.JSON(fiber.Map{
+		"id":         jobID,
+		"state":      "RUNNING",
+		"totalManga": totalManga,
+	})
+}
+
+// GetRestoreStatus returns current status of backup restoration.
+func GetRestoreStatus(c *fiber.Ctx) error {
+	id := c.Params("id")
+	st := service.GlobalRestoreManager.GetStatus(id)
+	return c.JSON(st)
 }
 
 // ValidateBackup validates backup content from a URL or body payload.

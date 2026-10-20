@@ -221,6 +221,7 @@ func Setup(cfg *config.Config) *fiber.App {
 	api.Post("/backup/validate/file", handlers.ValidateBackupFile)
 	api.Get("/backup/export", handlers.ExportBackup)
 	api.Get("/backup/export/file", handlers.ExportBackupFile)
+	api.Get("/backup/restore/status/:id?", handlers.GetRestoreStatus)
 
 	// Track Routes
 	api.Get("/track/list", handlers.ListTrackers)

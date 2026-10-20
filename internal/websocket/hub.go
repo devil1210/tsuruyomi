@@ -21,6 +21,13 @@ type Hub struct {
 	mu         sync.Mutex
 }
 
+// GlobalHub is the default shared Hub for application-wide broadcasts.
+var GlobalHub = NewHub()
+
+func init() {
+	go GlobalHub.Run()
+}
+
 // NewHub creates a new Hub.
 func NewHub() *Hub {
 	return &Hub{

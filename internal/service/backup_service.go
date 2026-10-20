@@ -7,12 +7,180 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/models"
+	"tsuruyomi/internal/websocket"
 )
+
+// RestoreStatus represents the live status of an asynchronous backup restoration job.
+type RestoreStatus struct {
+	ID            string `json:"id"`
+	State         string `json:"state"` // PENDING, RUNNING, COMPLETED, FAILED
+	MangaProgress int    `json:"mangaProgress"`
+	TotalManga    int    `json:"totalManga"`
+	ErrorMessage  string `json:"errorMessage,omitempty"`
+}
+
+type RestoreManager struct {
+	mu          sync.RWMutex
+	jobs        map[string]*RestoreStatus
+	latestJobID string
+}
+
+var GlobalRestoreManager = NewRestoreManager()
+
+func NewRestoreManager() *RestoreManager {
+	return &RestoreManager{
+		jobs: make(map[string]*RestoreStatus),
+	}
+}
+
+// StartAsyncRestore begins an asynchronous backup restoration in a background goroutine and returns job ID and total manga count.
+func (rm *RestoreManager) StartAsyncRestore(data []byte) (string, int, error) {
+	if database.DB == nil {
+		return "", 0, fmt.Errorf("database not initialized")
+	}
+	if len(data) == 0 {
+		return "", 0, fmt.Errorf("empty backup payload")
+	}
+
+	// 1. Decompress if gzipped (.tachibk / .proto.gz)
+	raw := data
+	if len(raw) >= 2 && raw[0] == 0x1f && raw[1] == 0x8b {
+		zr, err := gzip.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			return "", 0, fmt.Errorf("decompressing gzip backup: %w", err)
+		}
+		defer zr.Close()
+		decompressed, err := io.ReadAll(zr)
+		if err != nil {
+			return "", 0, fmt.Errorf("reading decompressed backup data: %w", err)
+		}
+		raw = decompressed
+	}
+
+	trimmed := bytes.TrimSpace(raw)
+	var pb *ProtoBackup
+	var err error
+	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+		var payload BackupPayload
+		if err := json.Unmarshal(trimmed, &payload); err != nil {
+			return "", 0, fmt.Errorf("decoding legacy backup JSON: %w", err)
+		}
+		pb = jsonPayloadToProto(&payload)
+	} else {
+		pb, err = DecodeProtoBackup(raw)
+		if err != nil {
+			return "", 0, fmt.Errorf("decoding protobuf backup: %w", err)
+		}
+	}
+
+	totalManga := len(pb.BackupManga)
+	jobID := fmt.Sprintf("restore-%d", time.Now().UnixMilli())
+
+	status := &RestoreStatus{
+		ID:            jobID,
+		State:         "RUNNING",
+		MangaProgress: 0,
+		TotalManga:    totalManga,
+	}
+
+	rm.mu.Lock()
+	rm.jobs[jobID] = status
+	rm.latestJobID = jobID
+	rm.mu.Unlock()
+
+	log.Printf("[BACKUP] Starting async restore %s with %d mangas...", jobID, totalManga)
+
+	// Launch background restoration
+	go func() {
+		ctx := context.Background()
+		errRestore := RestoreFromProtoBackupWithProgress(ctx, pb, func(current int, total int) {
+			rm.mu.Lock()
+			if st, ok := rm.jobs[jobID]; ok {
+				st.MangaProgress = current
+				st.TotalManga = total
+			}
+			rm.mu.Unlock()
+
+			// Broadcast progress via WebSocket if available
+			if websocket.GlobalHub != nil {
+				msg, _ := json.Marshal(map[string]interface{}{
+					"event": "BACKUP_RESTORE_PROGRESS",
+					"data": map[string]interface{}{
+						"id":            jobID,
+						"state":         "RUNNING",
+						"mangaProgress": current,
+						"totalManga":    total,
+					},
+				})
+				websocket.GlobalHub.Broadcast(msg)
+			}
+		})
+
+		rm.mu.Lock()
+		defer rm.mu.Unlock()
+		if st, ok := rm.jobs[jobID]; ok {
+			if errRestore != nil {
+				st.State = "FAILED"
+				st.ErrorMessage = errRestore.Error()
+				log.Printf("[BACKUP] Restore %s failed: %v", jobID, errRestore)
+			} else {
+				st.State = "COMPLETED"
+				st.MangaProgress = totalManga
+				log.Printf("[BACKUP] Restore %s completed successfully (%d mangas)", jobID, totalManga)
+			}
+		}
+
+		if websocket.GlobalHub != nil {
+			state := "COMPLETED"
+			if errRestore != nil {
+				state = "FAILED"
+			}
+			msg, _ := json.Marshal(map[string]interface{}{
+				"event": "BACKUP_RESTORE_FINISHED",
+				"data": map[string]interface{}{
+					"id":            jobID,
+					"state":         state,
+					"mangaProgress": totalManga,
+					"totalManga":    totalManga,
+				},
+			})
+			websocket.GlobalHub.Broadcast(msg)
+		}
+	}()
+
+	return jobID, totalManga, nil
+}
+
+// GetStatus returns the current live status for a restore job ID (or the latest job if empty).
+func (rm *RestoreManager) GetStatus(jobID string) RestoreStatus {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	if jobID != "" {
+		if st, ok := rm.jobs[jobID]; ok {
+			return *st
+		}
+	}
+	if rm.latestJobID != "" {
+		if st, ok := rm.jobs[rm.latestJobID]; ok {
+			return *st
+		}
+	}
+	return RestoreStatus{
+		ID:            "1",
+		State:         "IDLE",
+		MangaProgress: 0,
+		TotalManga:    0,
+	}
+}
 
 // MissingSourceInfo represents a source present in a backup whose extension is not installed.
 type MissingSourceInfo struct {

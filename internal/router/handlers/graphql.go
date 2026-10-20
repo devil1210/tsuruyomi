@@ -4411,8 +4411,10 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "RESTORE_BACKUP", "restoreBackup":
-		// Read uploaded file if available in multipart form
+		var jobID string
+		var totalManga int
 		var restoreErr error
+
 		if form, err := c.MultipartForm(); err == nil && form != nil {
 			for _, files := range form.File {
 				for _, fh := range files {
@@ -4420,33 +4422,41 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						dataBytes, err := io.ReadAll(f)
 						f.Close()
 						if err == nil && len(dataBytes) > 0 {
-							log.Printf("[BACKUP] Received backup file %q (%d bytes) via GraphQL. Restoring...", fh.Filename, len(dataBytes))
-							restoreErr = service.ImportBackup(c.Context(), dataBytes)
-							if restoreErr != nil {
-								log.Printf("[BACKUP] Error restoring backup: %v\n", restoreErr)
-							} else {
-								log.Printf("[BACKUP] Successfully restored backup from %q\n", fh.Filename)
-							}
+							log.Printf("[BACKUP] Received backup file %q (%d bytes) via GraphQL. Starting async restore...", fh.Filename, len(dataBytes))
+							jobID, totalManga, restoreErr = service.GlobalRestoreManager.StartAsyncRestore(dataBytes)
 							break
 						}
 					}
 				}
+				if jobID != "" || restoreErr != nil {
+					break
+				}
 			}
 		}
 
+		if jobID == "" && restoreErr == nil && len(c.Body()) > 0 {
+			jobID, totalManga, restoreErr = service.GlobalRestoreManager.StartAsyncRestore(c.Body())
+		}
+
 		if restoreErr != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"errors": []fiber.Map{{"message": restoreErr.Error()}},
+			})
+		}
+
+		if jobID == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"errors": []fiber.Map{{"message": "No backup file found in request"}},
 			})
 		}
 
 		data = map[string]interface{}{
 			"restoreBackup": map[string]interface{}{
-				"id": "1",
+				"id": jobID,
 				"status": map[string]interface{}{
-					"state":         "COMPLETED",
-					"mangaProgress": 100,
-					"totalManga":    100,
+					"state":         "RUNNING",
+					"mangaProgress": 0,
+					"totalManga":    totalManga,
 					"__typename":    "BackupRestoreStatusType",
 				},
 				"__typename": "RestoreBackupPayload",
@@ -4454,16 +4464,28 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "GET_RESTORE_STATUS", "GET_BACKUP_RESTORE_STATUS", "restoreStatus":
+		var reqID string
+		if idVal, ok := req.Variables["id"].(string); ok {
+			reqID = idVal
+		} else if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if idVal, ok := input["id"].(string); ok {
+				reqID = idVal
+			}
+		}
+
+		st := service.GlobalRestoreManager.GetStatus(reqID)
+
 		data = map[string]interface{}{
 			"restoreStatus": map[string]interface{}{
-				"id":            "1",
-				"state":         "COMPLETED",
-				"mangaProgress": 100,
-				"totalManga":    100,
+				"id":            st.ID,
+				"state":         st.State,
+				"mangaProgress": st.MangaProgress,
+				"totalManga":    st.TotalManga,
 				"status": map[string]interface{}{
-					"state":         "COMPLETED",
-					"mangaProgress": 100,
-					"totalManga":    100,
+					"id":            st.ID,
+					"state":         st.State,
+					"mangaProgress": st.MangaProgress,
+					"totalManga":    st.TotalManga,
 					"__typename":    "BackupRestoreStatusType",
 				},
 				"__typename": "BackupRestoreStatusType",
