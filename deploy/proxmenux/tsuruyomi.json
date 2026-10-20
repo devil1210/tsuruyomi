@@ -1,0 +1,249 @@
+{
+  "schema_version": "0.5.0",
+  "kind": "proxmenux.oci-template",
+  "id": "image-tsuruyomi",
+  "status": "laboratory-validated",
+  "catalog_ui": {
+    "title": {
+      "en_US": "Tsuruyomi (Standalone)",
+      "es_ES": "Tsuruyomi (Solo App / Standalone)"
+    },
+    "tagline": {
+      "en_US": "Lightweight Manga Reader and OPDS Server (Standalone)",
+      "es_ES": "Lector de manga y cat\u00e1logo OPDS independiente (usa tu propio PostgreSQL)"
+    },
+    "description": {
+      "en_US": "Tsuruyomi standalone container. Connects to your existing external PostgreSQL database (e.g. CT 150 postgres-core). No dependent containers, no hookscripts, independent and clean updates.",
+      "es_ES": "Contenedor independiente de Tsuruyomi. Se conecta directamente a tu base de datos PostgreSQL existente (como tu CT 150 postgres-core). Sin dependencias de otros contenedores ni hookscripts, garantizando arranques y actualizaciones limpias sin errores."
+    },
+    "category": "media",
+    "category_label": "Media & Streaming",
+    "author": "devil1210",
+    "developer": "devil1210",
+    "icon": "https://raw.githubusercontent.com/devil1210/tsuruyomi/main/data/webUI/apple-touch-icon.png",
+    "thumbnail": null,
+    "screenshots": [],
+    "architectures": [
+      "amd64",
+      "arm64"
+    ],
+    "launch": {
+      "scheme": "http",
+      "port": 7654,
+      "path": "/"
+    },
+    "website": "https://github.com/devil1210/tsuruyomi",
+    "documentation": "https://github.com/devil1210/tsuruyomi/blob/main/README.md",
+    "repository": "https://github.com/devil1210/tsuruyomi",
+    "tips": [
+      "Ideal para conectar a tu CT 150 de PostgreSQL existente o servidor externo.",
+      "Compatible con KOReader y Moon+ Reader v\u00eda /api/opds/v1.2 y /api/opds/v2.0.",
+      "Al actualizar por ProxMenux, solo actualiza la app Tsuruyomi sin tocar la base de datos."
+    ],
+    "mini_changelog": [],
+    "display_version": "1.0.1",
+    "updated_at": "2026-10-19"
+  },
+  "source": {
+    "provider": "official",
+    "repository": "https://github.com/devil1210/tsuruyomi",
+    "default_branch": "main",
+    "revision": "latest",
+    "image_repository_url": "https://ghcr.io/devil1210/tsuruyomi",
+    "readme_pushed_at": "2026-10-17T00:00:00Z",
+    "compose_sha256": "tsuruyomi-sha256",
+    "generated_at": "2026-10-17T20:00:00+00:00"
+  },
+  "container_contract": {
+    "service_name": "tsuruyomi",
+    "container_name": "tsuruyomi",
+    "image": {
+      "reference": "ghcr.io/devil1210/tsuruyomi:latest",
+      "registry": "ghcr.io",
+      "repository": "devil1210/tsuruyomi",
+      "tag": "latest",
+      "digest": null,
+      "pull_policy": "resolve-selected-tag-to-architecture-digest-at-install"
+    },
+    "environment": [
+      {
+        "name": "DATABASE_DSN",
+        "example": "postgres://tsuruyomi:tsuruyomi_pass@192.168.1.150:5432/tsuruyomi?sslmode=disable",
+        "required": true,
+        "sensitive": false,
+        "source": "docker-compose"
+      },
+      {
+        "name": "SERVER_PORT",
+        "example": "7654",
+        "required": true,
+        "sensitive": false,
+        "source": "docker-compose"
+      },
+      {
+        "name": "TZ",
+        "example": "$TZ",
+        "required": true,
+        "sensitive": false,
+        "source": "docker-compose"
+      },
+      {
+        "name": "FLARESOLVERR_ENABLED",
+        "example": "true",
+        "required": false,
+        "sensitive": false,
+        "source": "docker-compose"
+      },
+      {
+        "name": "FLARESOLVERR_URL",
+        "example": "http://192.168.1.136:8191",
+        "required": false,
+        "sensitive": false,
+        "source": "docker-compose"
+      }
+    ],
+    "volumes": [
+      {
+        "id": "volume-config",
+        "container_path": "/config",
+        "compose_source_example": "/DATA/AppData/$AppID/config",
+        "read_only": false,
+        "required": true,
+        "installation_choice": [
+          "managed-volume",
+          "host-bind"
+        ],
+        "default": "managed-volume",
+        "managed_volume": {
+          "backup": true,
+          "default_size_gb": 2
+        }
+      },
+      {
+        "id": "volume-data",
+        "container_path": "/data",
+        "compose_source_example": "/DATA/AppData/$AppID/data",
+        "read_only": false,
+        "required": true,
+        "installation_choice": [
+          "managed-volume",
+          "host-bind"
+        ],
+        "default": "managed-volume",
+        "managed_volume": {
+          "backup": false,
+          "default_size_gb": 32
+        }
+      }
+    ],
+    "ports": [
+      {
+        "container_port": 7654,
+        "published_example": 7654,
+        "protocol": "tcp",
+        "required": true,
+        "proxmox_behavior": "listener-on-dedicated-lxc-address-no-nat"
+      }
+    ],
+    "related_services": [],
+    "restart": "unless-stopped",
+    "stop_grace_period": null,
+    "original_compose": "name: tsuruyomi\nservices:\n  tsuruyomi:\n    image: ghcr.io/devil1210/tsuruyomi:latest\n    container_name: tsuruyomi\n    restart: unless-stopped\n    ports:\n    - target: 7654\n      published:  7654\n      protocol: tcp\n    environment:\n      SERVER_PORT: 7654\n      DATABASE_DSN: postgres://tsuruyomi:tsuruyomi_pass@192.168.1.150:5432/tsuruyomi?sslmode=disable\n      TZ: $TZ\n      FLARESOLVERR_ENABLED: true\n      FLARESOLVERR_URL: http://192.168.1.136:8191\n    volumes:\n    - type: bind\n      source: /DATA/AppData/$AppID/config\n      target: /config\n    - type: bind\n      source: /DATA/AppData/$AppID/data\n      target: /data\n"
+  },
+  "first_run": {
+    "endpoints": [
+      {
+        "label": "Web UI",
+        "scheme": "http",
+        "port": 7654,
+        "path": "/",
+        "source": "compose-metadata"
+      }
+    ],
+    "credentials": []
+  },
+  "proxmox": {
+    "runtime": "native-oci-lxc",
+    "technology_status": "proxmox-technology-preview",
+    "defaults": {
+      "unprivileged": true,
+      "ostype": "auto-from-image",
+      "cores": 2,
+      "memory_mb": 512,
+      "swap_mb": 512,
+      "rootfs_size_gb": 4,
+      "rootfs_storage": "local-lvm",
+      "volume_storage": "local-lvm",
+      "template_storage": "local",
+      "bridge": "vmbr0",
+      "ipv4": "dhcp",
+      "firewall": true,
+      "host_managed_network": true,
+      "onboot": false,
+      "features": [
+        "nesting=1"
+      ],
+      "shutdown_timeout_seconds": 30
+    },
+    "image_metadata_policy": {
+      "entrypoint": "import-from-oci-image",
+      "cmd": "import-from-oci-image",
+      "environment": "import-image-env-then-apply-compose-overrides",
+      "user": "import-from-oci-image",
+      "working_dir": "import-from-oci-image",
+      "stop_signal": "import-from-oci-image"
+    },
+    "installer_profile": {
+      "volume_preparations": [
+        {
+          "container_path": "/config",
+          "remove_lost_found": true,
+          "owner_strategy": "mapped-root",
+          "only_when_mount_type": "managed-volume"
+        },
+        {
+          "container_path": "/data",
+          "remove_lost_found": true,
+          "owner_strategy": "mapped-root",
+          "only_when_mount_type": "managed-volume"
+        }
+      ]
+    }
+  },
+  "compatibility": {
+    "automatic_install_candidate": true,
+    "validated": true,
+    "supported_compose_keys": [
+      "container_name",
+      "deploy",
+      "depends_on",
+      "environment",
+      "healthcheck",
+      "image",
+      "networks",
+      "ports",
+      "restart",
+      "volumes"
+    ],
+    "untranslated_blockers": []
+  },
+  "validation": {
+    "schema": "passed-at-generation",
+    "clean_install": "passed",
+    "service_health": "passed",
+    "restart_persistence": "passed",
+    "backup_restore": "passed",
+    "update_preserves_data": "passed"
+  },
+  "lifecycle": {
+    "update_strategy": "replace-rootfs-from-new-oci-image-preserve-managed-volumes",
+    "registry_state": {
+      "resolved_architecture": null,
+      "resolved_digest": null,
+      "image_version_label": null,
+      "image_created": null
+    },
+    "change_detection": "compare-resolved-architecture-digest",
+    "automatic_unattended_updates": false
+  }
+}
