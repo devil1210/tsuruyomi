@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/proxy"
+
 	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/util"
@@ -30,6 +32,51 @@ var DefaultClient = &http.Client{
 		MaxIdleConnsPerHost: 20,
 		IdleConnTimeout:     90 * time.Second,
 	},
+}
+
+// ConfigureProxy inspects database settings for SOCKS5 proxy configuration and updates DefaultClient transport.
+func ConfigureProxy(ctx context.Context) {
+	settings, err := database.GetAllServerSettings(ctx)
+	if err != nil || settings == nil {
+		return
+	}
+
+	enabled := settings["socksProxyEnabled"] == "true"
+	host := strings.TrimSpace(settings["socksProxyHost"])
+	port := strings.TrimSpace(settings["socksProxyPort"])
+	user := strings.TrimSpace(settings["socksProxyUsername"])
+	pass := strings.TrimSpace(settings["socksProxyPassword"])
+
+	baseTransport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     90 * time.Second,
+	}
+
+	if !enabled || host == "" || port == "" {
+		DefaultClient.Transport = baseTransport
+		return
+	}
+
+	addr := fmt.Sprintf("%s:%s", host, port)
+	var auth *proxy.Auth
+	if user != "" || pass != "" {
+		auth = &proxy.Auth{
+			User:     user,
+			Password: pass,
+		}
+	}
+
+	dialer, dialErr := proxy.SOCKS5("tcp", addr, auth, proxy.Direct)
+	if dialErr != nil {
+		log.Printf("[PROXY] Failed to create SOCKS5 dialer for %s: %v", addr, dialErr)
+		DefaultClient.Transport = baseTransport
+		return
+	}
+
+	baseTransport.Dial = dialer.Dial
+	DefaultClient.Transport = baseTransport
+	log.Printf("[PROXY] Configured SOCKS5 proxy at %s", addr)
 }
 
 // ChapterItem represents a chapter's metadata scraped from a source.
@@ -55,6 +102,11 @@ type MangaItem struct {
 	Genres       []string
 	Author       string
 	Artist       string
+}
+
+// MangaDetailsFetcher can be implemented by sources that support refreshing detailed metadata.
+type MangaDetailsFetcher interface {
+	GetMangaDetails(ctx context.Context, mangaURL string) (*MangaItem, error)
 }
 
 // MangaSearcher is an optional interface for sources that support searching manga online.

@@ -2,6 +2,10 @@ package service
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
+	"sort"
+	"tsuruyomi/internal/config"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -435,4 +439,159 @@ func ValidateBackup(ctx context.Context, data []byte) (*ValidateBackupResult, er
 	}
 
 	return res, nil
+}
+
+
+var (
+	backupSchedulerStop chan struct{}
+	backupSchedulerMu   sync.Mutex
+)
+
+// StartBackupScheduler initializes the automated background backup scheduler.
+func StartBackupScheduler(ctx context.Context, cfg *config.Config) {
+	backupSchedulerMu.Lock()
+	defer backupSchedulerMu.Unlock()
+	restartBackupSchedulerLocked(ctx, cfg)
+}
+
+// RestartBackupScheduler dynamically restarts the backup scheduler when settings change.
+func RestartBackupScheduler(ctx context.Context, cfg *config.Config) {
+	backupSchedulerMu.Lock()
+	defer backupSchedulerMu.Unlock()
+	restartBackupSchedulerLocked(ctx, cfg)
+}
+
+func restartBackupSchedulerLocked(ctx context.Context, cfg *config.Config) {
+	if backupSchedulerStop != nil {
+		close(backupSchedulerStop)
+		backupSchedulerStop = nil
+	}
+
+	intervalDays := 1
+	backupTimeStr := "00:00"
+	backupPath := ""
+	backupTTL := 14
+
+	if database.DB != nil {
+		if sMap, err := database.GetAllServerSettings(ctx); err == nil && sMap != nil {
+			if v, ok := sMap["backupInterval"]; ok && v != "" {
+				if parsed, err := strconv.Atoi(v); err == nil {
+					intervalDays = parsed
+				}
+			}
+			if v, ok := sMap["backupTime"]; ok && v != "" {
+				backupTimeStr = v
+			}
+			if v, ok := sMap["backupPath"]; ok && v != "" {
+				backupPath = v
+			}
+			if v, ok := sMap["backupTTL"]; ok && v != "" {
+				if parsed, err := strconv.Atoi(v); err == nil {
+					backupTTL = parsed
+				}
+			}
+		}
+	}
+
+	if intervalDays <= 0 {
+		log.Printf("[AUTO-BACKUP] Automated backups disabled (interval <= 0)")
+		return
+	}
+
+	bHour, bMinute := 0, 0
+	parts := strings.Split(strings.TrimSpace(backupTimeStr), ":")
+	if len(parts) >= 1 {
+		if h, err := strconv.Atoi(parts[0]); err == nil && h >= 0 && h < 24 {
+			bHour = h
+		}
+	}
+	if len(parts) >= 2 {
+		if m, err := strconv.Atoi(parts[1]); err == nil && m >= 0 && m < 60 {
+			bMinute = m
+		}
+	}
+
+	stopChan := make(chan struct{})
+	backupSchedulerStop = stopChan
+
+	log.Printf("[AUTO-BACKUP] Scheduled automated backup active (every %d day(s) at %02d:%02d)", intervalDays, bHour, bMinute)
+
+	go func(days int, hour, minute int, bPath string, ttl int, stop chan struct{}) {
+		for {
+			now := time.Now()
+			nextRun := CalculateNextWallClockRun(now, float64(days*24), hour, minute)
+			delay := time.Until(nextRun)
+			log.Printf("[AUTO-BACKUP] Next automated backup scheduled for %s (in %v)",
+				nextRun.Format("2006-01-02 15:04:05 MST"), delay.Round(time.Second))
+
+			timer := time.NewTimer(delay)
+			select {
+			case <-stop:
+				timer.Stop()
+				return
+			case <-timer.C:
+				runScheduledBackup(cfg, bPath, ttl)
+				time.Sleep(2 * time.Second)
+			}
+		}
+	}(intervalDays, bHour, bMinute, backupPath, backupTTL, stopChan)
+}
+
+func runScheduledBackup(cfg *config.Config, customPath string, ttl int) {
+	log.Printf("[AUTO-BACKUP] Triggering automated backup...")
+	data, err := ExportTachibk(context.Background())
+	if err != nil {
+		log.Printf("[AUTO-BACKUP] Error exporting backup: %v", err)
+		return
+	}
+
+	destDir := ""
+	if customPath != "" {
+		destDir = customPath
+	} else if cfg != nil && cfg.Data.RootDir != "" {
+		destDir = filepath.Join(cfg.Data.RootDir, "backups")
+	} else {
+		destDir = filepath.Join(".", "data", "backups")
+	}
+
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		log.Printf("[AUTO-BACKUP] Error creating backup directory %s: %v", destDir, err)
+		return
+	}
+
+	filename := fmt.Sprintf("org.suwayomi.tachidesk_backup_%s.tachibk", time.Now().Format("2006-01-02_15-04"))
+	destFile := filepath.Join(destDir, filename)
+	tempFile := destFile + ".tmp"
+
+	if err := os.WriteFile(tempFile, data, 0644); err != nil {
+		log.Printf("[AUTO-BACKUP] Error writing backup file: %v", err)
+		return
+	}
+	_ = os.Rename(tempFile, destFile)
+	log.Printf("[AUTO-BACKUP] Successfully created automated backup: %s (%d bytes)", destFile, len(data))
+
+	if ttl > 0 {
+		entries, err := os.ReadDir(destDir)
+		if err == nil {
+			var backupFiles []os.FileInfo
+			for _, entry := range entries {
+				if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".tachibk") {
+					if info, err := entry.Info(); err == nil {
+						backupFiles = append(backupFiles, info)
+					}
+				}
+			}
+			if len(backupFiles) > ttl {
+				sort.Slice(backupFiles, func(i, j int) bool {
+					return backupFiles[i].ModTime().Before(backupFiles[j].ModTime())
+				})
+				toDelete := len(backupFiles) - ttl
+				for i := 0; i < toDelete; i++ {
+					delPath := filepath.Join(destDir, backupFiles[i].Name())
+					_ = os.Remove(delPath)
+					log.Printf("[AUTO-BACKUP] Pruned expired backup: %s", backupFiles[i].Name())
+				}
+			}
+		}
+	}
 }

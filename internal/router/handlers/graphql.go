@@ -407,6 +407,9 @@ func buildServerSettingsMap(ctx context.Context, cfg *config.Config) map[string]
 		if _, ok := dbSettings["ip"]; !ok && cfg.Server.Host != "" {
 			ip = cfg.Server.Host
 		}
+		if dp, ok := dbSettings["downloadsPath"]; ok && dp != "" {
+			cfg.Data.DownloadsPath = dp
+		}
 	}
 
 	var browseLangs []string
@@ -443,9 +446,9 @@ func buildServerSettingsMap(ctx context.Context, cfg *config.Config) map[string]
 		"extensionRepos":                  extRepos,
 		"browseLanguages":                 browseLangs,
 		"maxSourcesInParallel":            getInt("maxSourcesInParallel", 6),
-		"excludeUnreadChapters":           getBool("excludeUnreadChapters", false),
-		"excludeNotStarted":               getBool("excludeNotStarted", false),
-		"excludeCompleted":                getBool("excludeCompleted", false),
+		"excludeUnreadChapters":           getBool("excludeUnreadChapters", true),
+		"excludeNotStarted":               getBool("excludeNotStarted", true),
+		"excludeCompleted":                getBool("excludeCompleted", true),
 		"globalUpdateInterval":            getFloat("globalUpdateInterval", 12.0),
 		"globalUpdateTime":                getStr("globalUpdateTime", "04:00"),
 		"updateMangas":                    getBool("updateMangas", false),
@@ -798,6 +801,14 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						if s, ok := v.(string); ok && s != "" {
 							cfg.Server.Host = s
 						}
+					case "downloadsPath":
+						if s, ok := v.(string); ok {
+							cfg.Data.DownloadsPath = strings.TrimSpace(s)
+						}
+					case "backupInterval", "backupTime", "backupPath", "backupTTL":
+						service.RestartBackupScheduler(c.Context(), cfg)
+					case "socksProxyEnabled", "socksProxyHost", "socksProxyPort", "socksProxyUsername", "socksProxyPassword":
+						sources.ConfigureProxy(c.Context())
 					case "authMode":
 						if s, ok := v.(string); ok {
 							cfg.Auth.Mode = strings.ToLower(s)

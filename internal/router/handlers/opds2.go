@@ -403,6 +403,42 @@ func GetOpds2SeriesChapters(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
 	}
 
+	markAsRead := "false"
+	showOnlyUnread := false
+	showOnlyDownloaded := false
+	sortAsc := false
+	if sMap, err := database.GetAllServerSettings(ctx); err == nil && sMap != nil {
+		if sMap["opdsMarkAsReadOnDownload"] == "true" {
+			markAsRead = "true"
+		}
+		if sMap["opdsShowOnlyUnreadChapters"] == "true" {
+			showOnlyUnread = true
+		}
+		if sMap["opdsShowOnlyDownloadedChapters"] == "true" {
+			showOnlyDownloaded = true
+		}
+		if strings.EqualFold(sMap["opdsChapterSortOrder"], "ASC") {
+			sortAsc = true
+		}
+	}
+
+	var filteredChapters []models.ChapterDataClass
+	for _, ch := range chapters {
+		if showOnlyUnread && ch.Read {
+			continue
+		}
+		if showOnlyDownloaded && !ch.Downloaded {
+			continue
+		}
+		filteredChapters = append(filteredChapters, ch)
+	}
+	if sortAsc {
+		for i, j := 0, len(filteredChapters)-1; i < j; i, j = i+1, j-1 {
+			filteredChapters[i], filteredChapters[j] = filteredChapters[j], filteredChapters[i]
+		}
+	}
+	chapters = filteredChapters
+
 	now := formatRFC3339(time.Now())
 	total := len(chapters)
 
@@ -476,7 +512,7 @@ func GetOpds2SeriesChapters(c *fiber.Ctx) error {
 			Links: []Opds2Link{
 				{
 					Rel:   "http://opds-spec.org/acquisition/open-access",
-					Href:  fmt.Sprintf("/api/v1/chapter/%d/download?markAsRead=false", ch.ID),
+					Href:  fmt.Sprintf("/api/v1/chapter/%d/download?markAsRead=%s", ch.ID, markAsRead),
 					Type:  OpdsMimeCbz,
 					Title: "Download CBZ",
 				},

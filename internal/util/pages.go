@@ -26,7 +26,16 @@ func GetChapterPath(cfg *config.Config, sourceName, mangaTitle, chapterName, sca
 	}
 	sanChapterName := SanitizeFilename(rawChapterName)
 
-	return filepath.Join(cfg.Data.RootDir, "downloads", "mangas", sanSourceName, sanMangaTitle, sanChapterName)
+	var baseDir string
+	if cfg != nil && cfg.Data.DownloadsPath != "" {
+		baseDir = cfg.Data.DownloadsPath
+	} else if cfg != nil && cfg.Data.RootDir != "" {
+		baseDir = filepath.Join(cfg.Data.RootDir, "downloads")
+	} else {
+		baseDir = filepath.Join(".", "data", "downloads")
+	}
+
+	return filepath.Join(baseDir, "mangas", sanSourceName, sanMangaTitle, sanChapterName)
 }
 
 // ServePage retrieves a page image from local storage (directory or CBZ archive).

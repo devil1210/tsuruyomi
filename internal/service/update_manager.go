@@ -205,9 +205,11 @@ func (um *UpdateManager) StartUpdate() {
 			settings = make(map[string]string)
 		}
 
-		excludeUnread := parseBoolSetting(settings["excludeUnreadChapters"], false)
-		excludeNotStarted := parseBoolSetting(settings["excludeNotStarted"], false)
-		excludeCompleted := parseBoolSetting(settings["excludeCompleted"], false)
+		excludeUnread := parseBoolSetting(settings["excludeUnreadChapters"], true)
+		excludeNotStarted := parseBoolSetting(settings["excludeNotStarted"], true)
+		excludeCompleted := parseBoolSetting(settings["excludeCompleted"], true)
+		excludeEntryWithUnread := parseBoolSetting(settings["excludeEntryWithUnreadChapters"], true)
+		updateMangas := parseBoolSetting(settings["updateMangas"], false)
 		autoDownload := parseBoolSetting(settings["autoDownloadNewChapters"], false)
 		autoDownloadLimit := parseIntSetting(settings["autoDownloadNewChaptersLimit"], 1)
 
@@ -377,6 +379,23 @@ func (um *UpdateManager) StartUpdate() {
 			var countBefore int
 			_ = database.DB.QueryRow(ctx, "SELECT COUNT(*) FROM suwayomi.chapter WHERE manga = $1", m.ID).Scan(&countBefore)
 
+			handler, _ := sources.Get(m.SourceID)
+			if updateMangas && handler != nil {
+				if fetcher, ok := handler.(sources.MangaDetailsFetcher); ok {
+					if details, err := fetcher.GetMangaDetails(ctx, m.URL); err == nil && details != nil {
+						_, _ = database.DB.Exec(ctx, `
+							UPDATE suwayomi.manga SET
+								description = COALESCE(NULLIF($1, ''), description),
+								status = CASE WHEN $2 > 0 THEN $2 ELSE status END,
+								thumbnail_url = COALESCE(NULLIF($3, ''), thumbnail_url),
+								artist = COALESCE(NULLIF($4, ''), artist),
+								author = COALESCE(NULLIF($5, ''), author),
+								last_modified_at = $6
+							WHERE id = $7
+						`, details.Description, details.Status, details.ThumbnailURL, details.Artist, details.Author, time.Now().UnixMilli(), m.ID)
+					}
+				}
+			}
 			log.Printf("[UPDATER] [%d/%d] Fetching chapters for %q (manga %d, source %d)...", currentFinished+1, currentTotal, m.Title, m.ID, m.SourceID)
 			_, fetchErr := sources.FetchAndSaveMangaChapters(ctx, m.SourceID, int64(m.ID), m.URL)
 			if fetchErr != nil {
@@ -390,6 +409,9 @@ func (um *UpdateManager) StartUpdate() {
 
 					// Auto-download new chapters if enabled
 					if autoDownload && newChapters > 0 {
+						if excludeEntryWithUnread && m.UnreadCount > 0 {
+							log.Printf("[UPDATER] Auto-download skipped for %q (entry has %d unread chapters)", m.Title, m.UnreadCount)
+						} else {
 						limit := min(newChapters, autoDownloadLimit)
 						chRows, err := database.DB.Query(ctx, "SELECT id FROM suwayomi.chapter WHERE manga = $1 ORDER BY source_order DESC LIMIT $2", m.ID, limit)
 						if err == nil {
@@ -405,6 +427,7 @@ func (um *UpdateManager) StartUpdate() {
 								_ = GlobalDownloadManager.Enqueue(ctx, chIDs)
 								log.Printf("[UPDATER] Auto-download: Enqueued %d new chapter(s) for %q", len(chIDs), m.Title)
 							}
+						}
 						}
 					}
 				}

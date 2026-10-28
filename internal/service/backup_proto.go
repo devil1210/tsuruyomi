@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ type ProtoBackup struct {
 	BackupManga      []ProtoBackupManga
 	BackupCategories []ProtoBackupCategory
 	BackupSources    []ProtoBackupSource
+	ServerSettings   map[string]string
 }
 
 type ProtoBackupCategory struct {
@@ -126,6 +128,14 @@ func DecodeProtoBackup(b []byte) (*ProtoBackup, error) {
 				return nil, err
 			}
 			pb.BackupSources = append(pb.BackupSources, src)
+
+		case 9001: // serverSettings
+			v, n := protowire.ConsumeBytes(b)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			b = b[n:]
+			pb.ServerSettings = decodeBackupServerSettings(v)
 
 		default:
 			n := protowire.ConsumeFieldValue(num, typ, b)
@@ -498,6 +508,93 @@ func decodeBackupSource(b []byte) (ProtoBackupSource, error) {
 	return src, nil
 }
 
+func decodeBackupServerSettings(b []byte) map[string]string {
+	settings := make(map[string]string)
+	for len(b) > 0 {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			break
+		}
+		b = b[n:]
+
+		switch num {
+		case 17: // autoDownloadNewChapters
+			v, n := protowire.ConsumeVarint(b)
+			if n >= 0 {
+				settings["autoDownloadNewChapters"] = fmt.Sprintf("%t", v != 0)
+				b = b[n:]
+			}
+		case 18: // excludeEntryWithUnreadChapters
+			v, n := protowire.ConsumeVarint(b)
+			if n >= 0 {
+				settings["excludeEntryWithUnreadChapters"] = fmt.Sprintf("%t", v != 0)
+				b = b[n:]
+			}
+		case 20: // autoDownloadNewChaptersLimit
+			v, n := protowire.ConsumeVarint(b)
+			if n >= 0 {
+				settings["autoDownloadNewChaptersLimit"] = fmt.Sprintf("%d", v)
+				b = b[n:]
+			}
+		case 23: // maxSourcesInParallel
+			v, n := protowire.ConsumeVarint(b)
+			if n >= 0 {
+				settings["maxSourcesInParallel"] = fmt.Sprintf("%d", v)
+				b = b[n:]
+			}
+		case 24: // excludeUnreadChapters
+			v, n := protowire.ConsumeVarint(b)
+			if n >= 0 {
+				settings["excludeUnreadChapters"] = fmt.Sprintf("%t", v != 0)
+				b = b[n:]
+			}
+		case 25: // excludeNotStarted
+			v, n := protowire.ConsumeVarint(b)
+			if n >= 0 {
+				settings["excludeNotStarted"] = fmt.Sprintf("%t", v != 0)
+				b = b[n:]
+			}
+		case 26: // excludeCompleted
+			v, n := protowire.ConsumeVarint(b)
+			if n >= 0 {
+				settings["excludeCompleted"] = fmt.Sprintf("%t", v != 0)
+				b = b[n:]
+			}
+		case 28: // updateMangas
+			v, n := protowire.ConsumeVarint(b)
+			if n >= 0 {
+				settings["updateMangas"] = fmt.Sprintf("%t", v != 0)
+				b = b[n:]
+			}
+		case 39: // backupTime
+			v, n := protowire.ConsumeString(b)
+			if n >= 0 {
+				settings["backupTime"] = v
+				b = b[n:]
+			}
+		case 44: // flareSolverrUrl
+			v, n := protowire.ConsumeString(b)
+			if n >= 0 {
+				settings["flareSolverrUrl"] = v
+				b = b[n:]
+			}
+		case 48: // flareSolverrEnabled
+			v, n := protowire.ConsumeVarint(b)
+			if n >= 0 {
+				settings["flareSolverrEnabled"] = fmt.Sprintf("%t", v != 0)
+				b = b[n:]
+			}
+		default:
+			n := protowire.ConsumeFieldValue(num, typ, b)
+			if n < 0 {
+				return settings
+			}
+			b = b[n:]
+		}
+	}
+	return settings
+}
+
 // EncodeProtoBackup encodes ProtoBackup structure into raw protobuf bytes.
 func EncodeProtoBackup(pb *ProtoBackup) []byte {
 	var b []byte
@@ -523,6 +620,61 @@ func EncodeProtoBackup(pb *ProtoBackup) []byte {
 		b = protowire.AppendBytes(b, sb)
 	}
 
+	// 4. Encode serverSettings (tag 9001)
+	if len(pb.ServerSettings) > 0 {
+		sb := encodeBackupServerSettings(pb.ServerSettings)
+		if len(sb) > 0 {
+			b = protowire.AppendTag(b, 9001, protowire.BytesType)
+			b = protowire.AppendBytes(b, sb)
+		}
+	}
+
+	return b
+}
+
+func encodeBackupServerSettings(settings map[string]string) []byte {
+	var b []byte
+	for k, v := range settings {
+		switch k {
+		case "autoDownloadNewChapters":
+			b = protowire.AppendTag(b, 17, protowire.VarintType)
+			b = appendBool(b, v == "true")
+		case "excludeEntryWithUnreadChapters":
+			b = protowire.AppendTag(b, 18, protowire.VarintType)
+			b = appendBool(b, v == "true")
+		case "autoDownloadNewChaptersLimit":
+			if n, err := strconv.Atoi(v); err == nil {
+				b = protowire.AppendTag(b, 20, protowire.VarintType)
+				b = protowire.AppendVarint(b, uint64(n))
+			}
+		case "maxSourcesInParallel":
+			if n, err := strconv.Atoi(v); err == nil {
+				b = protowire.AppendTag(b, 23, protowire.VarintType)
+				b = protowire.AppendVarint(b, uint64(n))
+			}
+		case "excludeUnreadChapters":
+			b = protowire.AppendTag(b, 24, protowire.VarintType)
+			b = appendBool(b, v == "true")
+		case "excludeNotStarted":
+			b = protowire.AppendTag(b, 25, protowire.VarintType)
+			b = appendBool(b, v == "true")
+		case "excludeCompleted":
+			b = protowire.AppendTag(b, 26, protowire.VarintType)
+			b = appendBool(b, v == "true")
+		case "updateMangas":
+			b = protowire.AppendTag(b, 28, protowire.VarintType)
+			b = appendBool(b, v == "true")
+		case "backupTime":
+			b = protowire.AppendTag(b, 39, protowire.BytesType)
+			b = protowire.AppendString(b, v)
+		case "flareSolverrUrl":
+			b = protowire.AppendTag(b, 44, protowire.BytesType)
+			b = protowire.AppendString(b, v)
+		case "flareSolverrEnabled":
+			b = protowire.AppendTag(b, 48, protowire.VarintType)
+			b = appendBool(b, v == "true")
+		}
+	}
 	return b
 }
 
@@ -700,6 +852,17 @@ func RestoreFromProtoBackupWithProgress(ctx context.Context, pb *ProtoBackup, on
 		VALUES (1, 'admin', '') 
 		ON CONFLICT (id) DO NOTHING
 	`)
+
+	// 0a. Restore Server Settings if present
+	if len(pb.ServerSettings) > 0 {
+		for k, v := range pb.ServerSettings {
+			_, _ = tx.Exec(ctx, `
+				INSERT INTO suwayomi.serversetting (key, value)
+				VALUES ($1, $2)
+				ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+			`, k, v)
+		}
+	}
 
 	// 0b. Restore Sources from backup metadata (both BackupSources and BackupManga)
 	allSources := make(map[int64]string)
@@ -1044,6 +1207,12 @@ func ExportProtoBackup(ctx context.Context) (*ProtoBackup, error) {
 			}
 		}
 		rowsSrc.Close()
+	}
+
+	// 4. Export Server Settings
+	settings, errSettings := database.GetAllServerSettings(ctx)
+	if errSettings == nil && len(settings) > 0 {
+		pb.ServerSettings = settings
 	}
 
 	return pb, nil

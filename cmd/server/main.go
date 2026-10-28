@@ -59,6 +59,9 @@ func main() {
 
 		// Run index optimization for library queries
 		_, _ = database.DB.Exec(context.Background(), "CREATE INDEX IF NOT EXISTS idx_chapter_manga_read ON suwayomi.chapter (manga, read);")
+
+		// Configure network proxy if enabled in database settings
+		sources.ConfigureProxy(context.Background())
 	}
 
 	// Initialize dynamic extension manifests and JS Extension Engine
@@ -72,6 +75,9 @@ func main() {
 
 	// Start background periodic library update scheduler
 	service.GlobalUpdateManager.StartScheduler(context.Background())
+
+	// Start background automated backup scheduler
+	service.StartBackupScheduler(context.Background(), cfg)
 
 	// Initialize Fiber app setup
 	app := router.Setup(cfg)

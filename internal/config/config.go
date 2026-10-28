@@ -42,7 +42,8 @@ type DatabaseConfig struct {
 
 // DataConfig specifies the root directory for local file storage.
 type DataConfig struct {
-	RootDir string `mapstructure:"root_dir"`
+	RootDir       string `mapstructure:"root_dir"`
+	DownloadsPath string `mapstructure:"downloads_path"`
 }
 
 // AuthConfig controls authentication mode.
@@ -90,6 +91,7 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("database.max_conns", 20)
 	v.SetDefault("database.min_conns", 2)
 	v.SetDefault("data.root_dir", "./data")
+	v.SetDefault("data.downloads_path", "")
 	v.SetDefault("auth.mode", "none")
 	v.SetDefault("extensions.repo_url", "")
 	v.SetDefault("logging.level", "info")
