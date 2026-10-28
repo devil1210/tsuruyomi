@@ -309,7 +309,7 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 
 	total := len(chapters)
 	for i := range chapters {
-		chapters[i].SourceOrder = total - 1 - i
+		chapters[i].SourceOrder = total - i
 	}
 
 	return chapters, nil

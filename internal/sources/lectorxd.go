@@ -187,7 +187,6 @@ func (h *LectorXDHandler) GetChapterList(ctx context.Context, mangaURL string) (
 
 		var fallbackChapters []ChapterItem
 		seen := make(map[string]bool)
-		order := 1
 
 		doc.Find("a[href*='/leer/']").Each(func(i int, s *goquery.Selection) {
 			href, _ := s.Attr("href")
@@ -216,10 +215,13 @@ func (h *LectorXDHandler) GetChapterList(ctx context.Context, mangaURL string) (
 				URL:           chURL,
 				RealURL:       h.baseURL + chURL,
 				ChapterNumber: float32(num),
-				SourceOrder:   order,
 			})
-			order++
 		})
+
+		total := len(fallbackChapters)
+		for i := range fallbackChapters {
+			fallbackChapters[i].SourceOrder = total - i
+		}
 
 		return fallbackChapters, nil
 	}
@@ -275,7 +277,7 @@ func (h *LectorXDHandler) GetChapterList(ctx context.Context, mangaURL string) (
 			URL:           chURL,
 			RealURL:       h.baseURL + chURL,
 			ChapterNumber: float32(chNum),
-			SourceOrder:   i,
+			SourceOrder:   i + 1,
 		})
 	}
 

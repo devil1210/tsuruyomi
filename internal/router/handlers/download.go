@@ -70,7 +70,7 @@ func QueueChapter(c *fiber.Ctx) error {
 
 	// Retrieve chapter ID from DB
 	var chID int
-	query := `SELECT id FROM suwayomi.chapter WHERE manga = $1 AND source_order = $2 LIMIT 1`
+	query := `SELECT id FROM suwayomi.chapter WHERE manga = $1 AND (source_order = $2 OR ($2 = 0 AND source_order = 1)) ORDER BY source_order ASC LIMIT 1`
 	err := database.DB.QueryRow(c.Context(), query, mangaId, chapterIndex).Scan(&chID)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).SendString("Chapter not found in database")

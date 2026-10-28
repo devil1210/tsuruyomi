@@ -277,7 +277,7 @@ func FetchAndSaveMangaChapters(ctx context.Context, sourceID int64, mangaID int6
 	}
 
 	// Sanity check for chapter ordering:
-	// In Suwayomi/Tachidesk, source_order MUST increase chronologically (oldest = 0, newest = total-1).
+	// In Suwayomi/Tachidesk, source_order MUST increase chronologically (oldest = 1, newest = total).
 	// If the source returned chapters where the first item has a higher ChapterNumber than the last item,
 	// but the first item was given a smaller SourceOrder than the last item, the source orders are inverted!
 	if len(chapters) > 1 {
@@ -291,7 +291,23 @@ func FetchAndSaveMangaChapters(ctx context.Context, sourceID int64, mangaID int6
 				mangaID, firstNum, firstOrder, lastNum, lastOrder)
 			total := len(chapters)
 			for i := range chapters {
-				chapters[i].SourceOrder = total - 1 - i
+				chapters[i].SourceOrder = total - i
+			}
+		}
+	}
+
+	// Ensure source_order is strictly 1-based (minimum >= 1)
+	if len(chapters) > 0 {
+		minOrder := chapters[0].SourceOrder
+		for _, ch := range chapters {
+			if ch.SourceOrder < minOrder {
+				minOrder = ch.SourceOrder
+			}
+		}
+		if minOrder <= 0 {
+			shift := 1 - minOrder
+			for i := range chapters {
+				chapters[i].SourceOrder += shift
 			}
 		}
 	}

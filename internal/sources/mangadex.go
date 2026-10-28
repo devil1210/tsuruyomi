@@ -243,7 +243,7 @@ func (h *MangaDexHandler) GetChapterList(ctx context.Context, mangaURL string) (
 			ChapterNumber: chNumFloat,
 			Scanlator:     scanlator,
 			DateUpload:    dateUpload,
-			SourceOrder:   total - 1 - i,
+			SourceOrder:   total - i,
 		})
 	}
 

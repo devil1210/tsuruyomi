@@ -65,7 +65,8 @@ func GetChapterByMangaAndIndex(ctx context.Context, mangaId int, chapterIndex in
 		       COALESCE(cu.is_downloaded, false), c.page_count, COALESCE(cu.last_modified_at, 0), COALESCE(cu.version, 0)
 		FROM suwayomi.chapter c
 		LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
-		WHERE c.manga = $1 AND c.source_order = $2
+		WHERE c.manga = $1 AND (c.source_order = $2 OR ($2 = 0 AND c.source_order = 1))
+		ORDER BY c.source_order ASC
 		LIMIT 1
 	`
 
