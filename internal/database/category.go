@@ -22,7 +22,7 @@ func GetCategoryList(ctx context.Context) ([]models.CategoryDataClass, error) {
 		SELECT 
 			c.id, c.name, c.sort_order, c.is_default, c.include_in_update, 
 			c.include_in_download, c.version, c.uid, c.last_modified_at,
-			COUNT(cm.manga) as size
+			COUNT(DISTINCT cm.manga) as size
 		FROM suwayomi.category c
 		LEFT JOIN suwayomi.categorymanga cm ON c.id = cm.category
 		GROUP BY c.id
@@ -432,7 +432,7 @@ func GetCategoryByID(ctx context.Context, categoryId int) (*models.CategoryDataC
 		SELECT 
 			c.id, c.name, c.sort_order, c.is_default, c.include_in_update, 
 			c.include_in_download, c.version, c.uid, c.last_modified_at,
-			COUNT(cm.manga) as size
+			COUNT(DISTINCT cm.manga) as size
 		FROM suwayomi.category c
 		LEFT JOIN suwayomi.categorymanga cm ON c.id = cm.category
 		WHERE c.id = $1

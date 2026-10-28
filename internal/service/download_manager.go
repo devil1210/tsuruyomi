@@ -251,7 +251,7 @@ func (dm *DownloadManager) Enqueue(ctx context.Context, chapterIDs []int) error 
 		var sourceID int64
 		query := `SELECT manga, source_order, (SELECT source FROM suwayomi.manga WHERE id = manga) as src FROM suwayomi.chapter WHERE id = $1 LIMIT 1`
 		err := database.DB.QueryRow(ctx, query, chID).Scan(&mangaID, &index, &sourceID)
-		if err != nil {
+		if err != nil || sourceID == 0 {
 			continue
 		}
 
