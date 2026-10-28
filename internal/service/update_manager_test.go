@@ -85,3 +85,57 @@ func TestUpdateManager_CancelActive(t *testing.T) {
 		t.Errorf("expected context to be cancelled")
 	}
 }
+
+func TestCalculateNextWallClockRun(t *testing.T) {
+	loc, _ := time.LoadLocation("UTC")
+	baseH := 4
+	baseM := 0
+
+	// 1. Daily 24h interval
+	tBefore := time.Date(2026, 10, 28, 1, 0, 0, 0, loc)
+	next := CalculateNextWallClockRun(tBefore, 24.0, baseH, baseM)
+	expected := time.Date(2026, 10, 28, 4, 0, 0, 0, loc)
+	if !next.Equal(expected) {
+		t.Errorf("expected 24h next to be %v, got %v", expected, next)
+	}
+
+	tAfter := time.Date(2026, 10, 28, 5, 0, 0, 0, loc)
+	nextAfter := CalculateNextWallClockRun(tAfter, 24.0, baseH, baseM)
+	expectedAfter := time.Date(2026, 10, 29, 4, 0, 0, 0, loc)
+	if !nextAfter.Equal(expectedAfter) {
+		t.Errorf("expected 24h next after 5am to be %v, got %v", expectedAfter, nextAfter)
+	}
+
+	// 2. 12h interval
+	next12_morning := CalculateNextWallClockRun(tBefore, 12.0, baseH, baseM)
+	if !next12_morning.Equal(expected) {
+		t.Errorf("expected 12h morning next to be %v, got %v", expected, next12_morning)
+	}
+
+	tAfterMorning := time.Date(2026, 10, 28, 4, 1, 0, 0, loc)
+	next12_afternoon := CalculateNextWallClockRun(tAfterMorning, 12.0, baseH, baseM)
+	expected12_afternoon := time.Date(2026, 10, 28, 16, 0, 0, 0, loc)
+	if !next12_afternoon.Equal(expected12_afternoon) {
+		t.Errorf("expected 12h afternoon next to be %v, got %v", expected12_afternoon, next12_afternoon)
+	}
+
+	tNight := time.Date(2026, 10, 28, 17, 0, 0, 0, loc)
+	next12_night := CalculateNextWallClockRun(tNight, 12.0, baseH, baseM)
+	if !next12_night.Equal(expectedAfter) {
+		t.Errorf("expected 12h night next to be %v, got %v", expectedAfter, next12_night)
+	}
+
+	// 3. 6h interval
+	t6 := time.Date(2026, 10, 28, 4, 1, 0, 0, loc)
+	next6 := CalculateNextWallClockRun(t6, 6.0, baseH, baseM)
+	expected6 := time.Date(2026, 10, 28, 10, 0, 0, 0, loc)
+	if !next6.Equal(expected6) {
+		t.Errorf("expected 6h next to be %v, got %v", expected6, next6)
+	}
+
+	// 4. Disabled
+	next0 := CalculateNextWallClockRun(tBefore, 0, baseH, baseM)
+	if !next0.IsZero() {
+		t.Errorf("expected zero time for interval <= 0")
+	}
+}

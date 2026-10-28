@@ -33,12 +33,15 @@ type UpdateManager struct {
 	cancelFunc             context.CancelFunc
 	schedulerStop          chan struct{}
 	currentInterval        float64
+	baseHour               int
+	baseMinute             int
 }
 
 // GlobalUpdateManager is the shared update manager instance.
 var GlobalUpdateManager = &UpdateManager{
-	running: false,
-	hub:     websocket.NewHub(),
+	running:  false,
+	hub:      websocket.NewHub(),
+	baseHour: 4,
 }
 
 // StartHub starts the updates WebSocket hub event loop.
@@ -434,20 +437,69 @@ func (um *UpdateManager) CancelUpdate() {
 	um.BroadcastState()
 }
 
-// StartScheduler initializes the background periodic updater.
+// CalculateNextWallClockRun calculates the next time an update should run based on the interval and base clock time (baseHour, baseMinute).
+func CalculateNextWallClockRun(now time.Time, intervalHours float64, baseHour, baseMinute int) time.Time {
+	if intervalHours <= 0 {
+		return time.Time{}
+	}
+
+	loc := now.Location()
+	anchor := time.Date(now.Year(), now.Month(), now.Day(), baseHour, baseMinute, 0, 0, loc)
+
+	if intervalHours >= 24 {
+		// Run once daily at baseHour:baseMinute
+		if now.Before(anchor) {
+			return anchor
+		}
+		return anchor.AddDate(0, 0, 1)
+	}
+
+	// For sub-daily intervals (e.g. 12h, 6h, 8h, 4h, 2h, 1h)
+	step := time.Duration(intervalHours * float64(time.Hour))
+	if step < time.Minute {
+		step = time.Minute
+	}
+
+	// Start from anchor 24h in the past and step forward until we strictly pass 'now'
+	t := anchor.Add(-24 * time.Hour)
+	for !t.After(now) {
+		t = t.Add(step)
+	}
+	return t
+}
+
+// StartScheduler initializes the background periodic updater with wall-clock alignment.
 func (um *UpdateManager) StartScheduler(ctx context.Context) {
 	um.mu.Lock()
 	defer um.mu.Unlock()
 
 	hours := 12.0
+	baseHour := 4
+	baseMinute := 0
+
 	if dbSettings, err := database.GetAllServerSettings(ctx); err == nil {
 		if v, ok := dbSettings["globalUpdateInterval"]; ok {
 			if f, err := strconv.ParseFloat(v, 64); err == nil {
 				hours = f
 			}
 		}
+		if v, ok := dbSettings["globalUpdateTime"]; ok && v != "" {
+			parts := strings.Split(strings.TrimSpace(v), ":")
+			if len(parts) >= 1 {
+				if h, err := strconv.Atoi(parts[0]); err == nil && h >= 0 && h < 24 {
+					baseHour = h
+				}
+			}
+			if len(parts) >= 2 {
+				if m, err := strconv.Atoi(parts[1]); err == nil && m >= 0 && m < 60 {
+					baseMinute = m
+				}
+			}
+		}
 	}
 	um.currentInterval = hours
+	um.baseHour = baseHour
+	um.baseMinute = baseMinute
 	um.restartSchedulerLocked(ctx)
 }
 
@@ -463,6 +515,19 @@ func (um *UpdateManager) SetInterval(hours float64) {
 	um.restartSchedulerLocked(context.Background())
 }
 
+// SetBaseTime updates the base wall-clock time for library updates.
+func (um *UpdateManager) SetBaseTime(hour, minute int) {
+	um.mu.Lock()
+	defer um.mu.Unlock()
+
+	if um.baseHour == hour && um.baseMinute == minute {
+		return
+	}
+	um.baseHour = hour
+	um.baseMinute = minute
+	um.restartSchedulerLocked(context.Background())
+}
+
 func (um *UpdateManager) restartSchedulerLocked(ctx context.Context) {
 	if um.schedulerStop != nil {
 		close(um.schedulerStop)
@@ -474,50 +539,40 @@ func (um *UpdateManager) restartSchedulerLocked(ctx context.Context) {
 		return
 	}
 
-	duration := time.Duration(um.currentInterval * float64(time.Hour))
-	log.Printf("[UPDATER] Background periodic library update scheduler started (every %.1f hours / %v)", um.currentInterval, duration)
+	interval := um.currentInterval
+	bHour := um.baseHour
+	bMinute := um.baseMinute
+
+	log.Printf("[UPDATER] Wall-clock library update scheduler active (every %.1f hours, anchored at %02d:%02d)", interval, bHour, bMinute)
 
 	stopChan := make(chan struct{})
 	um.schedulerStop = stopChan
 
-	go func(d time.Duration, stop chan struct{}) {
-		// Determine initial delay: check how long ago the last update occurred
-		lastTs := um.GetLastUpdateTimestamp()
-		elapsed := time.Since(time.Unix(lastTs, 0))
-		initialDelay := d - elapsed
-		if initialDelay <= 0 || elapsed >= d {
-			// If overdue or never updated, trigger after a short grace period of 30 seconds
-			initialDelay = 30 * time.Second
-		} else if initialDelay < 30*time.Second {
-			initialDelay = 30 * time.Second
-		}
-
-		log.Printf("[UPDATER] Next scheduled library update in %v (last update: %v ago)", initialDelay.Round(time.Second), elapsed.Round(time.Second))
-
-		timer := time.NewTimer(initialDelay)
-		defer timer.Stop()
-
-		select {
-		case <-stop:
-			return
-		case <-timer.C:
-			log.Printf("[UPDATER] Periodic library update triggered by scheduler (initial catch-up)")
-			um.StartUpdate()
-		}
-
-		ticker := time.NewTicker(d)
-		defer ticker.Stop()
-
+	go func(intervalHours float64, baseH, baseM int, stop chan struct{}) {
 		for {
+			now := time.Now()
+			nextRun := CalculateNextWallClockRun(now, intervalHours, baseH, baseM)
+			if nextRun.IsZero() {
+				return
+			}
+
+			delay := time.Until(nextRun)
+			log.Printf("[UPDATER] Next library update scheduled for %s (in %v)",
+				nextRun.Format("2006-01-02 15:04:05 MST"), delay.Round(time.Second))
+
+			timer := time.NewTimer(delay)
 			select {
 			case <-stop:
+				timer.Stop()
 				return
-			case <-ticker.C:
-				log.Printf("[UPDATER] Periodic library update triggered by scheduler")
+			case <-timer.C:
+				log.Printf("[UPDATER] Wall-clock scheduled library update triggered at %s", time.Now().Format("15:04:05 MST"))
 				um.StartUpdate()
+				// Sleep briefly to ensure time.Now() moves past the trigger second
+				time.Sleep(2 * time.Second)
 			}
 		}
-	}(duration, stopChan)
+	}(interval, bHour, bMinute, stopChan)
 }
 
 func parseBoolSetting(val string, fallback bool) bool {

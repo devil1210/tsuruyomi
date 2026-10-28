@@ -445,6 +445,7 @@ func buildServerSettingsMap(ctx context.Context, cfg *config.Config) map[string]
 		"excludeNotStarted":               getBool("excludeNotStarted", false),
 		"excludeCompleted":                getBool("excludeCompleted", false),
 		"globalUpdateInterval":            getFloat("globalUpdateInterval", 12.0),
+		"globalUpdateTime":                getStr("globalUpdateTime", "04:00"),
 		"updateMangas":                    getBool("updateMangas", false),
 		"authMode":                        authMode,
 		"authUsername":                    authUsername,
@@ -743,6 +744,22 @@ func HandleGraphQL(c *fiber.Ctx) error {
 							service.GlobalUpdateManager.SetInterval(f)
 						} else if i, ok := v.(int); ok {
 							service.GlobalUpdateManager.SetInterval(float64(i))
+						}
+					case "globalUpdateTime":
+						if s, ok := v.(string); ok && s != "" {
+							parts := strings.Split(strings.TrimSpace(s), ":")
+							h, m := 4, 0
+							if len(parts) >= 1 {
+								if parsedH, err := strconv.Atoi(parts[0]); err == nil && parsedH >= 0 && parsedH < 24 {
+									h = parsedH
+								}
+							}
+							if len(parts) >= 2 {
+								if parsedM, err := strconv.Atoi(parts[1]); err == nil && parsedM >= 0 && parsedM < 60 {
+									m = parsedM
+								}
+							}
+							service.GlobalUpdateManager.SetBaseTime(h, m)
 						}
 					case "ip":
 						if s, ok := v.(string); ok && s != "" {
