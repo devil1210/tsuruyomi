@@ -419,6 +419,19 @@ func GetChaptersList(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
 	}
 
+	if len(list) == 0 && database.DB != nil {
+		var sourceID int64
+		var mangaURL string
+		if err := database.DB.QueryRow(c.Context(), "SELECT source, url FROM suwayomi.manga WHERE id = $1", mangaId).Scan(&sourceID, &mangaURL); err == nil {
+			if sources.Has(sourceID) {
+				log.Printf("[SOURCES] Auto-fetching chapters for manga %d via REST API...", mangaId)
+				if _, err := sources.FetchAndSaveMangaChapters(c.Context(), sourceID, int64(mangaId), mangaURL); err == nil {
+					list, _ = database.GetChaptersByMangaID(c.Context(), mangaId)
+				}
+			}
+		}
+	}
+
 	return c.JSON(list)
 }
 

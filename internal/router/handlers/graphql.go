@@ -585,6 +585,37 @@ func buildGraphQLDownloadStatus(ctx context.Context) map[string]interface{} {
 	}
 }
 
+func toInt64(val interface{}) (int64, bool) {
+	if val == nil {
+		return 0, false
+	}
+	switch v := val.(type) {
+	case float64:
+		return int64(v), true
+	case float32:
+		return int64(v), true
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case int32:
+		return int64(v), true
+	case uint:
+		return int64(v), true
+	case uint64:
+		return int64(v), true
+	case json.Number:
+		n, err := v.Int64()
+		return n, err == nil
+	case string:
+		var n int64
+		_, err := fmt.Sscan(strings.TrimSpace(v), &n)
+		return n, err == nil
+	default:
+		return 0, false
+	}
+}
+
 // GraphQLRequest maps incoming query parameters or POST bodies.
 type GraphQLRequest struct {
 	OperationName string                 `json:"operationName"`
@@ -3236,30 +3267,56 @@ func HandleGraphQL(c *fiber.Ctx) error {
 	case "GET_CHAPTERS_MANGA", "GET_CHAPTERS_READER", "GET_MANGAS_CHAPTER_IDS_WITH_STATE":
 		var mangaIDs []int64
 		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
-			if val, ok := cond["mangaId"].(float64); ok {
-				mangaIDs = append(mangaIDs, int64(val))
+			for _, k := range []string{"mangaId", "manga", "id"} {
+				if idVal, ok := toInt64(cond[k]); ok && idVal > 0 {
+					mangaIDs = append(mangaIDs, idVal)
+					break
+				}
 			}
 		}
 		if filterMap, ok := req.Variables["filter"].(map[string]interface{}); ok {
-			if mFilter, ok := filterMap["mangaId"].(map[string]interface{}); ok {
-				if eq, ok := mFilter["equalTo"].(float64); ok {
-					mangaIDs = append(mangaIDs, int64(eq))
-				}
-				if inArr, ok := mFilter["in"].([]interface{}); ok {
-					for _, item := range inArr {
-						if idF, ok := item.(float64); ok {
-							mangaIDs = append(mangaIDs, int64(idF))
+			for _, k := range []string{"mangaId", "manga"} {
+				if mFilter, ok := filterMap[k].(map[string]interface{}); ok {
+					if idVal, ok := toInt64(mFilter["equalTo"]); ok && idVal > 0 {
+						mangaIDs = append(mangaIDs, idVal)
+					}
+					if inArr, ok := mFilter["in"].([]interface{}); ok {
+						for _, item := range inArr {
+							if idVal, ok := toInt64(item); ok && idVal > 0 {
+								mangaIDs = append(mangaIDs, idVal)
+							}
 						}
 					}
 				}
 			}
 		}
 		if len(mangaIDs) == 0 {
-			if idx := strings.Index(req.Query, "mangaId:"); idx != -1 {
-				sub := req.Query[idx:]
-				var id int64
-				if _, err := fmt.Sscan(strings.TrimLeft(sub[len("mangaId:"):], " \t\r\n"), &id); err == nil {
-					mangaIDs = append(mangaIDs, id)
+			for _, k := range []string{"mangaId", "manga", "id"} {
+				if idVal, ok := toInt64(req.Variables[k]); ok && idVal > 0 {
+					mangaIDs = append(mangaIDs, idVal)
+					break
+				}
+			}
+		}
+		if len(mangaIDs) == 0 {
+			if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+				for _, k := range []string{"mangaId", "manga", "id"} {
+					if idVal, ok := toInt64(input[k]); ok && idVal > 0 {
+						mangaIDs = append(mangaIDs, idVal)
+						break
+					}
+				}
+			}
+		}
+		if len(mangaIDs) == 0 {
+			for _, marker := range []string{"mangaId:", "mangaId :", "manga:", "manga :"} {
+				if idx := strings.Index(req.Query, marker); idx != -1 {
+					sub := req.Query[idx+len(marker):]
+					var id int64
+					if _, err := fmt.Sscan(strings.TrimLeft(sub, " \t\r\n"), &id); err == nil && id > 0 {
+						mangaIDs = append(mangaIDs, id)
+						break
+					}
 				}
 			}
 		}
@@ -3307,6 +3364,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					log.Printf("[SOURCES] Auto-fetching chapters for manga %d (source %d, url %s)...", mangaId, sourceID, mangaURL)
 					if _, err := sources.FetchAndSaveMangaChapters(c.Context(), sourceID, mangaId, mangaURL); err == nil {
 						nodes, _ = fetchChaptersForMangaIDs(c.Context(), mangaIDs, chapterOrderBy)
+					} else {
+						log.Printf("[SOURCES] Error auto-fetching chapters for manga %d: %v", mangaId, err)
 					}
 				}
 			}
@@ -3332,8 +3391,11 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		fetchManga := true
 		fetchChapters := true
 
-		if val, ok := req.Variables["id"].(float64); ok {
-			mangaId = int64(val)
+		for _, k := range []string{"id", "mangaId", "manga"} {
+			if val, ok := toInt64(req.Variables[k]); ok && val > 0 {
+				mangaId = val
+				break
+			}
 		}
 		if val, ok := req.Variables["fetchManga"].(bool); ok {
 			fetchManga = val
@@ -3345,8 +3407,11 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			fetchChapters = val
 		}
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
-			if val, ok := input["id"].(float64); ok {
-				mangaId = int64(val)
+			for _, k := range []string{"id", "mangaId", "manga"} {
+				if val, ok := toInt64(input[k]); ok && val > 0 {
+					mangaId = val
+					break
+				}
 			}
 			if val, ok := input["fetchManga"].(bool); ok {
 				fetchManga = val
@@ -3401,16 +3466,24 @@ func HandleGraphQL(c *fiber.Ctx) error {
 	case "GET_CHAPTER_PAGES_FETCH":
 		var chapterID int64
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
-			if cid, ok := input["chapterId"].(float64); ok {
-				chapterID = int64(cid)
+			if cid, ok := toInt64(input["chapterId"]); ok && cid > 0 {
+				chapterID = cid
 			}
 		}
 		if chapterID == 0 {
-			if idx := strings.Index(req.Query, "chapterId:"); idx != -1 {
-				sub := req.Query[idx:]
-				var id int64
-				if _, err := fmt.Sscan(strings.TrimLeft(sub[len("chapterId:"):], " \t\r\n"), &id); err == nil {
-					chapterID = id
+			if cid, ok := toInt64(req.Variables["chapterId"]); ok && cid > 0 {
+				chapterID = cid
+			}
+		}
+		if chapterID == 0 {
+			for _, marker := range []string{"chapterId:", "chapterId :"} {
+				if idx := strings.Index(req.Query, marker); idx != -1 {
+					sub := req.Query[idx+len(marker):]
+					var id int64
+					if _, err := fmt.Sscan(strings.TrimLeft(sub, " \t\r\n"), &id); err == nil && id > 0 {
+						chapterID = id
+						break
+					}
 				}
 			}
 		}

@@ -145,14 +145,49 @@ func FetchHTML(ctx context.Context, targetURL string, referer string) (string, e
 		req.Header.Set("Referer", referer)
 	}
 
+	domain := util.ExtractDomain(targetURL)
+	if domain != "" && AppConfig != nil && AppConfig.FlareSolverr.Enabled {
+		if cookies, ua, ok := util.GetSession(domain); ok && len(cookies) > 0 {
+			for _, c := range cookies {
+				req.AddCookie(&http.Cookie{
+					Name:   c.Name,
+					Value:  c.Value,
+					Domain: c.Domain,
+					Path:   c.Path,
+				})
+			}
+			if ua != "" {
+				req.Header.Set("User-Agent", ua)
+			}
+		}
+	}
+
 	resp, err := DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	if (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusServiceUnavailable) && AppConfig != nil && AppConfig.FlareSolverr.Enabled {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	bodyStr := string(body)
+
+	isChallenge := resp.StatusCode == http.StatusForbidden ||
+		resp.StatusCode == http.StatusServiceUnavailable ||
+		(resp.StatusCode == http.StatusOK && (
+			strings.Contains(bodyStr, "Just a moment...") ||
+			strings.Contains(bodyStr, "challenges.cloudflare.com") ||
+			strings.Contains(bodyStr, "_cf_chl_opt") ||
+			strings.Contains(bodyStr, "cf-browser-verification") ||
+			strings.Contains(bodyStr, "challenge-running")))
+
+	if isChallenge && AppConfig != nil && AppConfig.FlareSolverr.Enabled {
 		log.Printf("[SOURCES] Cloudflare challenge encountered for %s (HTTP %d). Requesting FlareSolverr bypass...", targetURL, resp.StatusCode)
+		if domain != "" {
+			util.InvalidateSession(domain)
+		}
 		html, solveErr := util.SolveAndFetchHTML(ctx, AppConfig, targetURL, referer)
 		if solveErr == nil && len(html) > 0 {
 			return html, nil
@@ -164,12 +199,7 @@ func FetchHTML(ctx context.Context, targetURL string, referer string) (string, e
 		return "", fmt.Errorf("HTTP error %d fetching %s", resp.StatusCode, targetURL)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	return string(body), nil
+	return bodyStr, nil
 }
 
 // FetchAndSaveChapterPages extracts pages natively in Go and persists them to the PostgreSQL database.

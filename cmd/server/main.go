@@ -55,6 +55,8 @@ func main() {
 			log.Printf("Loaded %d persisted server settings from database.", len(dbSettings))
 		}
 
+		log.Printf("[CONFIG] FlareSolverr enabled: %t, URL: %s, timeout: %ds", cfg.FlareSolverr.Enabled, cfg.FlareSolverr.URL, cfg.FlareSolverr.Timeout)
+
 		// Run index optimization for library queries
 		_, _ = database.DB.Exec(context.Background(), "CREATE INDEX IF NOT EXISTS idx_chapter_manga_read ON suwayomi.chapter (manga, read);")
 	}

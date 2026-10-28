@@ -463,7 +463,11 @@ func fetchHTMLWithSession(ctx context.Context, targetURL, referer string, cookie
 	}
 
 	strBody := string(body)
-	if strings.Contains(strBody, "cf-browser-verification") || strings.Contains(strBody, "challenge-running") {
+	if strings.Contains(strBody, "Just a moment...") ||
+		strings.Contains(strBody, "challenges.cloudflare.com") ||
+		strings.Contains(strBody, "_cf_chl_opt") ||
+		strings.Contains(strBody, "cf-browser-verification") ||
+		strings.Contains(strBody, "challenge-running") {
 		return "", fmt.Errorf("cloudflare challenge present in response")
 	}
 

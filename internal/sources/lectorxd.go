@@ -170,9 +170,9 @@ func (h *LectorXDHandler) GetChapterList(ctx context.Context, mangaURL string) (
 	}
 
 	// Extract slug, type, and chaptersList
-	reSlug := regexp.MustCompile(`const mangaSlug\s*=\s*"([^"]+)"`)
-	reType := regexp.MustCompile(`const mangaType\s*=\s*"([^"]+)"`)
-	reList := regexp.MustCompile(`const chaptersList\s*=\s*(\[.*?\]);`)
+	reSlug := regexp.MustCompile(`const\s+(?:mangaSlug|slug)\s*=\s*"([^"]+)"`)
+	reType := regexp.MustCompile(`(?:const\s+mangaType\s*=\s*"([^"]+)"|"type"\s*:\s*"([^"]+)")`)
+	reList := regexp.MustCompile(`const\s+chaptersList\s*=\s*(\[.*?\]);`)
 
 	mSlugMatch := reSlug.FindStringSubmatch(html)
 	mTypeMatch := reType.FindStringSubmatch(html)
@@ -233,9 +233,22 @@ func (h *LectorXDHandler) GetChapterList(ctx context.Context, mangaURL string) (
 		mSlug = parts[len(parts)-1]
 	}
 
-	mType := "manhwa"
-	if len(mTypeMatch) >= 2 && mTypeMatch[1] != "" {
-		mType = mTypeMatch[1]
+	mType := ""
+	if len(mTypeMatch) >= 2 {
+		if mTypeMatch[1] != "" {
+			mType = mTypeMatch[1]
+		} else if len(mTypeMatch) >= 3 && mTypeMatch[2] != "" {
+			mType = mTypeMatch[2]
+		}
+	}
+	if mType == "" {
+		parts := strings.Split(strings.Trim(mangaURL, "/"), "/")
+		if len(parts) >= 2 {
+			mType = parts[0]
+		}
+		if mType == "" {
+			mType = "manhwa"
+		}
 	}
 
 	type ChapterEntry struct {
@@ -249,7 +262,7 @@ func (h *LectorXDHandler) GetChapterList(ctx context.Context, mangaURL string) (
 	}
 
 	var chapters []ChapterItem
-	// Reverse so that newest/highest chapter is index 1
+	// Reverse so that newest/highest chapter is index 0 for UI presentation
 	total := len(rawEntries)
 	for i := total - 1; i >= 0; i-- {
 		entry := rawEntries[i]
@@ -262,7 +275,7 @@ func (h *LectorXDHandler) GetChapterList(ctx context.Context, mangaURL string) (
 			URL:           chURL,
 			RealURL:       h.baseURL + chURL,
 			ChapterNumber: float32(chNum),
-			SourceOrder:   len(chapters) + 1,
+			SourceOrder:   i,
 		})
 	}
 

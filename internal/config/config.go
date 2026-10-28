@@ -199,26 +199,29 @@ func (c *Config) ApplyServerSettings(settings map[string]string) {
 	if c == nil || len(settings) == 0 {
 		return
 	}
-	if v, ok := settings["flaresolverr.enabled"]; ok {
-		c.FlareSolverr.Enabled = (v == "true" || v == "1")
-	}
-	if v, ok := settings["flaresolverr.url"]; ok && strings.TrimSpace(v) != "" {
-		c.FlareSolverr.URL = strings.TrimSpace(v)
-	}
-	if v, ok := settings["flaresolverr.timeout"]; ok {
-		var t int
-		if _, err := fmt.Sscan(v, &t); err == nil && t > 0 {
-			c.FlareSolverr.Timeout = t
+	for k, v := range settings {
+		normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(k, "_", ""), ".", ""))
+		switch normalized {
+		case "flaresolverrenabled":
+			c.FlareSolverr.Enabled = (v == "true" || v == "1")
+		case "flaresolverrurl":
+			if strings.TrimSpace(v) != "" {
+				c.FlareSolverr.URL = strings.TrimSpace(v)
+			}
+		case "flaresolverrtimeout":
+			var t int
+			if _, err := fmt.Sscan(v, &t); err == nil && t > 0 {
+				c.FlareSolverr.Timeout = t
+			}
+		case "authmode":
+			if v != "" {
+				c.Auth.Mode = v
+			}
+		case "authusername":
+			c.Auth.Username = v
+		case "authpassword":
+			c.Auth.Password = v
 		}
-	}
-	if v, ok := settings["auth.mode"]; ok && v != "" {
-		c.Auth.Mode = v
-	}
-	if v, ok := settings["auth.username"]; ok {
-		c.Auth.Username = v
-	}
-	if v, ok := settings["auth.password"]; ok {
-		c.Auth.Password = v
 	}
 }
 
