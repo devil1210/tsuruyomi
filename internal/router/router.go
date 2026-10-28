@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/base64"
 	"path/filepath"
 	"strings"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/websocket/v2"
 
+	"tsuruyomi/internal/auth"
 	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/extensions"
 	"tsuruyomi/internal/router/handlers"
@@ -31,9 +31,18 @@ func Setup(cfg *config.Config) *fiber.App {
 		Format: "[${time}] ${status} - ${latency} ${method} ${path}\n",
 	}))
 
+	// Security Headers Middleware
+	app.Use(func(c *fiber.Ctx) error {
+		c.Set("X-Content-Type-Options", "nosniff")
+		c.Set("X-Frame-Options", "SAMEORIGIN")
+		c.Set("X-XSS-Protection", "1; mode=block")
+		c.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		return c.Next()
+	})
+
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     "*",
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Requested-With",
 		AllowMethods:     "GET, POST, HEAD, PUT, DELETE, PATCH, OPTIONS",
 		AllowCredentials: false,
 	}))
@@ -47,57 +56,65 @@ func Setup(cfg *config.Config) *fiber.App {
 	// Root prefix router
 	root := app.Group(prefix)
 
-	// Auth check before matched routes (if auth is enabled)
-	// For basic/simple login, we can implement it as a middleware
+	// Auth check middleware
 	root.Use(func(c *fiber.Ctx) error {
 		c.Locals("config", cfg)
 
-		// Skip auth for options, static assets like manifest/login.html
-		path := c.Path()
-		if c.Method() == fiber.MethodOptions ||
-			strings.HasSuffix(path, "site.webmanifest") ||
-			strings.HasSuffix(path, "manifest.json") ||
-			strings.HasSuffix(path, "login.html") {
+		// If auth is disabled, allow entry
+		if cfg.Auth.Mode == "none" || cfg.Auth.Mode == "" {
 			return c.Next()
 		}
 
-		if cfg.Auth.Mode == "basic" {
-			authHeader := c.Get(fiber.HeaderAuthorization)
-			if !strings.HasPrefix(authHeader, "Basic ") {
-				c.Set(fiber.HeaderWWWAuthenticate, `Basic realm="Suwayomi"`)
-				return c.SendStatus(fiber.StatusUnauthorized)
-			}
-			
-			// Extract and decode base64
-			payload, err := base64.StdEncoding.DecodeString(authHeader[6:])
-			if err != nil {
-				c.Set(fiber.HeaderWWWAuthenticate, `Basic realm="Suwayomi"`)
-				return c.SendStatus(fiber.StatusUnauthorized)
-			}
-			
-			pair := strings.SplitN(string(payload), ":", 2)
-			if len(pair) != 2 || pair[0] != cfg.Auth.Username || pair[1] != cfg.Auth.Password {
-				c.Set(fiber.HeaderWWWAuthenticate, `Basic realm="Suwayomi"`)
-				return c.SendStatus(fiber.StatusUnauthorized)
-			}
-		} else if cfg.Auth.Mode == "simple_login" {
-			// For simple_login we check session cookie or session store.
-			// Temporary placeholder: read a cookie named "logged-in"
-			cookie := c.Cookies("logged-in")
-			if cookie != cfg.Auth.Username && !strings.Contains(path, "/api/") {
-				// Redirect to login.html if not API
-				return c.Redirect(prefix + "/login.html?redirect=" + path)
-			} else if cookie != cfg.Auth.Username && strings.Contains(path, "/api/") {
-				return c.SendStatus(fiber.StatusUnauthorized)
-			}
+		// CORS Pre-flight checks
+		if c.Method() == fiber.MethodOptions {
+			return c.SendStatus(fiber.StatusNoContent)
 		}
 
-		return c.Next()
+		path := c.Path()
+
+		// Always allow public assets
+		if auth.IsPublicAsset(path) {
+			return c.Next()
+		}
+
+		// 1. Validate HTTP Basic Auth (Mihon, Tachiyomi, Kotatsu, API scripts)
+		authHeader := c.Get(fiber.HeaderAuthorization)
+		if authHeader != "" && auth.CheckBasicAuth(authHeader, cfg.Auth.Username, cfg.Auth.Password) {
+			return c.Next()
+		}
+
+		// 2. Validate signed HMAC session cookie (WebUI browser sessions)
+		sessionCookie := c.Cookies(auth.SessionCookieName)
+		if sessionCookie != "" && auth.ValidateSessionToken(sessionCookie, cfg.Auth.Username, cfg.Auth.Password) {
+			return c.Next()
+		}
+
+		// 3. Not authenticated
+		isAPIOrFeed := strings.HasPrefix(path, "/api/") ||
+			strings.HasPrefix(path, "/opds") ||
+			strings.HasPrefix(path, "/graphql")
+
+		if isAPIOrFeed {
+			c.Set(fiber.HeaderWWWAuthenticate, `Basic realm="Suwayomi"`)
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"error":   "Unauthorized",
+				"message": "Authentication required. Provide valid HTTP Basic credentials or session token.",
+			})
+		}
+
+		// Browser request: if basic mode, challenge via WWW-Authenticate; if simple_login, redirect to login.html
+		if cfg.Auth.Mode == "basic" {
+			c.Set(fiber.HeaderWWWAuthenticate, `Basic realm="Suwayomi"`)
+			return c.Status(fiber.StatusUnauthorized).SendString("Unauthorized")
+		}
+
+		return c.Redirect(prefix + "/login.html?redirect=" + path)
 	})
 
-	// Login routes (matching JavalinSetup loginPath)
+	// Login & Logout routes
 	root.Get("/login.html", handlers.GetLogin)
 	root.Post("/login.html", handlers.PostLogin)
+	root.Get("/logout", handlers.GetLogout)
 	root.Get("/update-server", handlers.UpdateServer)
 
 	// API v1 routes
@@ -310,13 +327,14 @@ func Setup(cfg *config.Config) *fiber.App {
 		Index:     "index.html",
 	})
 
-	// GraphQL Endpoint (Tachidesk-WebUI Compatibility)
-	app.All("/api/graphql", handlers.HandleGraphQL)
+	// GraphQL Endpoints (Tachidesk-WebUI Compatibility - protected under root)
+	root.All("/api/graphql", handlers.HandleGraphQL)
+	root.All("/graphql", handlers.HandleGraphQL)
 
 	// SPA Fallback: Serve index.html for all non-file, non-API requests (e.g. /library, /settings)
 	root.Get("/*", func(c *fiber.Ctx) error {
 		path := c.Path()
-		if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/opds") || strings.HasSuffix(path, "/update-server") || strings.Contains(path, ".") {
+		if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/opds") || strings.HasPrefix(path, "/graphql") || strings.HasSuffix(path, "/update-server") || strings.Contains(path, ".") {
 			return c.Next()
 		}
 		return c.SendFile(filepath.Join(cfg.Data.RootDir, "webUI", "index.html"))
