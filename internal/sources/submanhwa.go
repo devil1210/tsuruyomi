@@ -308,10 +308,14 @@ func (h *SubmanhwaHandler) GetChapterList(ctx context.Context, mangaURL string) 
 				URL:           cleanURL,
 				RealURL:       chURL,
 				ChapterNumber: chNum,
-				SourceOrder:   len(chapters),
 			})
 		}
 	})
+
+	total := len(chapters)
+	for i := range chapters {
+		chapters[i].SourceOrder = total - 1 - i
+	}
 
 	return chapters, nil
 }

@@ -246,6 +246,26 @@ func FetchAndSaveMangaChapters(ctx context.Context, sourceID int64, mangaID int6
 		return nil, fmt.Errorf("handler %s returned 0 chapters for manga %d", handler.Name(), mangaID)
 	}
 
+	// Sanity check for chapter ordering:
+	// In Suwayomi/Tachidesk, source_order MUST increase chronologically (oldest = 0, newest = total-1).
+	// If the source returned chapters where the first item has a higher ChapterNumber than the last item,
+	// but the first item was given a smaller SourceOrder than the last item, the source orders are inverted!
+	if len(chapters) > 1 {
+		firstNum := chapters[0].ChapterNumber
+		lastNum := chapters[len(chapters)-1].ChapterNumber
+		firstOrder := chapters[0].SourceOrder
+		lastOrder := chapters[len(chapters)-1].SourceOrder
+
+		if firstNum > 0 && lastNum > 0 && firstNum > lastNum && firstOrder < lastOrder {
+			log.Printf("[SOURCES] Inverted SourceOrder detected for manga %d (first ch=%.1f order=%d, last ch=%.1f order=%d). Normalizing...",
+				mangaID, firstNum, firstOrder, lastNum, lastOrder)
+			total := len(chapters)
+			for i := range chapters {
+				chapters[i].SourceOrder = total - 1 - i
+			}
+		}
+	}
+
 	if database.DB != nil {
 		nowSec := time.Now().Unix()
 		tx, err := database.DB.Begin(ctx)

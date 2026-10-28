@@ -3245,7 +3245,39 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			}
 		}
 
-		nodes, _ := fetchChaptersForMangaIDs(c.Context(), mangaIDs)
+		var chapterOrderBy string
+		if orderArr, ok := req.Variables["order"].([]interface{}); ok && len(orderArr) > 0 {
+			var orderClauses []string
+			for _, item := range orderArr {
+				if orderMap, ok := item.(map[string]interface{}); ok {
+					by, _ := orderMap["by"].(string)
+					byType, _ := orderMap["byType"].(string)
+					dir := "ASC"
+					if strings.HasPrefix(strings.ToUpper(byType), "DESC") {
+						dir = "DESC"
+					}
+					switch strings.ToUpper(by) {
+					case "CHAPTER_NUMBER":
+						orderClauses = append(orderClauses, fmt.Sprintf("c.chapter_number %s, c.source_order %s", dir, dir))
+					case "SOURCE_ORDER":
+						orderClauses = append(orderClauses, fmt.Sprintf("c.source_order %s", dir))
+					case "UPLOAD_DATE", "DATE_UPLOAD":
+						orderClauses = append(orderClauses, fmt.Sprintf("c.date_upload %s", dir))
+					case "FETCHED_AT":
+						orderClauses = append(orderClauses, fmt.Sprintf("c.fetched_at %s", dir))
+					case "NAME":
+						orderClauses = append(orderClauses, fmt.Sprintf("c.name %s", dir))
+					case "ID":
+						orderClauses = append(orderClauses, fmt.Sprintf("c.id %s", dir))
+					}
+				}
+			}
+			if len(orderClauses) > 0 {
+				chapterOrderBy = strings.Join(orderClauses, ", ")
+			}
+		}
+
+		nodes, _ := fetchChaptersForMangaIDs(c.Context(), mangaIDs, chapterOrderBy)
 		// If no chapters found in DB, auto-fetch if source has native handler
 		if len(nodes) == 0 && len(mangaIDs) == 1 && mangaIDs[0] > 0 && database.DB != nil {
 			mangaId := mangaIDs[0]
@@ -3255,7 +3287,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				if sources.Has(sourceID) {
 					log.Printf("[SOURCES] Auto-fetching chapters for manga %d (source %d, url %s)...", mangaId, sourceID, mangaURL)
 					if _, err := sources.FetchAndSaveMangaChapters(c.Context(), sourceID, mangaId, mangaURL); err == nil {
-						nodes, _ = fetchChaptersForMangaIDs(c.Context(), mangaIDs)
+						nodes, _ = fetchChaptersForMangaIDs(c.Context(), mangaIDs, chapterOrderBy)
 					}
 				}
 			}
@@ -4958,23 +4990,28 @@ func fetchChapterGraphQLNodes(ctx context.Context, mangaId int64) ([]map[string]
 	if mangaId <= 0 {
 		return []map[string]interface{}{}, nil
 	}
-	return fetchChaptersForMangaIDs(ctx, []int64{mangaId})
+	return fetchChaptersForMangaIDs(ctx, []int64{mangaId}, "")
 }
 
-func fetchChaptersForMangaIDs(ctx context.Context, mangaIDs []int64) ([]map[string]interface{}, error) {
+func fetchChaptersForMangaIDs(ctx context.Context, mangaIDs []int64, orderBy string) ([]map[string]interface{}, error) {
 	if database.DB == nil || len(mangaIDs) == 0 {
 		return []map[string]interface{}{}, nil
 	}
 
-	query := `
+	orderClause := "ORDER BY c.source_order DESC"
+	if strings.TrimSpace(orderBy) != "" {
+		orderClause = "ORDER BY " + strings.TrimSpace(orderBy)
+	}
+
+	query := fmt.Sprintf(`
 		SELECT c.id, COALESCE(c.name, ''), COALESCE(c.scanlator, ''), COALESCE(c.real_url, ''), c.source_order, c.chapter_number, 
 		       COALESCE(cu.read, false), COALESCE(cu.is_downloaded, false), COALESCE(cu.bookmark, false), c.fetched_at, c.date_upload, COALESCE(cu.last_read_at, 0),
 		       COALESCE(cu.last_page_read, 0), COALESCE(c.page_count, -1), c.manga
 		FROM suwayomi.chapter c
 		LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
 		WHERE c.manga = ANY($1)
-		ORDER BY c.source_order DESC
-	`
+		%s
+	`, orderClause)
 	rows, err := database.DB.Query(ctx, query, mangaIDs)
 	if err != nil {
 		log.Printf("[ERROR] fetchChaptersForMangaIDs query error: %v", err)

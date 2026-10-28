@@ -58,7 +58,16 @@ func TestSubmanhwaHandler_GetChapterListAndPages(t *testing.T) {
 		t.Fatalf("expected at least 1 chapter, got 0")
 	}
 
-	t.Logf("Fetched %d chapters: first=%q, URL=%q, Num=%f", len(chapters), chapters[0].Name, chapters[0].URL, chapters[0].ChapterNumber)
+	t.Logf("Fetched %d chapters: first=%q (order=%d), last=%q (order=%d)",
+		len(chapters), chapters[0].Name, chapters[0].SourceOrder,
+		chapters[len(chapters)-1].Name, chapters[len(chapters)-1].SourceOrder)
+
+	if chapters[len(chapters)-1].SourceOrder != 0 {
+		t.Fatalf("expected oldest chapter to have SourceOrder 0, got %d", chapters[len(chapters)-1].SourceOrder)
+	}
+	if chapters[0].SourceOrder != len(chapters)-1 {
+		t.Fatalf("expected newest chapter to have SourceOrder %d, got %d", len(chapters)-1, chapters[0].SourceOrder)
+	}
 
 	pages, err := h.GetPageList(ctx, chapters[0].URL, "/serie/plan-de-intercambio-de-madres")
 	if err != nil {

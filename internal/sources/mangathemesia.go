@@ -147,13 +147,17 @@ func (h *MangaThemesiaHandler) GetChapterList(ctx context.Context, mangaURL stri
 				cleanURL = strings.TrimPrefix(cleanURL, h.baseURL)
 			}
 			chapters = append(chapters, ChapterItem{
-				Name:        chName,
-				URL:         cleanURL,
-				RealURL:     chURL,
-				SourceOrder: len(chapters),
+				Name:    chName,
+				URL:     cleanURL,
+				RealURL: chURL,
 			})
 		}
 	})
+
+	total := len(chapters)
+	for i := range chapters {
+		chapters[i].SourceOrder = total - 1 - i
+	}
 
 	return chapters, nil
 }
