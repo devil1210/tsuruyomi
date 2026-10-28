@@ -19,6 +19,7 @@ func init() {
 	Register(3548601371328353875, NewMadaraHandler("Manhwa-Latino", "https://manhwalatino.org"))
 	Register(8311505150576608267, NewMadaraHandlerWithPath("Hades no Fansub", "https://lectorhades.latamtoon.com", "tmo"))
 	Register(6757330205319558057, NewMadaraHandler("Bega Translation", "https://begatranslation.com"))
+	Register(1326771034671033762, NewMadaraHandler("Manhwas.net", "https://manhwa-es.com"))
 }
 
 type MadaraHandler struct {

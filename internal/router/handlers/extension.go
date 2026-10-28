@@ -74,6 +74,7 @@ var sourceToPackageMap = map[int64]string{
 	1348827658894665970: "eu.kanade.tachiyomi.extension.es.ragnarokscanlation",
 	7732736838916328250: "eu.kanade.tachiyomi.extension.es.lmtoonline",
 	8590845094935985528: "eu.kanade.tachiyomi.extension.es.zevep",
+	4078570629457850125: "eu.kanade.tachiyomi.extension.es.lectorxd",
 	4097111295486074350: "eu.kanade.tachiyomi.extension.es.ninemanga",
 	3903750533251938295: "eu.kanade.tachiyomi.extension.es.jobsibe",
 	3752522006902890093: "eu.kanade.tachiyomi.extension.es.lmtoonline",
@@ -138,7 +139,9 @@ func getFallbackIconURL(pkgName string) string {
 	case "eu.kanade.tachiyomi.extension.all.batoto":
 		return "https://bato.to/favicon.ico"
 	case "eu.kanade.tachiyomi.extension.es.manhwasnet":
-		return "https://manhwas.net/favicon.ico"
+		return "https://manhwa-es.com/favicon.ico"
+	case "eu.kanade.tachiyomi.extension.es.lectorxd":
+		return "https://lectorxd.com/favicon.ico"
 	case "eu.kanade.tachiyomi.extension.es.jobsibe":
 		return "https://jobsibe.com/wp-content/uploads/2024/02/favicon.png"
 	case "eu.kanade.tachiyomi.extension.es.zevep":

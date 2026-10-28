@@ -47,3 +47,7 @@ Suwayomi-Server/
 # Operating System Files
 .DS_Store
 Thumbs.db
+
+# Design assets & proposals
+icon_proposals/
+

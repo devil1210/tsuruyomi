@@ -348,6 +348,8 @@ var knownSourceNames = map[int64]string{
 	1348827658894665970: "Ragnarok Scanlation",
 	1340622632921674920: "Shadow Manga (+18)",
 	698913079501532785:  "RavenManga",
+	4078570629457850125: "LectorXD",
+	1326771034671033762: "Manhwas.net",
 }
 
 // GetSourceName returns a human-friendly name for a source ID.
@@ -425,6 +427,18 @@ func GetMangaURL(sourceID int64, mangaURL string) string {
 
 	case 8311505150576608267: // Hades no Fansub
 		return "https://lectorhades.latamtoon.com/" + strings.TrimLeft(cleanURL, "/")
+
+	case 4078570629457850125: // LectorXD
+		if strings.HasPrefix(cleanURL, "/") {
+			return "https://lectorxd.com" + cleanURL
+		}
+		return "https://lectorxd.com/" + cleanURL
+
+	case 1326771034671033762: // Manhwas.net
+		if strings.HasPrefix(cleanURL, "/") {
+			return "https://manhwa-es.com" + cleanURL
+		}
+		return "https://manhwa-es.com/" + cleanURL
 
 
 	default:

@@ -377,6 +377,17 @@ var NativeExtensionsSeed = []NativeExtensionSeed{
 			{ID: 8590845094935985528, Name: "Zevep", DisplayName: "Zevep (ES)", Lang: "es"},
 		},
 	},
+	{
+		ID:             32,
+		PkgName:        "eu.kanade.tachiyomi.extension.es.lectorxd",
+		Name:           "LectorXD",
+		Lang:           "es",
+		IconURL:        "/api/v1/extension/icon/eu.kanade.tachiyomi.extension.es.lectorxd",
+		ContentWarning: 0,
+		Sources: []NativeSourceSeed{
+			{ID: 4078570629457850125, Name: "LectorXD", DisplayName: "LectorXD (ES)", Lang: "es"},
+		},
+	},
 }
 
 // KnownSourceInfo contains metadata for a known source ID.

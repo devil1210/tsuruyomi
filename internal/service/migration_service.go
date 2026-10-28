@@ -570,6 +570,7 @@ func SearchGenericSourceOnline(ctx context.Context, sourceID int64, query string
 }
 
 var TopSpanishSourceIDs = []int64{
+	4078570629457850125, // LectorXD (Native)
 	8701445043633550960, // LeerManhwas (Madara)
 	3044113561993269522, // ApollComics (Madara)
 	5943212552955476721, // ManhwaWeb (MangaThemesia)

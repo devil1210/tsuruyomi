@@ -56,6 +56,7 @@ var NativeGoExtensionPackages = map[string]bool{
 	"eu.kanade.tachiyomi.extension.all.batoto":              true, // Bato.to
 	"eu.kanade.tachiyomi.extension.es.jobsibe":              true, // Jobsibe
 	"eu.kanade.tachiyomi.extension.es.zevep":                true, // Zevep
+	"eu.kanade.tachiyomi.extension.es.lectorxd":             true, // LectorXD
 	"eu.kanade.tachiyomi.source.local":                      true, // Local source
 }
 
@@ -109,6 +110,7 @@ var NativeGoExtensionInfo = map[string]NativeExtInfo{
 	"eu.kanade.tachiyomi.extension.all.batoto":              {Name: "Bato.to", Lang: "all"},
 	"eu.kanade.tachiyomi.extension.es.jobsibe":              {Name: "Jobsibe", Lang: "es"},
 	"eu.kanade.tachiyomi.extension.es.zevep":                {Name: "Zevep", Lang: "es"},
+	"eu.kanade.tachiyomi.extension.es.lectorxd":             {Name: "LectorXD", Lang: "es"},
 	"eu.kanade.tachiyomi.source.local":                     {Name: "Local Source", Lang: "all"},
 }
 
@@ -4678,24 +4680,24 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 			       COALESCE(cu.last_page_read, 0) as last_page_read
 			FROM suwayomi.chapter c
 			LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
-			WHERE c.manga = m.id AND COALESCE(cu.read, false) = false
+			WHERE c.manga = m.id AND COALESCE(cu.read, false) = false AND stat.unread_count > 0
 			ORDER BY c.source_order ASC
 			LIMIT 1
-		) fu ON stat.unread_count > 0
+		) fu ON true
 		LEFT JOIN LATERAL (
 			SELECT c.id, c.source_order, COALESCE(cu.last_page_read, 0) as last_page_read
 			FROM suwayomi.chapter c
 			INNER JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
-			WHERE c.manga = m.id AND cu.last_read_at = stat.max_last_read_at
+			WHERE c.manga = m.id AND stat.max_last_read_at > 0 AND cu.last_read_at = stat.max_last_read_at
 			ORDER BY c.source_order DESC
 			LIMIT 1
-		) lr ON stat.max_last_read_at > 0
+		) lr ON true
 		LEFT JOIN LATERAL (
 			SELECT c.id
 			FROM suwayomi.chapter c
-			WHERE c.manga = m.id AND c.date_upload = stat.max_date_upload
+			WHERE c.manga = m.id AND stat.max_date_upload > 0 AND c.date_upload = stat.max_date_upload
 			LIMIT 1
-		) lu ON stat.max_date_upload > 0
+		) lu ON true
 	`
 
 	var whereClauses []string
