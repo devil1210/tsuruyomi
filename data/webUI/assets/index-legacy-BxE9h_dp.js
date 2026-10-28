@@ -2470,6 +2470,7 @@ System.register([],function(e,t){var n,r,a,o,i,s,l,c,u,d,p,f,h,m,g,y,v,b,S,E,w,x
         excludeNotStarted
         excludeCompleted
         globalUpdateInterval
+        globalUpdateTime
         updateMangas
 
         # Authentication

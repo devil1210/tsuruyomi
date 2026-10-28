@@ -2680,6 +2680,7 @@ To suppress this warning, you need to explicitly provide the \`palette.${t}Chann
         excludeNotStarted
         excludeCompleted
         globalUpdateInterval
+        globalUpdateTime
         updateMangas
 
         # Authentication
