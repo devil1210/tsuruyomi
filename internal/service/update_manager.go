@@ -102,7 +102,12 @@ func (um *UpdateManager) GetLastUpdateTimestamp() int64 {
 
 	if database.DB != nil {
 		var maxFetched sql.NullInt64
-		_ = database.DB.QueryRow(context.Background(), "SELECT MAX(chapters_last_fetched_at) FROM suwayomi.manga WHERE in_library = true").Scan(&maxFetched)
+		_ = database.DB.QueryRow(context.Background(), `
+			SELECT MAX(m.chapters_last_fetched_at) 
+			FROM suwayomi.manga m 
+			JOIN suwayomi.mangauser mu ON m.id = mu.manga AND mu.user_id = 1 
+			WHERE mu.in_library = true
+		`).Scan(&maxFetched)
 		if maxFetched.Valid && maxFetched.Int64 > 0 {
 			return maxFetched.Int64
 		}
@@ -197,9 +202,9 @@ func (um *UpdateManager) StartUpdate() {
 			settings = make(map[string]string)
 		}
 
-		excludeUnread := parseBoolSetting(settings["excludeUnreadChapters"], true)
-		excludeNotStarted := parseBoolSetting(settings["excludeNotStarted"], true)
-		excludeCompleted := parseBoolSetting(settings["excludeCompleted"], true)
+		excludeUnread := parseBoolSetting(settings["excludeUnreadChapters"], false)
+		excludeNotStarted := parseBoolSetting(settings["excludeNotStarted"], false)
+		excludeCompleted := parseBoolSetting(settings["excludeCompleted"], false)
 		autoDownload := parseBoolSetting(settings["autoDownloadNewChapters"], false)
 		autoDownloadLimit := parseIntSetting(settings["autoDownloadNewChaptersLimit"], 1)
 
@@ -227,6 +232,7 @@ func (um *UpdateManager) StartUpdate() {
 				COALESCE(stat.read_count, 0),
 				COALESCE(ARRAY_AGG(cm.category) FILTER (WHERE cm.category IS NOT NULL), '{}') as categories
 			FROM suwayomi.manga m
+			JOIN suwayomi.mangauser mu ON m.id = mu.manga AND mu.user_id = 1 AND mu.in_library = true
 			LEFT JOIN suwayomi.categorymanga cm ON m.id = cm.manga AND cm.user_id = 1
 			LEFT JOIN (
 				SELECT 
@@ -237,7 +243,6 @@ func (um *UpdateManager) StartUpdate() {
 				LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter AND cu.user_id = 1
 				GROUP BY c.manga
 			) stat ON m.id = stat.manga
-			WHERE m.in_library = true
 			GROUP BY m.id, m.source, m.url, m.title, m.status, stat.unread_count, stat.read_count
 			ORDER BY m.id ASC
 		`
@@ -262,8 +267,15 @@ func (um *UpdateManager) StartUpdate() {
 		// 4. Filter mangas according to library settings and native Go source availability
 		var eligibleMangas []mangaToUpdate
 		for _, m := range library {
-			// Only update native Go sources (discard non-native APK extensions)
-			if !sources.Has(m.SourceID) {
+			// Check if source is registered and supports chapter listing
+			handler, hasHandler := sources.Get(m.SourceID)
+			if !hasHandler {
+				um.mu.Lock()
+				um.skippedMangasCount++
+				um.mu.Unlock()
+				continue
+			}
+			if _, canList := handler.(sources.ChapterLister); !canList {
 				um.mu.Lock()
 				um.skippedMangasCount++
 				um.mu.Unlock()
@@ -469,6 +481,30 @@ func (um *UpdateManager) restartSchedulerLocked(ctx context.Context) {
 	um.schedulerStop = stopChan
 
 	go func(d time.Duration, stop chan struct{}) {
+		// Determine initial delay: check how long ago the last update occurred
+		lastTs := um.GetLastUpdateTimestamp()
+		elapsed := time.Since(time.Unix(lastTs, 0))
+		initialDelay := d - elapsed
+		if initialDelay <= 0 || elapsed >= d {
+			// If overdue or never updated, trigger after a short grace period of 30 seconds
+			initialDelay = 30 * time.Second
+		} else if initialDelay < 30*time.Second {
+			initialDelay = 30 * time.Second
+		}
+
+		log.Printf("[UPDATER] Next scheduled library update in %v (last update: %v ago)", initialDelay.Round(time.Second), elapsed.Round(time.Second))
+
+		timer := time.NewTimer(initialDelay)
+		defer timer.Stop()
+
+		select {
+		case <-stop:
+			return
+		case <-timer.C:
+			log.Printf("[UPDATER] Periodic library update triggered by scheduler (initial catch-up)")
+			um.StartUpdate()
+		}
+
 		ticker := time.NewTicker(d)
 		defer ticker.Stop()
 
