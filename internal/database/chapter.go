@@ -24,7 +24,7 @@ func GetChaptersByMangaID(ctx context.Context, mangaId int) ([]models.ChapterDat
 		FROM suwayomi.chapter c
 		LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
 		WHERE c.manga = $1
-		ORDER BY c.source_order DESC
+		ORDER BY c.source_order DESC, c.id DESC
 	`
 
 	rows, err := DB.Query(ctx, query, mangaId)
@@ -192,3 +192,45 @@ func GetRecentChapters(ctx context.Context, pageNum int) (*models.PaginatedList[
 		HasNextPage: hasNextPage,
 	}, nil
 }
+
+// EnsureCleanChapterSourceOrders checks for mangas whose chapters have duplicate or non-contiguous source_orders,
+// and normalizes them so that source_order is strictly 1..N.
+func EnsureCleanChapterSourceOrders(ctx context.Context) error {
+	if DB == nil {
+		return nil
+	}
+
+	query := `
+		WITH broken_manga AS (
+			SELECT manga
+			FROM suwayomi.chapter
+			GROUP BY manga
+			HAVING min(source_order) != 1 
+			   OR max(source_order) != count(*) 
+			   OR count(distinct source_order) != count(*)
+		),
+		numbered AS (
+			SELECT c.id, ROW_NUMBER() OVER (
+				PARTITION BY c.manga
+				ORDER BY 
+					CASE WHEN c.chapter_number > 0 THEN c.chapter_number ELSE c.source_order END ASC,
+					c.id ASC
+			) as new_order
+			FROM suwayomi.chapter c
+			WHERE c.manga IN (SELECT manga FROM broken_manga)
+		)
+		UPDATE suwayomi.chapter c
+		SET source_order = n.new_order
+		FROM numbered n
+		WHERE c.id = n.id;
+	`
+	tag, err := DB.Exec(ctx, query)
+	if err != nil {
+		return fmt.Errorf("normalizing chapter source orders: %w", err)
+	}
+	if tag.RowsAffected() > 0 {
+		fmt.Printf("[DATABASE] Normalized source_order for %d chapters with gaps or collisions\n", tag.RowsAffected())
+	}
+	return nil
+}
+

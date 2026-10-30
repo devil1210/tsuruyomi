@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"strconv"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -135,7 +137,7 @@ func (h *MangaThemesiaHandler) GetChapterList(ctx context.Context, mangaURL stri
 
 	var chapters []ChapterItem
 	seenCh := make(map[string]bool)
-	doc.Find("#chapterlist ul li, ul.clstyle li, div.eph-num").Each(func(i int, s *goquery.Selection) {
+	doc.Find("#chapterlist ul li, ul.clstyle li").Each(func(i int, s *goquery.Selection) {
 		a := s.Find("a").First()
 		chURL, _ := a.Attr("href")
 		chName := strings.TrimSpace(s.Find("span.chapternum").Text())
@@ -149,18 +151,52 @@ func (h *MangaThemesiaHandler) GetChapterList(ctx context.Context, mangaURL stri
 			}
 			if !seenCh[cleanURL] {
 				seenCh[cleanURL] = true
+
+				var chNum float32
+				dataNum := strings.TrimSpace(s.AttrOr("data-num", ""))
+				if dataNum != "" {
+					if f, err := strconv.ParseFloat(dataNum, 32); err == nil {
+						chNum = float32(f)
+					}
+				}
+				if chNum == 0 {
+					chNum = ParseChapterNumber(chName)
+				}
+
+				dateStr := strings.TrimSpace(s.Find("span.chapterdate").Text())
+				var dateUpload int64
+				for _, layout := range []string{"2 January, 2006", "January 2, 2006", "02/01/2006", "2006-01-02", "2006-01-02 15:04:05"} {
+					if t, err := time.Parse(layout, dateStr); err == nil {
+						dateUpload = t.Unix()
+						break
+					}
+				}
+
 				chapters = append(chapters, ChapterItem{
-					Name:    chName,
-					URL:     cleanURL,
-					RealURL: chURL,
+					Name:          chName,
+					URL:           cleanURL,
+					RealURL:       chURL,
+					ChapterNumber: chNum,
+					DateUpload:    dateUpload,
 				})
 			}
 		}
 	})
 
 	total := len(chapters)
+	isOldestFirst := false
+	if len(chapters) > 1 && chapters[0].ChapterNumber > 0 && chapters[total-1].ChapterNumber > 0 {
+		if chapters[0].ChapterNumber < chapters[total-1].ChapterNumber {
+			isOldestFirst = true
+		}
+	}
+
 	for i := range chapters {
-		chapters[i].SourceOrder = total - i
+		if isOldestFirst {
+			chapters[i].SourceOrder = i + 1
+		} else {
+			chapters[i].SourceOrder = total - i
+		}
 	}
 
 	return chapters, nil

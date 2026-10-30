@@ -3347,7 +3347,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					case "CHAPTER_NUMBER":
 						orderClauses = append(orderClauses, fmt.Sprintf("c.chapter_number %s, c.source_order %s", dir, dir))
 					case "SOURCE_ORDER":
-						orderClauses = append(orderClauses, fmt.Sprintf("c.source_order %s", dir))
+						orderClauses = append(orderClauses, fmt.Sprintf("c.source_order %s, c.id %s", dir, dir))
 					case "UPLOAD_DATE", "DATE_UPLOAD":
 						orderClauses = append(orderClauses, fmt.Sprintf("c.date_upload %s", dir))
 					case "FETCHED_AT":
@@ -5101,7 +5101,7 @@ func fetchChaptersForMangaIDs(ctx context.Context, mangaIDs []int64, orderBy str
 		return []map[string]interface{}{}, nil
 	}
 
-	orderClause := "ORDER BY c.source_order DESC"
+	orderClause := "ORDER BY c.source_order DESC, c.id DESC"
 	if strings.TrimSpace(orderBy) != "" {
 		orderClause = "ORDER BY " + strings.TrimSpace(orderBy)
 	}

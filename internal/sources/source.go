@@ -2,6 +2,8 @@ package sources
 
 import (
 	"context"
+	"regexp"
+	"strconv"
 	"fmt"
 	"io"
 	"log"
@@ -133,6 +135,24 @@ type ChapterLister interface {
 type SourceHandler interface {
 	Name() string
 	GetPageList(ctx context.Context, chapterURL string, mangaURL string) ([]string, error)
+}
+
+var reChapterNum = regexp.MustCompile(`(?i)(?:cap[ií]tulo|chapter|cap|ch|episode|episodio|ep)\s*\.?\s*([0-9]+(?:\.[0-9]+)?)`)
+var reGenericNum = regexp.MustCompile(`([0-9]+(?:\.[0-9]+)?)`)
+
+// ParseChapterNumber extracts a floating-point chapter number from chapter name or string.
+func ParseChapterNumber(name string) float32 {
+	if m := reChapterNum.FindStringSubmatch(name); len(m) > 1 {
+		if f, err := strconv.ParseFloat(m[1], 32); err == nil {
+			return float32(f)
+		}
+	}
+	if m := reGenericNum.FindStringSubmatch(name); len(m) > 1 {
+		if f, err := strconv.ParseFloat(m[1], 32); err == nil {
+			return float32(f)
+		}
+	}
+	return 0
 }
 
 var (
@@ -332,18 +352,32 @@ func FetchAndSaveMangaChapters(ctx context.Context, sourceID int64, mangaID int6
 	// In Suwayomi/Tachidesk, source_order MUST increase chronologically (oldest = 1, newest = total).
 	// If the source returned chapters where the first item has a higher ChapterNumber than the last item,
 	// but the first item was given a smaller SourceOrder than the last item, the source orders are inverted!
+	for i := range chapters {
+		if chapters[i].ChapterNumber == 0 {
+			chapters[i].ChapterNumber = ParseChapterNumber(chapters[i].Name)
+		}
+	}
+
 	if len(chapters) > 1 {
 		firstNum := chapters[0].ChapterNumber
 		lastNum := chapters[len(chapters)-1].ChapterNumber
 		firstOrder := chapters[0].SourceOrder
 		lastOrder := chapters[len(chapters)-1].SourceOrder
 
-		if firstNum > 0 && lastNum > 0 && firstNum > lastNum && firstOrder < lastOrder {
-			log.Printf("[SOURCES] Inverted SourceOrder detected for manga %d (first ch=%.1f order=%d, last ch=%.1f order=%d). Normalizing...",
-				mangaID, firstNum, firstOrder, lastNum, lastOrder)
-			total := len(chapters)
-			for i := range chapters {
-				chapters[i].SourceOrder = total - i
+		if firstNum > 0 && lastNum > 0 {
+			if firstNum > lastNum && firstOrder < lastOrder {
+				log.Printf("[SOURCES] Inverted SourceOrder detected for manga %d (first ch=%.1f order=%d, last ch=%.1f order=%d). Normalizing...",
+					mangaID, firstNum, firstOrder, lastNum, lastOrder)
+				total := len(chapters)
+				for i := range chapters {
+					chapters[i].SourceOrder = total - i
+				}
+			} else if firstNum < lastNum && firstOrder > lastOrder {
+				log.Printf("[SOURCES] Inverted SourceOrder detected for manga %d (first ch=%.1f order=%d, last ch=%.1f order=%d). Normalizing...",
+					mangaID, firstNum, firstOrder, lastNum, lastOrder)
+				for i := range chapters {
+					chapters[i].SourceOrder = i + 1
+				}
 			}
 		}
 	}
@@ -407,6 +441,23 @@ func FetchAndSaveMangaChapters(ctx context.Context, sourceID int64, mangaID int6
 					UPDATE suwayomi.manga SET initialized = true, last_fetched_at = $1, chapters_last_fetched_at = $1 WHERE id = $2
 				`, nowSec, mangaID)
 			}
+
+			// Guarantee strictly contiguous 1-based source_order (1..N) without gaps or duplicate values
+			_, _ = tx.Exec(ctx, `
+				WITH numbered AS (
+					SELECT id, ROW_NUMBER() OVER (
+						ORDER BY 
+							CASE WHEN chapter_number > 0 THEN chapter_number ELSE source_order END ASC,
+							id ASC
+					) as new_order
+					FROM suwayomi.chapter
+					WHERE manga = $1
+				)
+				UPDATE suwayomi.chapter c
+				SET source_order = n.new_order
+				FROM numbered n
+				WHERE c.id = n.id
+			`, mangaID)
 
 			if errCommit := tx.Commit(ctx); errCommit != nil {
 				log.Printf("[SOURCES] Failed to commit chapters transaction for manga %d: %v", mangaID, errCommit)

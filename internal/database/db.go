@@ -43,6 +43,9 @@ func Connect(ctx context.Context, cfg config.DatabaseConfig) error {
 	}
 
 	DB = pool
+	// Ensure chapter source_order is normalized without gaps or duplicate values
+	_ = EnsureCleanChapterSourceOrders(ctx)
+
 	return nil
 }
 
