@@ -300,7 +300,7 @@ func FetchAndSaveChapterPages(ctx context.Context, sourceID int64, mangaID int, 
 	// Return deterministic API page paths for the frontend
 	pages := make([]string, len(imageURLs))
 	for i := range imageURLs {
-		pages[i] = fmt.Sprintf("/api/v1/manga/%d/chapter/%d/page/%d?v=%d", mangaID, chapterIndex, i, chapterID)
+		pages[i] = fmt.Sprintf("/api/v1/manga/%d/chapter/%d/page/%d", mangaID, chapterIndex, i)
 	}
 
 	return pages, nil

@@ -474,6 +474,27 @@ func GetChapter(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).SendString("Chapter not found")
 	}
 
+	// Auto-fetch pages if not yet populated
+	if ch.PageCount <= 0 {
+		manga, _ := database.GetMangaByID(c.Context(), mangaId)
+		if manga != nil {
+			sourceID, _ := strconv.ParseInt(manga.SourceID, 10, 64)
+			if sourceID == 0 && manga.Source != nil {
+				sourceID, _ = strconv.ParseInt(manga.Source.ID, 10, 64)
+			}
+			if sources.Has(sourceID) {
+				mangaURL := ""
+				if manga.RealURL != nil {
+					mangaURL = *manga.RealURL
+				}
+				pages, err := sources.FetchAndSaveChapterPages(c.Context(), sourceID, mangaId, int64(ch.ID), chapterIndex, ch.URL, mangaURL)
+				if err == nil && len(pages) > 0 {
+					ch.PageCount = len(pages)
+				}
+			}
+		}
+	}
+
 	return c.JSON(ch)
 }
 
@@ -649,8 +670,11 @@ func GetPageImage(c *fiber.Ctx) error {
 	}
 
 	// If not yet in database, check if we have a native Go source handler to scrape it right now
-	if imageURL == "" && manga != nil && manga.Source != nil && chapter != nil {
-		sourceID, _ := strconv.ParseInt(manga.Source.ID, 10, 64)
+	if imageURL == "" && manga != nil && chapter != nil {
+		sourceID, _ := strconv.ParseInt(manga.SourceID, 10, 64)
+		if sourceID == 0 && manga.Source != nil {
+			sourceID, _ = strconv.ParseInt(manga.Source.ID, 10, 64)
+		}
 		if sources.Has(sourceID) {
 			mangaURL := ""
 			if manga.RealURL != nil {
@@ -666,7 +690,11 @@ func GetPageImage(c *fiber.Ctx) error {
 	// If we have an image URL, fetch it directly via Go HTTP client (Zero JVM!)
 	if imageURL != "" {
 		ref := ""
-		if manga != nil && manga.RealURL != nil {
+		if chapter != nil && chapter.RealURL != nil && *chapter.RealURL != "" {
+			ref = *chapter.RealURL
+		} else if chapter != nil && chapter.URL != "" {
+			ref = chapter.URL
+		} else if manga != nil && manga.RealURL != nil {
 			ref = *manga.RealURL
 		}
 

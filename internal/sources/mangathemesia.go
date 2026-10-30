@@ -134,6 +134,7 @@ func (h *MangaThemesiaHandler) GetChapterList(ctx context.Context, mangaURL stri
 	}
 
 	var chapters []ChapterItem
+	seenCh := make(map[string]bool)
 	doc.Find("#chapterlist ul li, ul.clstyle li, div.eph-num").Each(func(i int, s *goquery.Selection) {
 		a := s.Find("a").First()
 		chURL, _ := a.Attr("href")
@@ -146,11 +147,14 @@ func (h *MangaThemesiaHandler) GetChapterList(ctx context.Context, mangaURL stri
 			if strings.HasPrefix(cleanURL, h.baseURL) {
 				cleanURL = strings.TrimPrefix(cleanURL, h.baseURL)
 			}
-			chapters = append(chapters, ChapterItem{
-				Name:    chName,
-				URL:     cleanURL,
-				RealURL: chURL,
-			})
+			if !seenCh[cleanURL] {
+				seenCh[cleanURL] = true
+				chapters = append(chapters, ChapterItem{
+					Name:    chName,
+					URL:     cleanURL,
+					RealURL: chURL,
+				})
+			}
 		}
 	})
 
@@ -208,8 +212,14 @@ func (h *MangaThemesiaHandler) GetPageList(ctx context.Context, chapterURL strin
 			if !exists || src == "" {
 				src, exists = s.Attr("src")
 			}
-			if exists && src != "" && !strings.Contains(src, "logo") && !strings.Contains(src, "banner") {
-				pages = append(pages, strings.TrimSpace(src))
+			src = strings.TrimSpace(src)
+			if exists && src != "" && !strings.HasPrefix(src, "data:") && !strings.Contains(src, "blank.gif") && !strings.Contains(src, "logo") && !strings.Contains(src, "banner") {
+				if strings.HasPrefix(src, "//") {
+					src = "https:" + src
+				} else if strings.HasPrefix(src, "/") {
+					src = h.baseURL + src
+				}
+				pages = append(pages, src)
 			}
 		})
 

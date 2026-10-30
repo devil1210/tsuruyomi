@@ -209,6 +209,7 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 	}
 
 	var chapters []ChapterItem
+	seenCh := make(map[string]bool)
 	doc.Find("li.wp-manga-chapter, a.leermos").Each(func(i int, s *goquery.Selection) {
 		a := s
 		if !s.Is("a") {
@@ -224,11 +225,14 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 			if strings.HasPrefix(cleanURL, h.baseURL) {
 				cleanURL = strings.TrimPrefix(cleanURL, h.baseURL)
 			}
-			chapters = append(chapters, ChapterItem{
-				Name:    chName,
-				URL:     cleanURL,
-				RealURL: chURL,
-			})
+			if !seenCh[cleanURL] {
+				seenCh[cleanURL] = true
+				chapters = append(chapters, ChapterItem{
+					Name:    chName,
+					URL:     cleanURL,
+					RealURL: chURL,
+				})
+			}
 		}
 	})
 
@@ -260,11 +264,17 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 							if strings.HasPrefix(cleanURL, h.baseURL) {
 								cleanURL = strings.TrimPrefix(cleanURL, h.baseURL)
 							}
-							chapters = append(chapters, ChapterItem{
-								Name:    chName,
-								URL:     cleanURL,
-								RealURL: chURL,
-							})
+							if !seenCh[cleanURL] {
+								seenCh[cleanURL] = true
+								if !seenCh[cleanURL] {
+									seenCh[cleanURL] = true
+									chapters = append(chapters, ChapterItem{
+										Name:    chName,
+										URL:     cleanURL,
+										RealURL: chURL,
+									})
+								}
+							}
 						}
 					})
 				}
@@ -294,11 +304,14 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 								if strings.HasPrefix(cleanURL, h.baseURL) {
 									cleanURL = strings.TrimPrefix(cleanURL, h.baseURL)
 								}
-								chapters = append(chapters, ChapterItem{
-									Name:    chName,
-									URL:     cleanURL,
-									RealURL: chURL,
-								})
+								if !seenCh[cleanURL] {
+									seenCh[cleanURL] = true
+									chapters = append(chapters, ChapterItem{
+										Name:    chName,
+										URL:     cleanURL,
+										RealURL: chURL,
+									})
+								}
 							}
 						})
 					}
@@ -351,7 +364,12 @@ func (h *MadaraHandler) GetPageList(ctx context.Context, chapterURL string, mang
 				src, exists = s.Attr("src")
 			}
 			src = strings.TrimSpace(src)
-			if exists && src != "" && !strings.Contains(src, "logo") && !strings.Contains(src, "ads") && !strings.Contains(src, "icon") {
+			if exists && src != "" && !strings.HasPrefix(src, "data:") && !strings.Contains(src, "blank.gif") && !strings.Contains(src, "logo") && !strings.Contains(src, "/ads/") && !strings.Contains(src, "advertisement") && !strings.Contains(src, "icon") {
+				if strings.HasPrefix(src, "//") {
+					src = "https:" + src
+				} else if strings.HasPrefix(src, "/") {
+					src = h.baseURL + src
+				}
 				pages = append(pages, src)
 			}
 		})

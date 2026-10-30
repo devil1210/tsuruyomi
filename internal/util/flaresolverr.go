@@ -83,6 +83,13 @@ func getSession(domain string) ([]flareSolverrCookie, string, bool) {
 	}
 	sessionCacheMu.RLock()
 	sess, ok := sessionCache[domain]
+	if !ok {
+		parts := strings.Split(domain, ".")
+		if len(parts) > 2 {
+			parent := strings.Join(parts[len(parts)-2:], ".")
+			sess, ok = sessionCache[parent]
+		}
+	}
 	sessionCacheMu.RUnlock()
 
 	if !ok {
@@ -111,10 +118,26 @@ func setSession(domain string, cookies []flareSolverrCookie, userAgent string, t
 
 	sessionCacheMu.Lock()
 	defer sessionCacheMu.Unlock()
-	sessionCache[domain] = &domainSession{
+	entry := &domainSession{
 		Cookies:   copied,
 		UserAgent: userAgent,
 		ExpiresAt: time.Now().Add(ttl),
+	}
+	sessionCache[domain] = entry
+
+	// Also store under parent domain if subdomain (e.g. uploads.bokugents.com -> bokugents.com)
+	parts := strings.Split(domain, ".")
+	if len(parts) > 2 {
+		parent := strings.Join(parts[len(parts)-2:], ".")
+		sessionCache[parent] = entry
+	}
+
+	// Also index under cookie domains returned by Cloudflare (e.g. .bokugents.com)
+	for _, c := range cookies {
+		cleanDom := strings.ToLower(strings.TrimPrefix(c.Domain, "."))
+		if cleanDom != "" {
+			sessionCache[cleanDom] = entry
+		}
 	}
 }
 
@@ -282,6 +305,9 @@ func DownloadWithFlareSolverrAndReferer(ctx context.Context, cfg *config.Config,
 
 	// Resolve Cloudflare challenge via singleflight deduplication
 	sfKey := domain
+	if parts := strings.Split(domain, "."); len(parts) > 2 {
+		sfKey = strings.Join(parts[len(parts)-2:], ".")
+	}
 	if sfKey == "" {
 		sfKey = targetURL
 	}
