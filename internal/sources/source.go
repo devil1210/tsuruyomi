@@ -355,6 +355,9 @@ func FetchAndSaveMangaChapters(ctx context.Context, sourceID int64, mangaID int6
 	for i := range chapters {
 		if chapters[i].ChapterNumber == 0 {
 			chapters[i].ChapterNumber = ParseChapterNumber(chapters[i].Name)
+			if chapters[i].ChapterNumber == 0 {
+				chapters[i].ChapterNumber = ParseChapterNumber(chapters[i].URL)
+			}
 		}
 	}
 

@@ -654,12 +654,12 @@ func buildMangaAcquisitionFeed(c *fiber.Ctx, feedSubpath, feedTitle, filterType 
 			},
 			{
 				Rel:  OpdsRelImage,
-				Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail", mID),
+				Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail?opds=true", mID),
 				Type: OpdsMimeJpeg,
 			},
 			{
 				Rel:  OpdsRelImageThumbnail,
-				Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail", mID),
+				Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail?opds=true", mID),
 				Type: OpdsMimeJpeg,
 			},
 			{
@@ -804,8 +804,8 @@ func GetOpdsSeriesChapters(c *fiber.Ctx) error {
 		Links: []OpdsLink{
 			{Rel: OpdsRelSelf, Href: fmt.Sprintf("/api/opds/v1.2/series/%d", mangaId), Type: OpdsMimeAcquisition},
 			{Rel: OpdsRelStart, Href: "/api/opds/v1.2", Type: OpdsMimeNavigation},
-			{Rel: OpdsRelImage, Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail", mangaId), Type: OpdsMimeJpeg},
-			{Rel: OpdsRelImageThumbnail, Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail", mangaId), Type: OpdsMimeJpeg},
+			{Rel: OpdsRelImage, Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail?opds=true", mangaId), Type: OpdsMimeJpeg},
+			{Rel: OpdsRelImageThumbnail, Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail?opds=true", mangaId), Type: OpdsMimeJpeg},
 		},
 	}
 
@@ -1200,7 +1200,7 @@ func GetOpdsLibraryUpdates(c *fiber.Ctx) error {
 				},
 				{
 					Rel:  OpdsRelImage,
-					Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail", manga.ID),
+					Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail?opds=true", manga.ID),
 					Type: OpdsMimeJpeg,
 				},
 			},
@@ -1300,7 +1300,7 @@ func GetOpdsHistory(c *fiber.Ctx) error {
 				},
 				{
 					Rel:  OpdsRelImage,
-					Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail", mID),
+					Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail?opds=true", mID),
 					Type: OpdsMimeJpeg,
 				},
 			},

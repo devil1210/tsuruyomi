@@ -5138,6 +5138,13 @@ func fetchChaptersForMangaIDs(ctx context.Context, mangaIDs []int64, orderBy str
 			&lastPageRead, &pageCount, &mId,
 		)
 		if err == nil {
+			if chapterNumber <= 0 {
+				if num := sources.ParseChapterNumber(name); num > 0 {
+					chapterNumber = num
+				} else if sourceOrder > 0 {
+					chapterNumber = float32(sourceOrder)
+				}
+			}
 			nodes = append(nodes, map[string]interface{}{
 				"id":            id,
 				"name":          name,

@@ -44,6 +44,9 @@ func GetChaptersByMangaID(ctx context.Context, mangaId int) ([]models.ChapterDat
 		if err != nil {
 			return nil, fmt.Errorf("scanning chapter row: %w", err)
 		}
+		if c.ChapterNumber <= 0 && c.Index > 0 {
+			c.ChapterNumber = float32(c.Index)
+		}
 		c.MangaID = mangaId
 		c.Meta = map[string]string{}
 		chapters = append(chapters, c)
@@ -84,6 +87,9 @@ func GetChapterByMangaAndIndex(ctx context.Context, mangaId int, chapterIndex in
 	}
 
 	c.MangaID = mangaId
+	if c.ChapterNumber <= 0 && c.Index > 0 {
+		c.ChapterNumber = float32(c.Index)
+	}
 	c.Meta = map[string]string{}
 	return &c, nil
 }
@@ -230,6 +236,17 @@ func EnsureCleanChapterSourceOrders(ctx context.Context) error {
 	}
 	if tag.RowsAffected() > 0 {
 		fmt.Printf("[DATABASE] Normalized source_order for %d chapters with gaps or collisions\n", tag.RowsAffected())
+	}
+
+	backfillQuery := `
+		UPDATE suwayomi.chapter
+		SET chapter_number = (substring(name from '([0-9]+(\.[0-9]+)?)'))::numeric
+		WHERE (chapter_number = 0 OR chapter_number = -1)
+		  AND substring(name from '([0-9]+(\.[0-9]+)?)') IS NOT NULL;
+	`
+	tag2, err2 := DB.Exec(ctx, backfillQuery)
+	if err2 == nil && tag2.RowsAffected() > 0 {
+		fmt.Printf("[DATABASE] Backfilled chapter_number for %d chapters with 0/-1\n", tag2.RowsAffected())
 	}
 	return nil
 }

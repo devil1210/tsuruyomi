@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -210,10 +211,10 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 
 	var chapters []ChapterItem
 	seenCh := make(map[string]bool)
-	doc.Find("li.wp-manga-chapter, a.leermos").Each(func(i int, s *goquery.Selection) {
-		a := s
-		if !s.Is("a") {
-			a = s.Find("a").First()
+
+	addChapter := func(s *goquery.Selection, a *goquery.Selection) {
+		if a == nil || a.Length() == 0 {
+			return
 		}
 		chURL, _ := a.Attr("href")
 		chName := strings.TrimSpace(a.Find("span.chapter-name").Text())
@@ -227,13 +228,37 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 			}
 			if !seenCh[cleanURL] {
 				seenCh[cleanURL] = true
+				chNum := ParseChapterNumber(chName)
+				if chNum == 0 {
+					chNum = ParseChapterNumber(cleanURL)
+				}
+				var dateUpload int64
+				if s != nil {
+					dateStr := strings.TrimSpace(s.Find("span.chapter-release-date, .chapter-release-date").Text())
+					for _, layout := range []string{"2 January, 2006", "January 2, 2006", "02/01/2006", "2006-01-02", "02-01-2006", "2006-01-02 15:04:05"} {
+						if t, err := time.Parse(layout, dateStr); err == nil {
+							dateUpload = t.Unix()
+							break
+						}
+					}
+				}
 				chapters = append(chapters, ChapterItem{
-					Name:    chName,
-					URL:     cleanURL,
-					RealURL: chURL,
+					Name:          chName,
+					URL:           cleanURL,
+					RealURL:       chURL,
+					ChapterNumber: chNum,
+					DateUpload:    dateUpload,
 				})
 			}
 		}
+	}
+
+	doc.Find("li.wp-manga-chapter, a.leermos").Each(func(i int, s *goquery.Selection) {
+		a := s
+		if !s.Is("a") {
+			a = s.Find("a").First()
+		}
+		addChapter(s, a)
 	})
 
 	if len(chapters) == 0 {
@@ -254,28 +279,7 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 						if !s.Is("a") {
 							a = s.Find("a").First()
 						}
-						chURL, _ := a.Attr("href")
-						chName := strings.TrimSpace(a.Find("span.chapter-name").Text())
-						if chName == "" {
-							chName = strings.TrimSpace(a.Text())
-						}
-						if chURL != "" && chName != "" {
-							cleanURL := chURL
-							if strings.HasPrefix(cleanURL, h.baseURL) {
-								cleanURL = strings.TrimPrefix(cleanURL, h.baseURL)
-							}
-							if !seenCh[cleanURL] {
-								seenCh[cleanURL] = true
-								if !seenCh[cleanURL] {
-									seenCh[cleanURL] = true
-									chapters = append(chapters, ChapterItem{
-										Name:    chName,
-										URL:     cleanURL,
-										RealURL: chURL,
-									})
-								}
-							}
-						}
+						addChapter(s, a)
 					})
 				}
 			}
@@ -290,39 +294,35 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 			if err == nil {
 				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 				req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-				req.Header.Set("Referer", fullURL)
+			req.Header.Set("Referer", fullURL)
 				resp, err := DefaultClient.Do(req)
 				if err == nil {
 					defer resp.Body.Close()
 					ajaxDoc, err := goquery.NewDocumentFromReader(resp.Body)
-					if err == nil {
-						ajaxDoc.Find("li.wp-manga-chapter a").Each(func(i int, a *goquery.Selection) {
-							chURL, _ := a.Attr("href")
-							chName := strings.TrimSpace(a.Text())
-							if chURL != "" && chName != "" {
-								cleanURL := chURL
-								if strings.HasPrefix(cleanURL, h.baseURL) {
-									cleanURL = strings.TrimPrefix(cleanURL, h.baseURL)
-								}
-								if !seenCh[cleanURL] {
-									seenCh[cleanURL] = true
-									chapters = append(chapters, ChapterItem{
-										Name:    chName,
-										URL:     cleanURL,
-										RealURL: chURL,
-									})
-								}
-							}
-						})
-					}
+				if err == nil {
+					ajaxDoc.Find("li.wp-manga-chapter a").Each(func(i int, a *goquery.Selection) {
+						addChapter(nil, a)
+					})
 				}
 			}
 		}
 	}
+	}
 
 	total := len(chapters)
+	isOldestFirst := false
+	if len(chapters) > 1 && chapters[0].ChapterNumber > 0 && chapters[total-1].ChapterNumber > 0 {
+		if chapters[0].ChapterNumber < chapters[total-1].ChapterNumber {
+			isOldestFirst = true
+		}
+	}
+
 	for i := range chapters {
-		chapters[i].SourceOrder = total - i
+		if isOldestFirst {
+			chapters[i].SourceOrder = i + 1
+		} else {
+			chapters[i].SourceOrder = total - i
+		}
 	}
 
 	return chapters, nil
