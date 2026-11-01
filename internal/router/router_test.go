@@ -179,4 +179,39 @@ func TestTsumiruGraphQLCompatibility(t *testing.T) {
 	if !strings.Contains(respStr, `"username":"devil"`) {
 		t.Errorf("Expected account response to contain user 'devil', got: %s", respStr)
 	}
+
+	// 4. GetMangaTrackRecords (Tsumiru recommendations dependency)
+	reqTracks := httptest.NewRequest("POST", "/api/graphql", strings.NewReader(`{
+		"operationName": "GetMangaTrackRecords",
+		"query": "query GetMangaTrackRecords($mangaId: Int!) { manga(id: $mangaId) { id trackRecords { nodes { id trackerId remoteId } totalCount } } }",
+		"variables": { "mangaId": 2408 }
+	}`))
+	reqTracks.Header.Set("Content-Type", "application/json")
+	respTracks, err := app.Test(reqTracks)
+	if err != nil {
+		t.Fatalf("GetMangaTrackRecords failed: %v", err)
+	}
+	bodyTracks := make([]byte, 2048)
+	n, _ = respTracks.Body.Read(bodyTracks)
+	respStr = string(bodyTracks[:n])
+	if !strings.Contains(respStr, `"trackRecords"`) || !strings.Contains(respStr, `"manga"`) {
+		t.Errorf("Expected response to contain manga and trackRecords, got: %s", respStr)
+	}
+
+	// 5. Server Database Settings DSN parsing
+	cfg.Database.DSN = "postgres://customuser:custompass@192.168.1.109:5432/tsuruyomi?sslmode=disable"
+	reqSettings := httptest.NewRequest("POST", "/api/graphql", strings.NewReader(`{
+		"query": "query DatabaseSettings { settings { databaseUrl databaseUsername databaseType } }"
+	}`))
+	reqSettings.Header.Set("Content-Type", "application/json")
+	respSettings, err := app.Test(reqSettings)
+	if err != nil {
+		t.Fatalf("DatabaseSettings request failed: %v", err)
+	}
+	bodySettings := make([]byte, 2048)
+	n, _ = respSettings.Body.Read(bodySettings)
+	respStr = string(bodySettings[:n])
+	if !strings.Contains(respStr, `"databaseUsername":"customuser"`) || !strings.Contains(respStr, `"databaseUrl":"postgresql://192.168.1.109:5432/tsuruyomi"`) {
+		t.Errorf("Expected dynamic database settings in response, got: %s", respStr)
+	}
 }

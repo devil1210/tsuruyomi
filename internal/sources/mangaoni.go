@@ -115,6 +115,8 @@ func (h *MangaOniHandler) GetChapterList(ctx context.Context, mangaURL string) (
 		var dateUpload int64
 		if t, err := time.Parse("2006-01-02 15:04:05", dateStr); err == nil {
 			dateUpload = t.UnixMilli()
+		} else {
+			dateUpload = ParseSpanishOrEnglishDate(dateStr)
 		}
 
 		// Normalize to relative URL

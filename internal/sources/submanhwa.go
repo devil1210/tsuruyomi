@@ -303,11 +303,15 @@ func (h *SubmanhwaHandler) GetChapterList(ctx context.Context, mangaURL string) 
 				}
 			}
 
+			dateStr := strings.TrimSpace(s.Find("time, .chapter-date, span.date, span.chapter-time, small, .chapter-meta").Text())
+			dateUpload := ParseSpanishOrEnglishDate(dateStr)
+
 			chapters = append(chapters, ChapterItem{
 				Name:          chName,
 				URL:           cleanURL,
 				RealURL:       chURL,
 				ChapterNumber: chNum,
+				DateUpload:    dateUpload,
 			})
 		}
 	})

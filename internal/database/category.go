@@ -207,8 +207,8 @@ func CreateCategory(ctx context.Context, name string) (int, error) {
 	// Insert new category
 	var newId int
 	insertQuery := `
-		INSERT INTO suwayomi.category (name, sort_order, is_default, include_in_update, include_in_download, version, uid, last_modified_at, is_syncing)
-		VALUES ($1, 999999, false, -1, -1, 0, 0, EXTRACT(EPOCH FROM NOW())::bigint, false)
+		INSERT INTO suwayomi.category (name, user_id, sort_order, is_default, include_in_update, include_in_download, version, uid, last_modified_at, is_syncing, flags, is_default_category)
+		VALUES ($1, 1, 999999, false, -1, -1, 0, 0, EXTRACT(EPOCH FROM NOW())::bigint, false, 0, false)
 		RETURNING id
 	`
 	err = tx.QueryRow(ctx, insertQuery, name).Scan(&newId)
@@ -221,7 +221,8 @@ func CreateCategory(ctx context.Context, name string) (int, error) {
 		return -1, fmt.Errorf("normalizing categories: %w", err)
 	}
 
-	return newId, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil { return -1, err }
+	return newId, nil
 }
 
 // UpdateCategory updates category attributes.

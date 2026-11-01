@@ -1,7 +1,8 @@
-﻿package sources
+package sources
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -193,6 +194,102 @@ func (h *MadaraHandler) fetchMangaList(ctx context.Context, targetURL string) ([
 
 
 
+var spanishMonths = map[string]string{
+	"enero":      "January",
+	"febrero":    "February",
+	"marzo":      "March",
+	"abril":      "April",
+	"mayo":       "May",
+	"junio":      "June",
+	"julio":      "July",
+	"agosto":     "August",
+	"septiembre": "September",
+	"setiembre":  "September",
+	"octubre":    "October",
+	"noviembre":  "November",
+	"diciembre":  "December",
+}
+
+// ParseSpanishOrEnglishDate parses Spanish relative and calendar dates as well as standard English layouts.
+func ParseSpanishOrEnglishDate(dateStr string) int64 {
+	dateStr = strings.TrimSpace(dateStr)
+	if dateStr == "" {
+		return 0
+	}
+
+	lower := strings.ToLower(dateStr)
+
+	// Check relative dates in Spanish: "hace 2 días", "hace 3 semanas", "hace 5 horas"
+	// Also English: "2 days ago", "3 weeks ago"
+	now := time.Now()
+	if strings.HasPrefix(lower, "hace") || strings.Contains(lower, "ago") {
+		var num int
+		var unit string
+		if strings.HasPrefix(lower, "hace") {
+			parts := strings.Fields(lower)
+			if len(parts) >= 3 {
+				_, _ = fmt.Sscan(parts[1], &num)
+				unit = parts[2]
+			}
+		} else if strings.Contains(lower, "ago") {
+			parts := strings.Fields(lower)
+			if len(parts) >= 2 {
+				_, _ = fmt.Sscan(parts[0], &num)
+				unit = parts[1]
+			}
+		}
+		if num > 0 {
+			switch {
+			case strings.HasPrefix(unit, "segundo") || strings.HasPrefix(unit, "sec"):
+				return now.Add(-time.Duration(num) * time.Second).UnixMilli()
+			case strings.HasPrefix(unit, "minuto") || strings.HasPrefix(unit, "min"):
+				return now.Add(-time.Duration(num) * time.Minute).UnixMilli()
+			case strings.HasPrefix(unit, "hora") || strings.HasPrefix(unit, "hour"):
+				return now.Add(-time.Duration(num) * time.Hour).UnixMilli()
+			case strings.HasPrefix(unit, "dia") || strings.HasPrefix(unit, "día") || strings.HasPrefix(unit, "day"):
+				return now.AddDate(0, 0, -num).UnixMilli()
+			case strings.HasPrefix(unit, "semana") || strings.HasPrefix(unit, "week"):
+				return now.AddDate(0, 0, -num*7).UnixMilli()
+			case strings.HasPrefix(unit, "mes") || strings.HasPrefix(unit, "month"):
+				return now.AddDate(0, -num, 0).UnixMilli()
+			case strings.HasPrefix(unit, "año") || strings.HasPrefix(unit, "ano") || strings.HasPrefix(unit, "year"):
+				return now.AddDate(-num, 0, 0).UnixMilli()
+			}
+		}
+	}
+
+	// Replace Spanish words: " de " -> " "
+	normalized := lower
+	normalized = strings.ReplaceAll(normalized, " de ", " ")
+	for es, en := range spanishMonths {
+		if strings.Contains(normalized, es) {
+			normalized = strings.ReplaceAll(normalized, es, en)
+			break
+		}
+	}
+
+	layouts := []string{
+		"January 2, 2006",
+		"January 2 2006",
+		"2 January, 2006",
+		"2 January 2006",
+		"02/01/2006",
+		"02-01-2006",
+		"2006-01-02",
+		"2006-01-02 15:04:05",
+		"2 Jan 2006",
+		"Jan 2, 2006",
+	}
+
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, normalized); err == nil {
+			return t.UnixMilli()
+		}
+	}
+
+	return 0
+}
+
 func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]ChapterItem, error) {
 	fullURL := mangaURL
 	if !strings.HasPrefix(fullURL, "http") {
@@ -211,6 +308,53 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 
 	var chapters []ChapterItem
 	seenCh := make(map[string]bool)
+
+	// 0. Check for embedded Madara script JSON (e.g. DragonTranslation / modern Madara themes)
+	doc.Find("script[type='application/json']").Each(func(i int, s *goquery.Selection) {
+		scriptText := strings.TrimSpace(s.Text())
+		if strings.Contains(scriptText, `"items"`) && (strings.Contains(scriptText, `"mangaId"`) || strings.Contains(scriptText, `"num"`)) {
+			var payload struct {
+				Items []struct {
+					ID   int    `json:"id"`
+					Num  string `json:"num"`
+					Name string `json:"name"`
+					URL  string `json:"url"`
+					Ago  string `json:"ago"`
+				} `json:"items"`
+			}
+			if err := json.Unmarshal([]byte(scriptText), &payload); err == nil && len(payload.Items) > 0 {
+				for _, item := range payload.Items {
+					if item.URL == "" {
+						continue
+					}
+					chURL := item.URL
+					cleanURL := chURL
+					if strings.HasPrefix(cleanURL, h.baseURL) {
+						cleanURL = strings.TrimPrefix(cleanURL, h.baseURL)
+					}
+					if !seenCh[cleanURL] {
+						seenCh[cleanURL] = true
+						chName := strings.TrimSpace(item.Name)
+						if chName == "" {
+							chName = fmt.Sprintf("Capítulo %s", item.Num)
+						}
+						chNum := ParseChapterNumber(item.Num)
+						if chNum == 0 {
+							chNum = ParseChapterNumber(chName)
+						}
+						dateUpload := ParseSpanishOrEnglishDate(item.Ago)
+						chapters = append(chapters, ChapterItem{
+							Name:          chName,
+							URL:           cleanURL,
+							RealURL:       chURL,
+							ChapterNumber: chNum,
+							DateUpload:    dateUpload,
+						})
+					}
+				}
+			}
+		}
+	})
 
 	addChapter := func(s *goquery.Selection, a *goquery.Selection) {
 		if a == nil || a.Length() == 0 {
@@ -235,12 +379,7 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 				var dateUpload int64
 				if s != nil {
 					dateStr := strings.TrimSpace(s.Find("span.chapter-release-date, .chapter-release-date").Text())
-					for _, layout := range []string{"2 January, 2006", "January 2, 2006", "02/01/2006", "2006-01-02", "02-01-2006", "2006-01-02 15:04:05"} {
-						if t, err := time.Parse(layout, dateStr); err == nil {
-							dateUpload = t.UnixMilli()
-							break
-						}
-					}
+					dateUpload = ParseSpanishOrEnglishDate(dateStr)
 				}
 				chapters = append(chapters, ChapterItem{
 					Name:          chName,

@@ -1,4 +1,4 @@
-﻿package sources
+package sources
 
 import (
 	"context"
@@ -164,11 +164,13 @@ func (h *MangaThemesiaHandler) GetChapterList(ctx context.Context, mangaURL stri
 				}
 
 				dateStr := strings.TrimSpace(s.Find("span.chapterdate").Text())
-				var dateUpload int64
-				for _, layout := range []string{"2 January, 2006", "January 2, 2006", "02/01/2006", "2006-01-02", "2006-01-02 15:04:05"} {
-					if t, err := time.Parse(layout, dateStr); err == nil {
-						dateUpload = t.UnixMilli()
-						break
+				dateUpload := ParseSpanishOrEnglishDate(dateStr)
+				if dateUpload == 0 {
+					for _, layout := range []string{"2 January, 2006", "January 2, 2006", "02/01/2006", "2006-01-02", "2006-01-02 15:04:05"} {
+						if t, err := time.Parse(layout, dateStr); err == nil {
+							dateUpload = t.UnixMilli()
+							break
+						}
 					}
 				}
 
