@@ -2,6 +2,7 @@ package sources
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -99,14 +100,14 @@ func (h *SubmanhwaHandler) GetLatestManga(ctx context.Context, page int) ([]Mang
 		return h.GetPopularManga(ctx, page)
 	}
 
-	html, err := FetchHTML(ctx, h.baseURL, h.baseURL+"/")
+	html, err := FetchHTML(ctx, h.baseURL+"/", h.baseURL+"/")
 	if err != nil {
-		return nil, false, err
+		return h.GetPopularManga(ctx, page)
 	}
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
-		return nil, false, err
+		return h.GetPopularManga(ctx, page)
 	}
 
 	var items []MangaItem
@@ -114,10 +115,16 @@ func (h *SubmanhwaHandler) GetLatestManga(ctx context.Context, page int) ([]Mang
 	doc.Find("article.up-card").Each(func(i int, s *goquery.Selection) {
 		a := s.Find("a.up-title").First()
 		if a.Length() == 0 {
+			a = s.Find("a.up-cover").First()
+		}
+		if a.Length() == 0 {
 			a = s.Find("a").First()
 		}
 		href, _ := a.Attr("href")
-		title := strings.TrimSpace(a.Text())
+		title := strings.TrimSpace(a.AttrOr("title", a.Text()))
+		if title == "" {
+			title = strings.TrimSpace(s.Find("img").First().AttrOr("alt", ""))
+		}
 		if href == "" || title == "" || seen[href] {
 			return
 		}
@@ -148,6 +155,10 @@ func (h *SubmanhwaHandler) GetLatestManga(ctx context.Context, page int) ([]Mang
 		})
 	})
 
+	if len(items) == 0 {
+		return h.GetPopularManga(ctx, page)
+	}
+
 	return items, false, nil
 }
 
@@ -160,49 +171,42 @@ func (h *SubmanhwaHandler) SearchManga(ctx context.Context, query string, page i
 		return h.GetPopularManga(ctx, page)
 	}
 
-	// 1. Try biblioteca endpoint
-	targetURL := fmt.Sprintf("%s/biblioteca?search=%s&page=%d", h.baseURL, url.QueryEscape(cleanQuery), page)
-	html, err := FetchHTML(ctx, targetURL, h.baseURL+"/")
-	if err == nil {
-		doc, errDoc := goquery.NewDocumentFromReader(strings.NewReader(html))
-		if errDoc == nil {
+	// 1. Primary: Official JSON Search API
+	apiURL := fmt.Sprintf("%s/api/series-search?q=%s&kind=all&rating=all&exact=0", h.baseURL, url.QueryEscape(cleanQuery))
+	respBody, err := FetchHTML(ctx, apiURL, h.baseURL+"/")
+	if err == nil && len(respBody) > 0 {
+		var res struct {
+			Mode  string `json:"mode"`
+			Items []struct {
+				Name     string `json:"name"`
+				URL      string `json:"url"`
+				Cover    string `json:"cover"`
+				Chapters int    `json:"chapters"`
+				Status   string `json:"status"`
+			} `json:"items"`
+		}
+		if errJSON := json.Unmarshal([]byte(respBody), &res); errJSON == nil && len(res.Items) > 0 {
 			var items []MangaItem
-			doc.Find("a.lib-card").Each(func(i int, s *goquery.Selection) {
-				href, _ := s.Attr("href")
-				title := strings.TrimSpace(s.Find(".lib-title").Text())
-				if href == "" || title == "" {
-					return
+			for _, it := range res.Items {
+				mangaURL := it.URL
+				if strings.HasPrefix(mangaURL, h.baseURL) {
+					mangaURL = strings.TrimPrefix(mangaURL, h.baseURL)
 				}
-
-				img := s.Find("img").First()
-				thumb, _ := img.Attr("data-src")
-				if thumb == "" {
-					thumb, _ = img.Attr("src")
-				}
+				thumb := it.Cover
 				if strings.HasPrefix(thumb, "//") {
 					thumb = "https:" + thumb
 				} else if strings.HasPrefix(thumb, "/") {
 					thumb = h.baseURL + thumb
 				}
-
-				mangaURL := href
-				if strings.HasPrefix(mangaURL, h.baseURL) {
-					mangaURL = strings.TrimPrefix(mangaURL, h.baseURL)
-				}
-
 				items = append(items, MangaItem{
-					Title:        title,
+					Title:        it.Name,
 					URL:          mangaURL,
 					ThumbnailURL: thumb,
 					Status:       1,
 					SourceID:     1136717301008230074,
 				})
-			})
-
-			if len(items) > 0 {
-				hasNext := doc.Find(".lib-pages a[aria-label=Siguiente], .pagination a[rel=next]").Length() > 0
-				return items, hasNext, nil
 			}
+			return items, false, nil
 		}
 	}
 

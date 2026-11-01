@@ -1,13 +1,17 @@
 package handlers
 
 import (
+	"context"
+	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/extensions"
 	"tsuruyomi/internal/models"
+	"tsuruyomi/internal/sources"
 )
 
 // ListSources lists all configured sources.
@@ -37,12 +41,100 @@ func GetSource(c *fiber.Ctx) error {
 	return c.JSON(src)
 }
 
-// GetPopularManga retrieves popular mangas from a specific source using the JS extension engine.
+func saveAndFormatMangaList(ctx context.Context, sourceID int64, items []sources.MangaItem, hasNext bool) models.PagedMangaListDataClass {
+	var resultList []models.MangaDataClass
+	if database.DB == nil {
+		for _, it := range items {
+			thumb := it.ThumbnailURL
+			resultList = append(resultList, models.MangaDataClass{
+				SourceID:     fmt.Sprintf("%d", sourceID),
+				URL:          it.URL,
+				Title:        it.Title,
+				ThumbnailURL: &thumb,
+				Status:       models.MangaStatusFromInt(it.Status),
+			})
+		}
+		return models.PagedMangaListDataClass{
+			MangaList:   resultList,
+			HasNextPage: hasNext,
+		}
+	}
+
+	for _, it := range items {
+		if it.SourceID == 0 {
+			it.SourceID = sourceID
+		}
+		genreStr := strings.Join(it.Genres, ", ")
+		var mID int64
+		errFind := database.DB.QueryRow(ctx, "SELECT id FROM suwayomi.manga WHERE source = $1 AND url = $2", it.SourceID, it.URL).Scan(&mID)
+		if errFind == nil && mID > 0 {
+			_, _ = database.DB.Exec(ctx, `
+				UPDATE suwayomi.manga SET
+					title = $1,
+					thumbnail_url = COALESCE(NULLIF($2, ''), thumbnail_url),
+					description = $3,
+					genre = $4,
+					status = $5,
+					artist = $6,
+					author = $7
+				WHERE id = $8
+			`, it.Title, it.ThumbnailURL, it.Description, genreStr, it.Status, it.Artist, it.Author, mID)
+		} else {
+			errInsert := database.DB.QueryRow(ctx, `
+				INSERT INTO suwayomi.manga (source, url, title, artist, author, description, genre, status, thumbnail_url, initialized, memo)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, '{}')
+				RETURNING id
+			`, it.SourceID, it.URL, it.Title, it.Artist, it.Author, it.Description, genreStr, it.Status, it.ThumbnailURL).Scan(&mID)
+			if errInsert == nil && mID > 0 {
+				_, _ = database.DB.Exec(ctx, `
+					INSERT INTO suwayomi.mangauser (manga, user_id, in_library, in_library_at)
+					VALUES ($1, 1, false, 0)
+					ON CONFLICT (manga, user_id) DO NOTHING
+				`, mID)
+			}
+		}
+
+		if mID > 0 {
+			if m, err := database.GetMangaByID(ctx, int(mID)); err == nil && m != nil {
+				resultList = append(resultList, *m)
+				continue
+			}
+		}
+
+		thumb := it.ThumbnailURL
+		resultList = append(resultList, models.MangaDataClass{
+			ID:           int(mID),
+			SourceID:     fmt.Sprintf("%d", sourceID),
+			URL:          it.URL,
+			Title:        it.Title,
+			ThumbnailURL: &thumb,
+			Status:       models.MangaStatusFromInt(it.Status),
+		})
+	}
+
+	return models.PagedMangaListDataClass{
+		MangaList:   resultList,
+		HasNextPage: hasNext,
+	}
+}
+
+// GetPopularManga retrieves popular mangas from a specific source using native Go scraper or the JS extension engine.
 func GetPopularManga(c *fiber.Ctx) error {
 	sourceId := c.Params("sourceId")
 	pageNum, err := strconv.Atoi(c.Params("pageNum"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString("Invalid page number")
+	}
+
+	if sid, err := strconv.ParseInt(sourceId, 10, 64); err == nil {
+		if h, ok := sources.Get(sid); ok {
+			if pop, ok := h.(sources.PopularLister); ok {
+				items, hasNext, errPop := pop.GetPopularManga(c.Context(), pageNum)
+				if errPop == nil && len(items) > 0 {
+					return c.JSON(saveAndFormatMangaList(c.Context(), sid, items, hasNext))
+				}
+			}
+		}
 	}
 
 	resVal, err := extensions.GlobalEngine.RunExtensionMethod(sourceId, "getPopularManga", pageNum)
@@ -53,12 +145,28 @@ func GetPopularManga(c *fiber.Ctx) error {
 	return c.JSON(resVal.Export())
 }
 
-// GetLatestManga retrieves latest mangas from a specific source using the JS extension engine.
+// GetLatestManga retrieves latest mangas from a specific source using native Go scraper or the JS extension engine.
 func GetLatestManga(c *fiber.Ctx) error {
 	sourceId := c.Params("sourceId")
 	pageNum, err := strconv.Atoi(c.Params("pageNum"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString("Invalid page number")
+	}
+
+	if sid, err := strconv.ParseInt(sourceId, 10, 64); err == nil {
+		if h, ok := sources.Get(sid); ok {
+			if latest, ok := h.(sources.LatestLister); ok {
+				items, hasNext, errLat := latest.GetLatestManga(c.Context(), pageNum)
+				if errLat == nil && len(items) > 0 {
+					return c.JSON(saveAndFormatMangaList(c.Context(), sid, items, hasNext))
+				}
+			} else if pop, ok := h.(sources.PopularLister); ok {
+				items, hasNext, errPop := pop.GetPopularManga(c.Context(), pageNum)
+				if errPop == nil && len(items) > 0 {
+					return c.JSON(saveAndFormatMangaList(c.Context(), sid, items, hasNext))
+				}
+			}
+		}
 	}
 
 	resVal, err := extensions.GlobalEngine.RunExtensionMethod(sourceId, "getLatestManga", pageNum)
@@ -95,13 +203,27 @@ func SetSourceFilters(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusOK)
 }
 
-// SearchManga performs search operation on a source using the JS extension engine.
+// SearchManga performs search operation on a source using native Go scraper or the JS extension engine.
 func SearchManga(c *fiber.Ctx) error {
 	sourceId := c.Params("sourceId")
 	searchTerm := c.Query("searchTerm")
+	if searchTerm == "" {
+		searchTerm = c.Query("query")
+	}
 	pageNum, err := strconv.Atoi(c.Query("pageNum", "1"))
 	if err != nil {
 		pageNum = 1
+	}
+
+	if sid, err := strconv.ParseInt(sourceId, 10, 64); err == nil {
+		if h, ok := sources.Get(sid); ok {
+			if searcher, ok := h.(sources.MangaSearcher); ok {
+				items, hasNext, errSrc := searcher.SearchManga(c.Context(), searchTerm, pageNum)
+				if errSrc == nil && len(items) > 0 {
+					return c.JSON(saveAndFormatMangaList(c.Context(), sid, items, hasNext))
+				}
+			}
+		}
 	}
 
 	resVal, err := extensions.GlobalEngine.RunExtensionMethod(sourceId, "searchManga", pageNum, searchTerm)

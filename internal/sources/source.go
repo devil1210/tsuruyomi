@@ -621,6 +621,12 @@ func GetMangaURL(sourceID int64, mangaURL string) string {
 	case 1136717301008230074: // Submanhwa
 		return "https://submanhwa.com/" + strings.TrimLeft(cleanURL, "/")
 
+	case 1814471239661920836: // Cerberus Series (LegionScans)
+		return "https://legionscans.com/wp/" + strings.TrimLeft(cleanURL, "/")
+
+	case 1348827658894665970: // Ragnarok Scanlation
+		return "https://ragnarokscanlation.org/" + strings.TrimLeft(cleanURL, "/")
+
 	case 829053423099062956: // Mangas No Sekai
 		return "https://mangasnosekai.com/" + strings.TrimLeft(cleanURL, "/")
 

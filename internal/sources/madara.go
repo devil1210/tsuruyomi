@@ -16,11 +16,12 @@ func init() {
 	Register(8701445043633550960, NewMadaraHandlerWithPath("LeerManhwas", "https://leermanhwas.com", "leer-manhwa-18"))
 	Register(3044113561993269522, NewMadaraHandler("ApollComics", "https://apollcomics.xyz"))
 	Register(4647982373411241498, NewMadaraHandler("DragonTranslation.org", "https://dragontranslation.org"))
-	Register(1814471239661920836, NewMadaraHandler("Cerberus Series", "https://cerberuseries.com"))
 	Register(3548601371328353875, NewMadaraHandler("Manhwa-Latino", "https://manhwalatino.org"))
 	Register(8311505150576608267, NewMadaraHandlerWithPath("Hades no Fansub", "https://lectorhades.latamtoon.com", "tmo"))
 	Register(6757330205319558057, NewMadaraHandlerWithPath("Bega Translation", "https://begatranslation.com", "mangas"))
 	Register(1326771034671033762, NewMadaraHandler("Manhwas.net", "https://manhwa-es.com"))
+	Register(829053423099062956, NewMadaraHandler("Mangas No Sekai", "https://mangasnosekai.com"))
+	Register(1348827658894665970, NewMadaraHandlerWithPath("Ragnarok Scanlation", "https://ragnarokscanlation.org", "series"))
 }
 
 type MadaraHandler struct {
