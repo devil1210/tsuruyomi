@@ -15,6 +15,7 @@ import (
 	"tsuruyomi/internal/router"
 	"tsuruyomi/internal/service"
 	"tsuruyomi/internal/sources"
+	"tsuruyomi/internal/util"
 )
 
 func main() {
@@ -69,6 +70,9 @@ func main() {
 	if err := extensions.LoadInstalledExtensions(cfg.Data.RootDir); err != nil {
 		log.Printf("Warning: failed to load installed extensions: %v", err)
 	}
+
+	// Clean up any stale or orphaned temporary page cache on startup
+	util.CleanOrphanedPageCache(cfg.Data.RootDir, 0)
 
 	// Initialize download manager with config
 	service.GlobalDownloadManager.SetConfig(cfg)

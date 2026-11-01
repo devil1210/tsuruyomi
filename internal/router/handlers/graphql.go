@@ -1260,7 +1260,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
 		}
 
-	case "START_DOWNLOADER", "startDownloader":
+	case "START_DOWNLOADER", "StartDownloader", "startDownloader":
 		service.GlobalDownloadManager.Start()
 		data = map[string]interface{}{
 			"startDownloader": map[string]interface{}{
@@ -1269,7 +1269,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "STOP_DOWNLOADER", "stopDownloader":
+	case "STOP_DOWNLOADER", "StopDownloader", "stopDownloader":
 		service.GlobalDownloadManager.Stop()
 		data = map[string]interface{}{
 			"stopDownloader": map[string]interface{}{
@@ -1278,7 +1278,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "CLEAR_DOWNLOADER", "clearDownloader":
+	case "CLEAR_DOWNLOADER", "ClearDownloader", "clearDownloader":
 		service.GlobalDownloadManager.Clear()
 		data = map[string]interface{}{
 			"clearDownloader": map[string]interface{}{
@@ -1287,26 +1287,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "ENQUEUE_CHAPTER_DOWNLOAD", "enqueueChapterDownload":
-		var chID int
-		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
-			if idF, ok := input["id"].(float64); ok {
-				chID = int(idF)
-			} else if idF, ok := input["chapterId"].(float64); ok {
-				chID = int(idF)
-			}
-		}
-		if chID > 0 {
-			_ = service.GlobalDownloadManager.Enqueue(c.Context(), []int{chID})
-		}
-		data = map[string]interface{}{
-			"enqueueChapterDownload": map[string]interface{}{
-				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
-				"__typename":     "EnqueueChapterDownloadPayload",
-			},
-		}
-
-	case "ENQUEUE_CHAPTER_DOWNLOADS", "enqueueChapterDownloads":
+	case "ENQUEUE_CHAPTER_DOWNLOAD", "EnqueueChapterDownload", "enqueueChapterDownload",
+		"ENQUEUE_CHAPTER_DOWNLOADS", "EnqueueChapterDownloads", "enqueueChapterDownloads":
 		var chIDs []int
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if ids, ok := input["ids"].([]interface{}); ok {
@@ -1315,38 +1297,29 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						chIDs = append(chIDs, int(idF))
 					}
 				}
+			} else if idF, ok := input["id"].(float64); ok {
+				chIDs = append(chIDs, int(idF))
+			} else if idF, ok := input["chapterId"].(float64); ok {
+				chIDs = append(chIDs, int(idF))
 			}
 		}
 		if len(chIDs) > 0 {
 			_ = service.GlobalDownloadManager.Enqueue(c.Context(), chIDs)
 		}
+		status := buildGraphQLDownloadStatus(c.Context())
 		data = map[string]interface{}{
+			"enqueueChapterDownload": map[string]interface{}{
+				"downloadStatus": status,
+				"__typename":     "EnqueueChapterDownloadPayload",
+			},
 			"enqueueChapterDownloads": map[string]interface{}{
-				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+				"downloadStatus": status,
 				"__typename":     "EnqueueChapterDownloadsPayload",
 			},
 		}
 
-	case "DEQUEUE_CHAPTER_DOWNLOAD", "dequeueChapterDownload":
-		var chID int
-		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
-			if idF, ok := input["id"].(float64); ok {
-				chID = int(idF)
-			} else if idF, ok := input["chapterId"].(float64); ok {
-				chID = int(idF)
-			}
-		}
-		if chID > 0 {
-			service.GlobalDownloadManager.Dequeue([]int{chID})
-		}
-		data = map[string]interface{}{
-			"dequeueChapterDownload": map[string]interface{}{
-				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
-				"__typename":     "DequeueChapterDownloadPayload",
-			},
-		}
-
-	case "DEQUEUE_CHAPTER_DOWNLOADS", "dequeueChapterDownloads":
+	case "DEQUEUE_CHAPTER_DOWNLOAD", "DequeueChapterDownload", "dequeueChapterDownload",
+		"DEQUEUE_CHAPTER_DOWNLOADS", "DequeueChapterDownloads", "DequeueChapterDownloadsBatch", "dequeueChapterDownloads":
 		var chIDs []int
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if ids, ok := input["ids"].([]interface{}); ok {
@@ -1355,40 +1328,29 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						chIDs = append(chIDs, int(idF))
 					}
 				}
+			} else if idF, ok := input["id"].(float64); ok {
+				chIDs = append(chIDs, int(idF))
+			} else if idF, ok := input["chapterId"].(float64); ok {
+				chIDs = append(chIDs, int(idF))
 			}
 		}
 		if len(chIDs) > 0 {
 			service.GlobalDownloadManager.Dequeue(chIDs)
 		}
+		status := buildGraphQLDownloadStatus(c.Context())
 		data = map[string]interface{}{
+			"dequeueChapterDownload": map[string]interface{}{
+				"downloadStatus": status,
+				"__typename":     "DequeueChapterDownloadPayload",
+			},
 			"dequeueChapterDownloads": map[string]interface{}{
-				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+				"downloadStatus": status,
 				"__typename":     "DequeueChapterDownloadsPayload",
 			},
 		}
 
-	case "REORDER_CHAPTER_DOWNLOAD", "reorderChapterDownload":
-		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
-			chID := 0
-			if idF, ok := input["chapterId"].(float64); ok {
-				chID = int(idF)
-			}
-			to := 0
-			if toF, ok := input["to"].(float64); ok {
-				to = int(toF)
-			}
-			if chID > 0 {
-				service.GlobalDownloadManager.ReorderByID(chID, to)
-			}
-		}
-		data = map[string]interface{}{
-			"reorderChapterDownload": map[string]interface{}{
-				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
-				"__typename":     "ReorderChapterDownloadPayload",
-			},
-		}
-
-	case "REORDER_CHAPTER_DOWNLOADS", "reorderChapterDownloads":
+	case "REORDER_CHAPTER_DOWNLOAD", "ReorderChapterDownload", "reorderChapterDownload",
+		"REORDER_CHAPTER_DOWNLOADS", "ReorderChapterDownloads", "reorderChapterDownloads":
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if reorders, ok := input["reorders"].([]interface{}); ok {
 				for _, rItem := range reorders {
@@ -1406,16 +1368,33 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						}
 					}
 				}
+			} else {
+				chID := 0
+				if idF, ok := input["chapterId"].(float64); ok {
+					chID = int(idF)
+				}
+				to := 0
+				if toF, ok := input["to"].(float64); ok {
+					to = int(toF)
+				}
+				if chID > 0 {
+					service.GlobalDownloadManager.ReorderByID(chID, to)
+				}
 			}
 		}
+		status := buildGraphQLDownloadStatus(c.Context())
 		data = map[string]interface{}{
+			"reorderChapterDownload": map[string]interface{}{
+				"downloadStatus": status,
+				"__typename":     "ReorderChapterDownloadPayload",
+			},
 			"reorderChapterDownloads": map[string]interface{}{
-				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+				"downloadStatus": status,
 				"__typename":     "ReorderChapterDownloadsPayload",
 			},
 		}
 
-	case "CLEAR_SERVER_CACHE", "clearCachedImages":
+	case "CLEAR_SERVER_CACHE", "ClearServerCache", "clearServerCache", "ClearCachedImages", "clearCachedImages":
 		var clearPages, clearThumbs, clearDownloadedThumbs bool = true, true, true
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if b, ok := input["clearCachedPages"].(bool); ok {

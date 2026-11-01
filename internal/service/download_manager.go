@@ -233,6 +233,10 @@ func (dm *DownloadManager) Enqueue(ctx context.Context, chapterIDs []int) error 
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
+	if database.DB == nil {
+		return nil
+	}
+
 	for _, chID := range chapterIDs {
 		// Verify if it is already in queue to avoid duplicates
 		exists := false

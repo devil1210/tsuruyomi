@@ -183,9 +183,16 @@ func EnsureChapterCBZ(ctx context.Context, cfg *config.Config, chapterID int) (s
 
 	log.Printf("[OPDS/DOWNLOAD] Discovered %d pages for chapter %d. Downloading page assets...", len(pages), chapterID)
 
+	// Ensure at least 250MB free disk space before starting download, pruning cache if necessary
+	util.EnsureSufficientDiskSpace(cfg.Data.RootDir, 250*1024*1024)
+
 	// 5. Download and cache all pages concurrently (4 workers)
 	cacheDir := filepath.Join(cfg.Data.RootDir, "cache", "pages", fmt.Sprintf("%d", mangaID), fmt.Sprintf("ch_%d", chapterID))
 	_ = os.MkdirAll(cacheDir, 0755)
+	defer func() {
+		_ = os.RemoveAll(cacheDir)
+		_ = os.Remove(filepath.Dir(cacheDir))
+	}()
 
 	type downloadedPage struct {
 		Index    int
@@ -238,6 +245,14 @@ func EnsureChapterCBZ(ctx context.Context, cfg *config.Config, chapterID int) (s
 					referer := targetMangaURL
 					if referer == "" {
 						referer = targetChURL
+					}
+					if strings.HasPrefix(referer, "/") {
+						if strings.Contains(strings.ToLower(sourceName), "mangaoni") {
+							referer = "https://manga-oni.com" + referer
+						}
+					}
+					if referer == "" && strings.Contains(strings.ToLower(sourceName), "mangaoni") {
+						referer = "https://manga-oni.com/"
 					}
 
 					for attempt := 0; attempt < 3; attempt++ {
