@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -20,7 +19,7 @@ func init() {
 	Register(1814471239661920836, NewMadaraHandler("Cerberus Series", "https://cerberuseries.com"))
 	Register(3548601371328353875, NewMadaraHandler("Manhwa-Latino", "https://manhwalatino.org"))
 	Register(8311505150576608267, NewMadaraHandlerWithPath("Hades no Fansub", "https://lectorhades.latamtoon.com", "tmo"))
-	Register(6757330205319558057, NewMadaraHandler("Bega Translation", "https://begatranslation.com"))
+	Register(6757330205319558057, NewMadaraHandlerWithPath("Bega Translation", "https://begatranslation.com", "mangas"))
 	Register(1326771034671033762, NewMadaraHandler("Manhwas.net", "https://manhwa-es.com"))
 }
 
@@ -110,7 +109,7 @@ func (h *MadaraHandler) fetchMangaList(ctx context.Context, targetURL string) ([
 				title, _ = s.Find(".item-thumb a[title], div.post-title a[title], a[title]").First().Attr("title")
 			}
 			if href == "" {
-				href, _ = s.Find(".item-thumb a, div.post-title a, a[href*='/manga/'], a[href*='/manhwa/'], a[href*='/tmo/']").First().Attr("href")
+				href, _ = s.Find(".item-thumb a, div.post-title a, a[href*='/manga/'], a[href*='/manhwa/'], a[href*='/tmo/'], a[href*='/series/']").First().Attr("href")
 			}
 			if title == "" {
 				title, _ = s.Find("img").First().Attr("alt")
@@ -403,24 +402,15 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 	if len(chapters) == 0 {
 		// 1. Try modern Madara AJAX endpoint: {mangaURL}/ajax/chapters/
 		ajaxChaptersURL := strings.TrimRight(fullURL, "/") + "/ajax/chapters/"
-		reqAjax, errReq := http.NewRequestWithContext(ctx, http.MethodPost, ajaxChaptersURL, nil)
-		if errReq == nil {
-			reqAjax.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-			reqAjax.Header.Set("X-Requested-With", "XMLHttpRequest")
-			reqAjax.Header.Set("Referer", fullURL)
-			respAjax, errDo := DefaultClient.Do(reqAjax)
-			if errDo == nil && respAjax.StatusCode == http.StatusOK {
-				defer respAjax.Body.Close()
-				ajaxDoc, errDoc := goquery.NewDocumentFromReader(respAjax.Body)
-				if errDoc == nil {
-					ajaxDoc.Find("li.wp-manga-chapter, a.leermos").Each(func(i int, s *goquery.Selection) {
-						a := s
-						if !s.Is("a") {
-							a = s.Find("a").First()
-						}
-						addChapter(s, a)
-					})
-				}
+		if ajaxHTML, errPost := FetchHTMLPost(ctx, ajaxChaptersURL, fullURL, "", nil); errPost == nil && len(ajaxHTML) > 0 {
+			if ajaxDoc, errDoc := goquery.NewDocumentFromReader(strings.NewReader(ajaxHTML)); errDoc == nil {
+				ajaxDoc.Find("li.wp-manga-chapter, a.leermos").Each(func(i int, s *goquery.Selection) {
+					a := s
+					if !s.Is("a") {
+						a = s.Find("a").First()
+					}
+					addChapter(s, a)
+				})
 			}
 		}
 	}
@@ -429,22 +419,13 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 		postID, _ := doc.Find("input.rating-post-id, input#wp-manga-chapter-post-id, input[name='postID']").Attr("value")
 		if postID != "" {
 			ajaxURL := h.baseURL + "/wp-admin/admin-ajax.php"
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, ajaxURL, strings.NewReader("action=manga_get_chapters&manga="+postID))
-			if err == nil {
-				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-				req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-			req.Header.Set("Referer", fullURL)
-				resp, err := DefaultClient.Do(req)
-				if err == nil {
-					defer resp.Body.Close()
-					ajaxDoc, err := goquery.NewDocumentFromReader(resp.Body)
-				if err == nil {
+			if ajaxHTML, errPost := FetchHTMLPost(ctx, ajaxURL, fullURL, "application/x-www-form-urlencoded", strings.NewReader("action=manga_get_chapters&manga="+postID)); errPost == nil && len(ajaxHTML) > 0 {
+				if ajaxDoc, errDoc := goquery.NewDocumentFromReader(strings.NewReader(ajaxHTML)); errDoc == nil {
 					ajaxDoc.Find("li.wp-manga-chapter a").Each(func(i int, a *goquery.Selection) {
 						addChapter(nil, a)
 					})
 				}
 			}
-		}
 	}
 	}
 

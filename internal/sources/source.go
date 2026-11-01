@@ -274,6 +274,59 @@ func FetchHTML(ctx context.Context, targetURL string, referer string) (string, e
 	return bodyStr, nil
 }
 
+// FetchHTMLPost performs an HTTP POST request with desktop browser headers and active Cloudflare session cookies.
+func FetchHTMLPost(ctx context.Context, targetURL string, referer string, contentType string, body io.Reader) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, body)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "es-419,es;q=0.9,en;q=0.8")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+
+	domain := util.ExtractDomain(targetURL)
+	if domain != "" && AppConfig != nil && AppConfig.FlareSolverr.Enabled {
+		if cookies, ua, ok := util.GetSession(domain); ok && len(cookies) > 0 {
+			for _, c := range cookies {
+				req.AddCookie(&http.Cookie{
+					Name:   c.Name,
+					Value:  c.Value,
+					Domain: c.Domain,
+					Path:   c.Path,
+				})
+			}
+			if ua != "" {
+				req.Header.Set("User-Agent", ua)
+			}
+		}
+	}
+
+	resp, err := DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("HTTP error %d fetching %s", resp.StatusCode, targetURL)
+	}
+
+	return string(bodyBytes), nil
+}
+
 // FetchAndSaveChapterPages extracts pages natively in Go and persists them to the PostgreSQL database.
 func FetchAndSaveChapterPages(ctx context.Context, sourceID int64, mangaID int, chapterID int64, chapterIndex int, chapterURL string, mangaURL string) ([]string, error) {
 	handler, ok := Get(sourceID)
