@@ -70,6 +70,66 @@ func TestHandleGraphQL_UpdateExtensionInput(t *testing.T) {
 	if ext["pkgName"] != "eu.kanade.tachiyomi.extension.es.mangamx" {
 		t.Errorf("expected pkgName eu.kanade.tachiyomi.extension.es.mangamx, got %v", ext["pkgName"])
 	}
+
+	// Test 2: Tsumiru format for UpdateExtension: variables: { id: "pkg", update: true }
+	payloadTsumiru := map[string]interface{}{
+		"operationName": "UpdateExtension",
+		"query": "mutation UpdateExtension($id: String!, $update: Boolean = false) { updateExtension(input: {id: $id, patch: {update: $update}}) { extension { pkgName } } }",
+		"variables": map[string]interface{}{
+			"id":     "eu.kanade.tachiyomi.extension.es.submanhwa",
+			"update": true,
+		},
+	}
+	bodyTsumiru, _ := json.Marshal(payloadTsumiru)
+	reqTsumiru := httptest.NewRequest("POST", "/api/graphql", bytes.NewReader(bodyTsumiru))
+	reqTsumiru.Header.Set("Content-Type", "application/json")
+
+	respTsumiru, err := app.Test(reqTsumiru)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	var resMapTsumiru map[string]interface{}
+	if err := json.NewDecoder(respTsumiru.Body).Decode(&resMapTsumiru); err != nil {
+		t.Fatalf("failed decoding response: %v", err)
+	}
+	dataTsumiru := resMapTsumiru["data"].(map[string]interface{})
+	updateExtTsumiru := dataTsumiru["updateExtension"].(map[string]interface{})
+	extTsumiru := updateExtTsumiru["extension"].(map[string]interface{})
+	if extTsumiru["pkgName"] != "eu.kanade.tachiyomi.extension.es.submanhwa" {
+		t.Errorf("expected pkgName eu.kanade.tachiyomi.extension.es.submanhwa, got %v", extTsumiru["pkgName"])
+	}
+
+	// Test 3: Tsumiru format for UpdateExtensions (batch): variables: { ids: ["pkg"], update: true }
+	payloadBatch := map[string]interface{}{
+		"operationName": "UpdateExtensions",
+		"query": "mutation UpdateExtensions($ids: [String!]!, $update: Boolean = false) { updateExtensions(input: {ids: $ids, patch: {update: $update}}) { extensions { pkgName } } }",
+		"variables": map[string]interface{}{
+			"ids":    []string{"eu.kanade.tachiyomi.extension.es.dragontranslationorg"},
+			"update": true,
+		},
+	}
+	bodyBatch, _ := json.Marshal(payloadBatch)
+	reqBatch := httptest.NewRequest("POST", "/api/graphql", bytes.NewReader(bodyBatch))
+	reqBatch.Header.Set("Content-Type", "application/json")
+
+	respBatch, err := app.Test(reqBatch)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	var resMapBatch map[string]interface{}
+	if err := json.NewDecoder(respBatch.Body).Decode(&resMapBatch); err != nil {
+		t.Fatalf("failed decoding response: %v", err)
+	}
+	dataBatch := resMapBatch["data"].(map[string]interface{})
+	updateExtBatch := dataBatch["updateExtensions"].(map[string]interface{})
+	extensionsBatch := updateExtBatch["extensions"].([]interface{})
+	if len(extensionsBatch) == 0 {
+		t.Fatalf("expected at least 1 extension in UpdateExtensions response, got 0")
+	}
+	firstExt := extensionsBatch[0].(map[string]interface{})
+	if firstExt["pkgName"] != "eu.kanade.tachiyomi.extension.es.dragontranslationorg" {
+		t.Errorf("expected pkgName eu.kanade.tachiyomi.extension.es.dragontranslationorg, got %v", firstExt["pkgName"])
+	}
 }
 
 func TestHandleGraphQL_GetSourceMangasFetchStructure(t *testing.T) {

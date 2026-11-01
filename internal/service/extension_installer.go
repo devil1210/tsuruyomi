@@ -163,11 +163,16 @@ func SyncExtensionRepositories(ctx context.Context, cfg *config.Config) error {
 					VALUES ($1, $2, $3, $4, $5, $6, $7, false, false, false, '', $8, '1.5', '', $9)
 					ON CONFLICT (pkg_name) DO NOTHING
 				`, entry.Pkg+".apk", entry.Icon, entry.Name, entry.Pkg, entry.Version, entry.Code, entry.Lang, store.IndexURL, entry.Nsfw)
-			} else if isInstalled && entry.Code > installedCode {
-				// Installed but newer version exists in repo -> flag has_update
-				_, _ = database.DB.Exec(ctx, `
-					UPDATE suwayomi.extension SET has_update = true WHERE pkg_name = $1
-				`, entry.Pkg)
+			} else if isInstalled {
+				if entry.Code > installedCode {
+					_, _ = database.DB.Exec(ctx, `
+						UPDATE suwayomi.extension SET has_update = true WHERE pkg_name = $1
+					`, entry.Pkg)
+				} else {
+					_, _ = database.DB.Exec(ctx, `
+						UPDATE suwayomi.extension SET has_update = false WHERE pkg_name = $1
+					`, entry.Pkg)
+				}
 			}
 		}
 	}
@@ -361,7 +366,11 @@ func InstallExtension(ctx context.Context, cfg *config.Config, pkgName string) e
 	if alias == "" {
 		alias = cleanPkg
 	}
-	_, _ = database.DB.Exec(ctx, "UPDATE suwayomi.extension SET is_installed = true WHERE pkg_name = $1 OR pkg_name = $2", cleanPkg, alias)
+	_, _ = database.DB.Exec(ctx, `
+		UPDATE suwayomi.extension 
+		SET is_installed = true, has_update = false, version_code = $3, version_name = $4 
+		WHERE pkg_name = $1 OR pkg_name = $2
+	`, cleanPkg, alias, foundEntry.Code, foundEntry.Version)
 
 	// Restore any compiled native sources associated with this extension
 	rowsRestore, errRestore := database.DB.Query(ctx, `

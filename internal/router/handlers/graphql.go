@@ -1870,6 +1870,32 @@ func HandleGraphQL(c *fiber.Ctx) error {
 	case "UPDATE_EXTENSION", "UpdateExtension", "updateExtension":
 		var pkgName string
 		var install, uninstall, update bool
+
+		// 1. Check root variables (as sent by Tsumiru)
+		if p, ok := req.Variables["pkgName"].(string); ok && p != "" {
+			pkgName = p
+		} else if idStr, ok := req.Variables["id"].(string); ok && idStr != "" {
+			pkgName = idStr
+		} else if idNum, ok := req.Variables["id"].(float64); ok {
+			if database.DB != nil {
+				_ = database.DB.QueryRow(c.Context(), "SELECT pkg_name FROM suwayomi.extension WHERE id = $1", int(idNum)).Scan(&pkgName)
+			}
+			if pkgName == "" {
+				pkgName = fmt.Sprintf("%.0f", idNum)
+			}
+		}
+
+		if u, ok := req.Variables["update"].(bool); ok && u {
+			update = true
+		}
+		if i, ok := req.Variables["install"].(bool); ok && i {
+			install = true
+		}
+		if un, ok := req.Variables["uninstall"].(bool); ok && un {
+			uninstall = true
+		}
+
+		// 2. Check input object (as sent by Tachidesk WebUI)
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if p, ok := input["pkgName"].(string); ok && p != "" {
 				pkgName = p
@@ -1900,9 +1926,15 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			}
 
 			if !install && !uninstall && !update {
-				install, _ = input["install"].(bool)
-				uninstall, _ = input["uninstall"].(bool)
-				update, _ = input["update"].(bool)
+				if i, ok := input["install"].(bool); ok && i {
+					install = true
+				}
+				if un, ok := input["uninstall"].(bool); ok && un {
+					uninstall = true
+				}
+				if up, ok := input["update"].(bool); ok && up {
+					update = true
+				}
 			}
 		}
 
@@ -1913,6 +1945,11 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					pkgName = p
 				}
 			}
+		}
+
+		// If neither install nor uninstall was requested, default to update
+		if !install && !uninstall && !update && pkgName != "" {
+			update = true
 		}
 
 		log.Printf("[EXTENSIONS] UPDATE_EXTENSION: pkg=%s install=%v uninstall=%v update=%v", pkgName, install, uninstall, update)
@@ -1944,17 +1981,21 @@ func HandleGraphQL(c *fiber.Ctx) error {
 	case "UPDATE_EXTENSIONS", "UpdateExtensions", "updateExtensions":
 		var pkgs []string
 		var isUninstall bool
-		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
-			if list, ok := input["pkgNames"].([]interface{}); ok {
+
+		extractPkgs := func(dict map[string]interface{}) {
+			if dict == nil {
+				return
+			}
+			if list, ok := dict["pkgNames"].([]interface{}); ok {
 				for _, p := range list {
-					if s, ok := p.(string); ok {
+					if s, ok := p.(string); ok && s != "" {
 						pkgs = append(pkgs, s)
 					}
 				}
 			}
-			if list, ok := input["ids"].([]interface{}); ok {
+			if list, ok := dict["ids"].([]interface{}); ok {
 				for _, p := range list {
-					if s, ok := p.(string); ok {
+					if s, ok := p.(string); ok && s != "" {
 						if idVal, err := strconv.Atoi(s); err == nil && database.DB != nil {
 							var pName string
 							_ = database.DB.QueryRow(c.Context(), "SELECT pkg_name FROM suwayomi.extension WHERE id = $1", idVal).Scan(&pName)
@@ -1973,15 +2014,21 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					}
 				}
 			}
-			if patch, ok := input["patch"].(map[string]interface{}); ok {
+			if patch, ok := dict["patch"].(map[string]interface{}); ok {
 				if u, ok := patch["uninstall"].(bool); ok && u {
 					isUninstall = true
 				}
 			}
-			if u, ok := input["uninstall"].(bool); ok && u {
+			if u, ok := dict["uninstall"].(bool); ok && u {
 				isUninstall = true
 			}
 		}
+
+		extractPkgs(req.Variables)
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			extractPkgs(input)
+		}
+
 		extList := []interface{}{}
 		for _, p := range pkgs {
 			if isUninstall {
@@ -3669,6 +3716,11 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 	case "ADD_EXTENSION_STORE", "AddExtensionStore", "addExtensionStore":
 		var url string
+		if u, ok := req.Variables["indexUrl"].(string); ok && u != "" {
+			url = u
+		} else if u, ok := req.Variables["url"].(string); ok {
+			url = u
+		}
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if u, ok := input["indexUrl"].(string); ok && u != "" {
 				url = u
@@ -3725,6 +3777,11 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 	case "REMOVE_EXTENSION_STORE", "RemoveExtensionStore", "removeExtensionStore":
 		var url string
+		if u, ok := req.Variables["indexUrl"].(string); ok && u != "" {
+			url = u
+		} else if u, ok := req.Variables["url"].(string); ok {
+			url = u
+		}
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if u, ok := input["indexUrl"].(string); ok && u != "" {
 				url = u
