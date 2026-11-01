@@ -272,7 +272,9 @@ func (dm *DownloadManager) Enqueue(ctx context.Context, chapterIDs []int) error 
 		})
 	}
 
-	if dm.status == "Started" && !dm.workerRunning {
+	// When chapters are enqueued, automatically ensure the downloader queue is active
+	dm.status = "Started"
+	if !dm.workerRunning {
 		dm.workerRunning = true
 		go dm.workerLoop()
 	}

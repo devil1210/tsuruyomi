@@ -1290,21 +1290,46 @@ func HandleGraphQL(c *fiber.Ctx) error {
 	case "ENQUEUE_CHAPTER_DOWNLOAD", "EnqueueChapterDownload", "enqueueChapterDownload",
 		"ENQUEUE_CHAPTER_DOWNLOADS", "EnqueueChapterDownloads", "enqueueChapterDownloads":
 		var chIDs []int
-		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
-			if ids, ok := input["ids"].([]interface{}); ok {
+		parseID := func(v interface{}) (int, bool) {
+			if f, ok := v.(float64); ok {
+				return int(f), true
+			}
+			if s, ok := v.(string); ok {
+				if i, err := strconv.Atoi(s); err == nil {
+					return i, true
+				}
+			}
+			return 0, false
+		}
+		extractFromMap := func(m map[string]interface{}) {
+			if m == nil {
+				return
+			}
+			if ids, ok := m["ids"].([]interface{}); ok {
 				for _, idVal := range ids {
-					if idF, ok := idVal.(float64); ok {
-						chIDs = append(chIDs, int(idF))
+					if idNum, ok := parseID(idVal); ok {
+						chIDs = append(chIDs, idNum)
 					}
 				}
-			} else if idF, ok := input["id"].(float64); ok {
-				chIDs = append(chIDs, int(idF))
-			} else if idF, ok := input["chapterId"].(float64); ok {
-				chIDs = append(chIDs, int(idF))
 			}
+			if idVal, ok := m["id"]; ok {
+				if idNum, ok := parseID(idVal); ok {
+					chIDs = append(chIDs, idNum)
+				}
+			}
+			if idVal, ok := m["chapterId"]; ok {
+				if idNum, ok := parseID(idVal); ok {
+					chIDs = append(chIDs, idNum)
+				}
+			}
+		}
+		extractFromMap(req.Variables)
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			extractFromMap(input)
 		}
 		if len(chIDs) > 0 {
 			_ = service.GlobalDownloadManager.Enqueue(c.Context(), chIDs)
+			service.GlobalDownloadManager.Start()
 		}
 		status := buildGraphQLDownloadStatus(c.Context())
 		data = map[string]interface{}{
