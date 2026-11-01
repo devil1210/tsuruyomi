@@ -129,3 +129,54 @@ func TestAuthMiddlewareIntegration(t *testing.T) {
 		t.Errorf("Expected session cookie auth to succeed on /api/graphql, got 401")
 	}
 }
+
+func TestTsumiruGraphQLCompatibility(t *testing.T) {
+	cfg := &config.Config{
+		Auth: config.AuthConfig{
+			Mode: "none",
+		},
+	}
+	app := Setup(cfg)
+
+	// 1. Tsumiru legacy user fields detection probe: { __type(name: "ChapterType") { fields { name } } }
+	reqProbe := httptest.NewRequest("POST", "/api/graphql", strings.NewReader(`{"query":"{ __type(name: \"ChapterType\") { fields { name } } }"}`))
+	reqProbe.Header.Set("Content-Type", "application/json")
+	respProbe, err := app.Test(reqProbe)
+	if err != nil {
+		t.Fatalf("Probe request failed: %v", err)
+	}
+	bodyProbe := make([]byte, 2048)
+	n, _ := respProbe.Body.Read(bodyProbe)
+	respStr := string(bodyProbe[:n])
+	if !strings.Contains(respStr, `"name":"user"`) {
+		t.Errorf("Expected probe response to contain field 'user', got: %s", respStr)
+	}
+
+	// 2. WebUIFlavor introspection: __type(name: "WebUIFlavor") { enumValues { name } }
+	reqEnum := httptest.NewRequest("POST", "/api/graphql", strings.NewReader(`{"query":"{ __type(name: \"WebUIFlavor\") { enumValues { name } } }"}`))
+	reqEnum.Header.Set("Content-Type", "application/json")
+	respEnum, err := app.Test(reqEnum)
+	if err != nil {
+		t.Fatalf("Enum request failed: %v", err)
+	}
+	bodyEnum := make([]byte, 2048)
+	n, _ = respEnum.Body.Read(bodyEnum)
+	respStr = string(bodyEnum[:n])
+	if !strings.Contains(respStr, `"name":"PREVIEW"`) {
+		t.Errorf("Expected enum response to contain 'PREVIEW', got: %s", respStr)
+	}
+
+	// 3. CurrentAccount query
+	reqAccount := httptest.NewRequest("POST", "/api/graphql", strings.NewReader(`{"query":"query CurrentAccount { user { id username roles permissions } }"}`))
+	reqAccount.Header.Set("Content-Type", "application/json")
+	respAccount, err := app.Test(reqAccount)
+	if err != nil {
+		t.Fatalf("Account request failed: %v", err)
+	}
+	bodyAccount := make([]byte, 2048)
+	n, _ = respAccount.Body.Read(bodyAccount)
+	respStr = string(bodyAccount[:n])
+	if !strings.Contains(respStr, `"username":"devil"`) {
+		t.Errorf("Expected account response to contain user 'devil', got: %s", respStr)
+	}
+}
