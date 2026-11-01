@@ -5560,6 +5560,7 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 			COALESCE(m.real_url, ''),
 			COALESCE(m.url, ''),
 			COALESCE(m.last_fetched_at, 0),
+			COALESCE(m.chapters_last_fetched_at, 0),
 			COALESCE(stat.unread_count, 0),
 			COALESCE(stat.download_count, 0),
 			COALESCE(stat.bookmark_count, 0),
@@ -5691,7 +5692,7 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 		var statusInt int
 		var sourceId int64
 		var sourceName, realUrl, mangaUrl string
-		var lastFetchedAt int64
+		var lastFetchedAt, chaptersLastFetchedAt int64
 		var unreadCount, downloadCount, bookmarkCount, chaptersCount int
 		var maxLastReadAt, maxDateUpload, maxFetchedAt int64
 		var maxChapterNumber float32
@@ -5707,7 +5708,7 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 			&id, &title, &thumbnailUrl, &thumbnailUrlLastFetched,
 			&inLibraryVal, &inLibraryAtVal, &initialized,
 			&artist, &author, &description, &genreStr,
-			&statusInt, &sourceId, &sourceName, &realUrl, &mangaUrl, &lastFetchedAt,
+			&statusInt, &sourceId, &sourceName, &realUrl, &mangaUrl, &lastFetchedAt, &chaptersLastFetchedAt,
 			&unreadCount, &downloadCount, &bookmarkCount, &chaptersCount,
 			&maxLastReadAt, &maxDateUpload, &maxFetchedAt, &maxChapterNumber,
 			&fuID, &fuSourceOrder, &fuChapterNumber, &fuName, &fuScanlator, &fuLastPageRead,
@@ -5854,8 +5855,21 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 			}
 		}
 
+		nowSec := time.Now().Unix()
+		var ageVal interface{} = nil
+		if lastFetchedAt > 0 {
+			ageVal = nowSec - lastFetchedAt
+		}
+		var chaptersAgeVal interface{} = nil
+		if chaptersLastFetchedAt > 0 {
+			chaptersAgeVal = nowSec - chaptersLastFetchedAt
+		}
+
 		node := map[string]interface{}{
 			"id":                      id,
+			"age":                     ageVal,
+			"chaptersAge":             chaptersAgeVal,
+			"chaptersLastFetchedAt":   chaptersLastFetchedAt,
 			"title":                   title,
 			"thumbnailUrl":            "/api/v1/manga/" + fmt.Sprintf("%d", id) + "/thumbnail",
 			"thumbnailUrlLastFetched": thumbnailUrlLastFetched,
@@ -6379,6 +6393,7 @@ func fetchUpdatesOrHistoryChapters(ctx context.Context, isHistory bool, limit, o
 				"author":                  "",
 				"description":             "",
 				"status":                  "UNKNOWN",
+				"chaptersAge":             nil,
 				"chaptersLastFetchedAt":   0,
 				"lastFetchedAt":           0,
 				"realUrl":                 "",

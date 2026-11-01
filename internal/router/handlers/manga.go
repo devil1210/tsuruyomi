@@ -122,6 +122,9 @@ func saveThumbnailToDisk(cfg *config.Config, mangaId int, data []byte) {
 	_ = os.MkdirAll(thumbnailDir, 0755)
 	targetFile := filepath.Join(thumbnailDir, fmt.Sprintf("%d.jpg", mangaId))
 	_ = os.WriteFile(targetFile, data, 0644)
+	if database.DB != nil && mangaId > 0 {
+		_, _ = database.DB.Exec(context.Background(), "UPDATE suwayomi.manga SET thumbnail_url_last_fetched = $1 WHERE id = $2", time.Now().Unix(), mangaId)
+	}
 }
 
 func findSiblingCover(ctx context.Context, cfg *config.Config, mangaId int, title string) ([]byte, string, error) {
