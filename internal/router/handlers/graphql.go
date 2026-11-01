@@ -188,7 +188,12 @@ func getExtensionMap(ctx context.Context, pkgName string) map[string]interface{}
 		"pkgName":         pkgName,
 		"name":            name,
 		"lang":            lang,
+		"apkName":         "",
+		"apkUrl":          "",
+		"jarUrl":          "",
+		"repo":            storeIndexURL,
 		"versionCodeLong": versionCode,
+		"versionCode":     int(versionCode),
 		"versionName":     versionName,
 		"iconUrl":         iconURL,
 		"storeIndexUrl":   storeIndexURL,
@@ -196,13 +201,112 @@ func getExtensionMap(ctx context.Context, pkgName string) map[string]interface{}
 		"isInstalled":     isInstalled,
 		"isObsolete":      isObsolete,
 		"hasUpdate":       hasUpdate,
+		"isNsfw":          cw == "NSFW",
 		"extensionLib":    "1.5",
 		"extensionStore": map[string]interface{}{
-			"indexUrl":   storeIndexURL,
-			"name":       storeName,
-			"__typename": "ExtensionStoreType",
+			"indexUrl":       storeIndexURL,
+			"name":           storeName,
+			"contactWebsite": "",
+			"contactDiscord": "",
+			"__typename":     "ExtensionStoreType",
 		},
 		"__typename": "ExtensionType",
+	}
+}
+
+// buildSourceMap constructs a fully populated SourceType GraphQL payload with nested ExtensionType.
+func buildSourceMap(srcID string, name string, displayName string, lang string, isNsfw bool, supportsLatest bool, contentWarning ...string) map[string]interface{} {
+	if displayName == "" {
+		displayName = name
+	}
+	if lang == "" {
+		lang = "all"
+	}
+	cw := "SAFE"
+	if isNsfw {
+		cw = "NSFW"
+	}
+	if len(contentWarning) > 0 && contentWarning[0] != "" {
+		cw = contentWarning[0]
+	}
+	pkgName := ""
+	if idNum, err := strconv.ParseInt(srcID, 10, 64); err == nil {
+		if known, ok := database.KnownSourcesByID[idNum]; ok {
+			pkgName = known.PkgName
+			if strings.Contains(known.Name, "+18") || strings.Contains(known.Name, "NSFW") {
+				cw = "NSFW"
+			}
+			if name == "" || name == "Source" || strings.HasPrefix(name, "Source ") {
+				name = known.Name
+			}
+			if displayName == "" || displayName == "Source" || strings.HasPrefix(displayName, "Source ") {
+				displayName = known.DisplayName
+				if displayName == "" {
+					displayName = known.Name
+				}
+			}
+			if lang == "" || (lang == "all" && known.Lang != "all") {
+				lang = known.Lang
+			}
+		}
+	}
+	if pkgName == "" {
+		cleanName := strings.ToLower(strings.ReplaceAll(name, " ", ""))
+		cleanLang := strings.ToLower(lang)
+		if cleanLang == "" {
+			cleanLang = "all"
+		}
+		pkgName = "eu.kanade.tachiyomi.extension." + cleanLang + "." + cleanName
+	}
+	iconURL := ""
+	if srcID != "" && srcID != "0" {
+		iconURL = "/api/v1/source/" + srcID + "/icon"
+	}
+
+	return map[string]interface{}{
+		"id":             srcID,
+		"name":           name,
+		"displayName":    displayName,
+		"lang":           lang,
+		"homeUrl":        "",
+		"baseUrl":        "",
+		"iconUrl":        iconURL,
+		"contentWarning": cw,
+		"isNsfw":         cw == "NSFW",
+		"isConfigurable": false,
+		"supportsLatest": supportsLatest,
+		"meta":           []interface{}{},
+		"filters":        []interface{}{},
+		"preferences":    []interface{}{},
+		"extension": map[string]interface{}{
+			"pkgName":         pkgName,
+			"name":            name,
+			"lang":            lang,
+			"apkName":         "",
+			"apkUrl":          "",
+			"jarUrl":          "",
+			"iconUrl":         iconURL,
+			"repo":            DefaultExtensionStoreURL,
+			"storeIndexUrl":   DefaultExtensionStoreURL,
+			"isObsolete":      false,
+			"isInstalled":     true,
+			"hasUpdate":       false,
+			"isNsfw":          cw == "NSFW",
+			"contentWarning":  cw,
+			"versionCode":     1,
+			"versionCodeLong": int64(1),
+			"versionName":     "1.0-go",
+			"extensionLib":    "1.5",
+			"extensionStore": map[string]interface{}{
+				"indexUrl":       DefaultExtensionStoreURL,
+				"name":           DefaultExtensionStoreName,
+				"contactWebsite": "",
+				"contactDiscord": "",
+				"__typename":     "ExtensionStoreType",
+			},
+			"__typename": "ExtensionType",
+		},
+		"__typename": "SourceType",
 	}
 }
 
@@ -266,7 +370,12 @@ func getExtensionNodes(ctx context.Context, filterStoreUrl string) []map[string]
 						"pkgName":         pkgName,
 						"name":            name,
 						"lang":            lang,
+						"apkName":         "",
+						"apkUrl":          "",
+						"jarUrl":          "",
+						"repo":            storeIndexUrl,
 						"versionCodeLong": versionCode,
+						"versionCode":     int(versionCode),
 						"versionName":     versionName,
 						"iconUrl":         "/api/v1/extension/icon/" + pkgName,
 						"storeIndexUrl":   storeIndexUrl,
@@ -274,11 +383,14 @@ func getExtensionNodes(ctx context.Context, filterStoreUrl string) []map[string]
 						"isInstalled":     isInstalled,
 						"isObsolete":      isObsolete,
 						"hasUpdate":       hasUpdate,
+						"isNsfw":          cw == "NSFW",
 						"extensionLib":    extLib,
 						"extensionStore": map[string]interface{}{
-							"indexUrl":   storeIndexUrl,
-							"name":       storeName,
-							"__typename": "ExtensionStoreType",
+							"indexUrl":       storeIndexUrl,
+							"name":           storeName,
+							"contactWebsite": "",
+							"contactDiscord": "",
+							"__typename":     "ExtensionStoreType",
 						},
 						"__typename": "ExtensionType",
 					})
@@ -592,11 +704,7 @@ func buildGraphQLDownloadStatus(ctx context.Context) map[string]interface{} {
 					"inLibrary":     mInLibrary,
 					"__typename":    "MangaUserType",
 				},
-				"source": map[string]interface{}{
-					"id":         fmt.Sprintf("%d", mSourceID),
-					"name":       mSourceName,
-					"__typename": "SourceType",
-				},
+				"source":     buildSourceMap(fmt.Sprintf("%d", mSourceID), mSourceName, mSourceName, "all", false, true),
 				"__typename": "MangaType",
 			},
 			"state":      itemState,
@@ -1354,7 +1462,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_EXTENSIONS_FETCH":
+	case "GET_EXTENSIONS_FETCH", "FetchExtensionListStore", "fetchExtensions":
 		// Sync configured extension repositories in background
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -1386,9 +1494,10 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 		data = map[string]interface{}{
 			"fetchExtensions": map[string]interface{}{
-				"extensions":      extList,
-				"extensionStores": storeNodes,
-				"__typename":      "FetchExtensionsResult",
+				"clientMutationId": nil,
+				"extensions":       extList,
+				"extensionStores":  storeNodes,
+				"__typename":       "FetchExtensionsPayload",
 			},
 		}
 
@@ -1665,35 +1774,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				if sid, errSid := strconv.ParseInt(src.ID, 10, 64); errSid == nil && sid > 0 {
 					sources.RestoreNative(sid)
 				}
-				cw := src.ContentWarning
-				if cw == "" {
-					cw = "SAFE"
-				}
-				pkgName := src.PkgName
-				iconURL := "/api/v1/source/" + src.ID + "/icon"
-				nodes = append(nodes, map[string]interface{}{
-					"id":             src.ID,
-					"name":           src.Name,
-					"displayName":    src.DisplayName,
-					"lang":           src.Lang,
-					"iconUrl":        iconURL,
-					"contentWarning": cw,
-					"isNsfw":         src.IsNsfw,
-					"isConfigurable": false,
-					"supportsLatest": src.SupportsLatest,
-					"meta":           []interface{}{},
-					"extension": map[string]interface{}{
-						"pkgName":       pkgName,
-						"storeIndexUrl": DefaultExtensionStoreURL,
-						"extensionStore": map[string]interface{}{
-							"indexUrl":   DefaultExtensionStoreURL,
-							"name":       DefaultExtensionStoreName,
-							"__typename": "ExtensionStoreType",
-						},
-						"__typename": "ExtensionType",
-					},
-					"__typename": "SourceType",
-				})
+				nodes = append(nodes, buildSourceMap(src.ID, src.Name, src.DisplayName, src.Lang, src.IsNsfw, src.SupportsLatest, src.ContentWarning))
 			}
 		}
 
@@ -1704,15 +1785,35 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_EXTENSIONS":
+	case "GET_EXTENSIONS", "ExtensionUpdateCount", "extensions":
 		var filterInstalled *bool
+		var filterHasUpdate *bool
 		var filterStoreUrl string
 		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
 			if v, ok := cond["isInstalled"].(bool); ok {
 				filterInstalled = &v
 			}
+			if v, ok := cond["hasUpdate"].(bool); ok {
+				filterHasUpdate = &v
+			}
 			if s, ok := cond["storeIndexUrl"].(string); ok {
 				filterStoreUrl = s
+			}
+		} else {
+			// Check inline condition in req.Query, e.g. condition: {hasUpdate: true, isInstalled: true}
+			if strings.Contains(req.Query, "isInstalled: true") {
+				b := true
+				filterInstalled = &b
+			} else if strings.Contains(req.Query, "isInstalled: false") {
+				b := false
+				filterInstalled = &b
+			}
+			if strings.Contains(req.Query, "hasUpdate: true") {
+				b := true
+				filterHasUpdate = &b
+			} else if strings.Contains(req.Query, "hasUpdate: false") {
+				b := false
+				filterHasUpdate = &b
 			}
 		}
 
@@ -1722,6 +1823,12 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			if filterInstalled != nil {
 				isInst, _ := node["isInstalled"].(bool)
 				if isInst != *filterInstalled {
+					continue
+				}
+			}
+			if filterHasUpdate != nil {
+				hasUpd, _ := node["hasUpdate"].(bool)
+				if hasUpd != *filterHasUpdate {
 					continue
 				}
 			}
@@ -1752,7 +1859,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			"extension": getExtensionMap(c.Context(), pkgName),
 		}
 
-	case "UPDATE_EXTENSION", "updateExtension":
+	case "UPDATE_EXTENSION", "UpdateExtension", "updateExtension":
 		var pkgName string
 		var install, uninstall, update bool
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
@@ -1820,12 +1927,13 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 		data = map[string]interface{}{
 			"updateExtension": map[string]interface{}{
-				"extension":  getExtensionMap(c.Context(), pkgName),
-				"__typename": "UpdateExtensionPayload",
+				"clientMutationId": nil,
+				"extension":        getExtensionMap(c.Context(), pkgName),
+				"__typename":       "UpdateExtensionPayload",
 			},
 		}
 
-	case "UPDATE_EXTENSIONS", "updateExtensions":
+	case "UPDATE_EXTENSIONS", "UpdateExtensions", "updateExtensions":
 		var pkgs []string
 		var isUninstall bool
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
@@ -1877,16 +1985,18 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 		data = map[string]interface{}{
 			"updateExtensions": map[string]interface{}{
-				"extensions": extList,
-				"__typename": "UpdateExtensionsPayload",
+				"clientMutationId": nil,
+				"extensions":       extList,
+				"__typename":       "UpdateExtensionsPayload",
 			},
 		}
 
-	case "INSTALL_EXTERNAL_EXTENSION", "installExternalExtension":
+	case "INSTALL_EXTERNAL_EXTENSION", "InstallExternalExtension", "installExternalExtension":
 		data = map[string]interface{}{
 			"installExternalExtension": map[string]interface{}{
-				"extension":  getExtensionMap(c.Context(), "eu.kanade.tachiyomi.extension.all.mangadex"),
-				"__typename": "InstallExternalExtensionPayload",
+				"clientMutationId": nil,
+				"extension":        getExtensionMap(c.Context(), "eu.kanade.tachiyomi.extension.all.mangadex"),
+				"__typename":       "InstallExternalExtensionPayload",
 			},
 		}
 
@@ -2732,7 +2842,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			"extensionStore": store,
 		}
 
-	case "GET_EXTENSION_STORES":
+	case "GET_EXTENSION_STORES", "ExtensionStoreList", "extensionStores":
 		dbStores, err := database.GetExtensionStores(c.Context())
 		if err != nil {
 			dbStores = []models.ExtensionStore{}
@@ -2814,15 +2924,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 							lang = "all"
 						}
 						nodes = append(nodes, map[string]interface{}{
-							"sourceId": sIdStr,
-							"source": map[string]interface{}{
-								"id":          sIdStr,
-								"name":        name,
-								"displayName": displayName,
-								"lang":        lang,
-								"iconUrl":     "/api/v1/source/" + sIdStr + "/icon",
-								"__typename":  "SourceType",
-							},
+							"sourceId":   sIdStr,
+							"source":     buildSourceMap(sIdStr, name, displayName, lang, false, true),
 							"__typename": "MangaType",
 						})
 					}
@@ -2893,14 +2996,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 		data = map[string]interface{}{
-			"source": map[string]interface{}{
-				"id":          sourceID,
-				"name":        name,
-				"displayName": displayName,
-				"lang":        lang,
-				"iconUrl":     "/api/v1/source/" + sourceID + "/icon",
-				"__typename":  "SourceType",
-			},
+			"source": buildSourceMap(sourceID, name, displayName, lang, false, true),
 		}
 
 	case "GET_MIGRATABLE_SOURCE_MANGAS":
@@ -3426,7 +3522,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "ADD_EXTENSION_STORE", "addExtensionStore":
+	case "ADD_EXTENSION_STORE", "AddExtensionStore", "addExtensionStore":
 		var url string
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if u, ok := input["indexUrl"].(string); ok && u != "" {
@@ -3463,6 +3559,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 		data = map[string]interface{}{
 			"addExtensionStore": map[string]interface{}{
+				"clientMutationId": nil,
 				"extensionStore": map[string]interface{}{
 					"name":             name,
 					"indexUrl":         url,
@@ -3481,7 +3578,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "REMOVE_EXTENSION_STORE", "removeExtensionStore":
+	case "REMOVE_EXTENSION_STORE", "RemoveExtensionStore", "removeExtensionStore":
 		var url string
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if u, ok := input["indexUrl"].(string); ok && u != "" {
@@ -3497,6 +3594,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 		data = map[string]interface{}{
 			"removeExtensionStore": map[string]interface{}{
+				"clientMutationId": nil,
 				"extensionStore": map[string]interface{}{
 					"name":             "Extension Store",
 					"indexUrl":         url,
@@ -3541,14 +3639,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"title":        "",
 				"thumbnailUrl": fmt.Sprintf("/api/v1/manga/%d/thumbnail", id),
 				"genre":        []string{},
-				"source": map[string]interface{}{
-					"id":          "0",
-					"name":        "Source",
-					"displayName": "Source",
-					"lang":        "all",
-					"iconUrl":     "",
-					"__typename":  "SourceType",
-				},
+				"source":       buildSourceMap("0", "Source", "Source", "all", false, true),
 				"chapters": map[string]interface{}{
 					"totalCount": 0,
 					"__typename": "ChapterNodeList",
@@ -4824,21 +4915,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		if sourceID > 0 {
 			src, err := database.GetSourceByID(c.Context(), sourceID)
 			if err == nil && src != nil {
-				iconURL := "/api/v1/source/" + src.ID + "/icon"
-				srcData = map[string]interface{}{
-					"id":             src.ID,
-					"name":           src.Name,
-					"displayName":    src.DisplayName,
-					"lang":           src.Lang,
-					"iconUrl":        iconURL,
-					"homeUrl":        "",
-					"isConfigurable": false,
-					"supportsLatest": src.SupportsLatest,
-					"meta":           []interface{}{},
-					"filters":        []interface{}{},
-					"preferences":    []interface{}{},
-					"__typename":     "SourceType",
-				}
+				srcData = buildSourceMap(src.ID, src.Name, src.DisplayName, src.Lang, src.IsNsfw, src.SupportsLatest, src.ContentWarning)
 			}
 		}
 
@@ -4859,21 +4936,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		if sourceID > 0 {
 			src, err := database.GetSourceByID(c.Context(), sourceID)
 			if err == nil && src != nil {
-				iconURL := "/api/v1/source/" + src.ID + "/icon"
-				srcData = map[string]interface{}{
-					"id":             src.ID,
-					"name":           src.Name,
-					"displayName":    src.DisplayName,
-					"lang":           src.Lang,
-					"iconUrl":        iconURL,
-					"homeUrl":        "",
-					"isConfigurable": false,
-					"supportsLatest": src.SupportsLatest,
-					"meta":           []interface{}{},
-					"filters":        []interface{}{},
-					"preferences":    []interface{}{},
-					"__typename":     "SourceType",
-				}
+				srcData = buildSourceMap(src.ID, src.Name, src.DisplayName, src.Lang, src.IsNsfw, src.SupportsLatest, src.ContentWarning)
 			}
 		}
 		data = map[string]interface{}{
@@ -5061,11 +5124,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 		missingSrcNodes := []map[string]interface{}{}
 		for _, s := range res.MissingSources {
-			missingSrcNodes = append(missingSrcNodes, map[string]interface{}{
-				"id":         s.ID,
-				"name":       s.Name,
-				"__typename": "SourceType",
-			})
+			missingSrcNodes = append(missingSrcNodes, buildSourceMap(s.ID, s.Name, s.Name, "all", false, true))
 		}
 
 		data = map[string]interface{}{
@@ -5569,27 +5628,7 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 			"url":                     realUrl,
 			"updateStrategy":          "ALWAYS_UPDATE",
 			"lastFetchedAt":           lastFetchedAt,
-			"source": map[string]interface{}{
-				"id":             fmt.Sprintf("%d", sourceId),
-				"name":           sourceName,
-				"displayName":    sourceName,
-				"lang":           "all",
-				"contentWarning": "SAFE",
-				"iconUrl":        fmt.Sprintf("/api/v1/source/%d/icon", sourceId),
-				"isConfigurable": false,
-				"supportsLatest": true,
-				"extension": map[string]interface{}{
-					"isObsolete":  false,
-					"hasUpdate":   false,
-					"isInstalled": true,
-					"pkgName":     "",
-					"name":        "",
-					"lang":        "all",
-					"iconUrl":     "",
-					"__typename":  "ExtensionType",
-				},
-				"__typename":     "SourceType",
-			},
+			"source":                  buildSourceMap(fmt.Sprintf("%d", sourceId), sourceName, sourceName, "all", false, true),
 			"unreadCount":             unreadCount,
 			"downloadCount":           downloadCount,
 			"bookmarkCount":           bookmarkCount,
@@ -6084,21 +6123,7 @@ func fetchUpdatesOrHistoryChapters(ctx context.Context, isHistory bool, limit, o
 				"thumbnailUrl":            fmt.Sprintf("/api/v1/manga/%d/thumbnail", cr.mangaId),
 				"thumbnailUrlLastFetched": 0,
 				"sourceId":                "0",
-				"source": map[string]interface{}{
-					"id":             "0",
-					"name":           "Unknown",
-					"displayName":    "Unknown",
-					"lang":           "all",
-					"contentWarning": "SAFE",
-					"iconUrl":        "",
-					"isConfigurable": false,
-					"supportsLatest": true,
-					"extension": map[string]interface{}{
-						"isObsolete": false,
-						"__typename": "ExtensionType",
-					},
-					"__typename":     "SourceType",
-				},
+				"source":                  buildSourceMap("0", "Unknown", "Unknown", "all", false, true),
 				"inLibrary":               true,
 				"inLibraryAt":             0,
 				"initialized":             true,
