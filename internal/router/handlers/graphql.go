@@ -530,26 +530,40 @@ func buildGraphQLDownloadStatus(ctx context.Context) map[string]interface{} {
 		var mSourceID int64
 		var mSourceName string
 		var isDownloaded bool
-		var pageCount int
+		var pageCount, chSourceOrder int
+		var mInLibrary bool
 
 		if database.DB != nil {
 			query := `
-				SELECT c.name, c.chapter_number, c.url, c.is_downloaded, COALESCE(c.page_count, -1),
-				       m.title, COALESCE(m.thumbnail_url, ''), m.source, COALESCE(s.name, 'Unknown')
+				SELECT COALESCE(c.name, ''), c.chapter_number, COALESCE(c.url, ''), COALESCE(cu.is_downloaded, false), COALESCE(c.page_count, -1), c.source_order,
+				       COALESCE(m.title, ''), COALESCE(m.thumbnail_url, ''), m.source, COALESCE(s.name, 'Unknown'), COALESCE(mu.in_library, false)
 				FROM suwayomi.chapter c
 				JOIN suwayomi.manga m ON c.manga = m.id
+				LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
+				LEFT JOIN suwayomi.mangauser mu ON m.id = mu.manga
 				LEFT JOIN suwayomi.source s ON m.source = s.id
 				WHERE c.id = $1
 				LIMIT 1`
 			_ = database.DB.QueryRow(ctx, query, item.ChapterID).Scan(
-				&chName, &chNumber, &chURL, &isDownloaded, &pageCount,
-				&mTitle, &mThumb, &mSourceID, &mSourceName,
+				&chName, &chNumber, &chURL, &isDownloaded, &pageCount, &chSourceOrder,
+				&mTitle, &mThumb, &mSourceID, &mSourceName, &mInLibrary,
 			)
 		}
 
 		itemState := strings.ToUpper(string(item.State))
-		if itemState == "" {
-			itemState = "QUEUED"
+		switch itemState {
+		case "STARTED", "RUNNING":
+			itemState = "DOWNLOADING"
+		case "COMPLETE", "COMPLETED", "FINISHED":
+			itemState = "DOWNLOADED"
+		case "FAILED":
+			itemState = "ERROR"
+		case "PAUSED":
+			itemState = "PAUSED"
+		default:
+			if itemState != "DOWNLOADING" && itemState != "DOWNLOADED" && itemState != "ERROR" && itemState != "PAUSED" {
+				itemState = "QUEUED"
+			}
 		}
 
 		queue = append(queue, map[string]interface{}{
@@ -558,15 +572,26 @@ func buildGraphQLDownloadStatus(ctx context.Context) map[string]interface{} {
 				"name":          chName,
 				"chapterNumber": chNumber,
 				"url":           chURL,
+				"realUrl":       chURL,
+				"sourceOrder":   chSourceOrder,
 				"isDownloaded":  isDownloaded,
 				"pageCount":     pageCount,
-				"__typename":    "ChapterType",
+				"user": map[string]interface{}{
+					"chapterId":    item.ChapterID,
+					"isDownloaded": isDownloaded,
+					"__typename":   "ChapterUserType",
+				},
+				"__typename": "ChapterType",
 			},
 			"manga": map[string]interface{}{
-				"id":            item.MangaID,
-				"title":         mTitle,
-				"thumbnailUrl":  mThumb,
-				"downloadCount": 0,
+				"id":           item.MangaID,
+				"title":        mTitle,
+				"thumbnailUrl": mThumb,
+				"user": map[string]interface{}{
+					"downloadCount": 0,
+					"inLibrary":     mInLibrary,
+					"__typename":    "MangaUserType",
+				},
 				"source": map[string]interface{}{
 					"id":         fmt.Sprintf("%d", mSourceID),
 					"name":       mSourceName,
@@ -712,6 +737,10 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						req.OperationName = "GET_CHAPTERS_READER"
 					case "checkForServerUpdates", "serverUpdate":
 						req.OperationName = "CHECK_FOR_SERVER_UPDATES"
+					case "trackers":
+						req.OperationName = "GetTrackers"
+					case "metas":
+						req.OperationName = "GET_GLOBAL_METADATAS"
 					default:
 						req.OperationName = rootField
 					}
@@ -726,6 +755,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		req.OperationName = "setSettings"
 	} else if strings.Contains(req.Query, "resetSettings") {
 		req.OperationName = "resetSettings"
+	} else if strings.Contains(req.Query, "setGlobalMeta") || strings.Contains(req.Query, "SetOfflineServerIdentity") {
+		req.OperationName = "setGlobalMeta"
 	} else if strings.Contains(req.Query, "libraryUpdateStatus") && !strings.Contains(req.Query, "updateLibrary") {
 		req.OperationName = "GET_UPDATE_STATUS"
 	}
@@ -1060,6 +1091,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"pageInfo": map[string]interface{}{
 					"hasNextPage":     false,
 					"hasPreviousPage": false,
+					"startCursor":     "0",
+					"endCursor":       "1",
 					"__typename":      "PageInfo",
 				},
 				"__typename": "UserNodeList",
@@ -1409,10 +1442,30 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_GLOBAL_METADATAS":
+	case "GET_GLOBAL_METADATAS", "OfflineServerIdentity", "metas":
 		nodes := []map[string]interface{}{}
+		var filterKey string
+		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
+			if k, ok := cond["key"].(string); ok {
+				filterKey = k
+			}
+		}
+		if filterKey == "" {
+			if k, ok := req.Variables["key"].(string); ok {
+				filterKey = k
+			}
+		}
+
 		if database.DB != nil {
-			rows, err := database.DB.Query(c.Context(), "SELECT meta_key, value FROM suwayomi.globalmeta WHERE user_id = 1")
+			var query string
+			var args []interface{}
+			if filterKey != "" {
+				query = "SELECT meta_key, value FROM suwayomi.globalmeta WHERE user_id = 1 AND meta_key = $1"
+				args = append(args, filterKey)
+			} else {
+				query = "SELECT meta_key, value FROM suwayomi.globalmeta WHERE user_id = 1"
+			}
+			rows, err := database.DB.Query(c.Context(), query, args...)
 			if err == nil {
 				defer rows.Close()
 				for rows.Next() {
@@ -1435,8 +1488,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"pageInfo": map[string]interface{}{
 					"hasNextPage":     false,
 					"hasPreviousPage": false,
-					"startCursor":     nil,
-					"endCursor":       nil,
+					"startCursor":     "0",
+					"endCursor":       fmt.Sprintf("%d", len(nodes)),
 					"__typename":      "PageInfo",
 				},
 				"__typename": "GlobalMetaNodeList",
@@ -1519,8 +1572,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"pageInfo": map[string]interface{}{
 					"hasNextPage":     false,
 					"hasPreviousPage": false,
-					"startCursor":     nil,
-					"endCursor":       nil,
+					"startCursor":     "0",
+					"endCursor":       fmt.Sprintf("%d", len(nodes)),
 					"__typename":      "PageInfo",
 				},
 				"__typename": "CategoryNodeList",
@@ -1682,8 +1735,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"pageInfo": map[string]interface{}{
 					"hasNextPage":     false,
 					"hasPreviousPage": false,
-					"startCursor":     nil,
-					"endCursor":       nil,
+					"startCursor":     "0",
+					"endCursor":       fmt.Sprintf("%d", len(nodes)),
 					"__typename":      "PageInfo",
 				},
 				"__typename": "ExtensionNodeList",
@@ -1868,8 +1921,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"pageInfo": map[string]interface{}{
 					"hasNextPage":     offset+len(chapterNodes) < totalCount,
 					"hasPreviousPage": offset > 0,
-					"startCursor":     nil,
-					"endCursor":       nil,
+					"startCursor":     fmt.Sprintf("%d", offset),
+					"endCursor":       fmt.Sprintf("%d", offset+len(chapterNodes)),
 					"__typename":      "PageInfo",
 				},
 				"__typename": "ChapterNodeList",
@@ -1963,11 +2016,49 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"pageInfo": map[string]interface{}{
 					"hasNextPage":     offset+len(chapterNodes) < totalCount,
 					"hasPreviousPage": offset > 0,
-					"startCursor":     nil,
-					"endCursor":       nil,
+					"startCursor":     fmt.Sprintf("%d", offset),
+					"endCursor":       fmt.Sprintf("%d", offset+len(chapterNodes)),
 					"__typename":      "PageInfo",
 				},
 				"__typename": "ChapterNodeList",
+			},
+		}
+
+	case "setGlobalMeta", "SetOfflineServerIdentity":
+		var key, val string
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if meta, ok := input["meta"].(map[string]interface{}); ok {
+				if k, ok := meta["key"].(string); ok {
+					key = k
+				}
+				if v, ok := meta["value"].(string); ok {
+					val = v
+				}
+			}
+		}
+		if key == "" {
+			if k, ok := req.Variables["key"].(string); ok {
+				key = k
+			}
+			if v, ok := req.Variables["value"].(string); ok {
+				val = v
+			}
+		}
+		if database.DB != nil && key != "" {
+			_, _ = database.DB.Exec(c.Context(), `
+				INSERT INTO suwayomi.globalmeta (user_id, meta_key, value)
+				VALUES (1, $1, $2)
+				ON CONFLICT (user_id, meta_key) DO UPDATE SET value = EXCLUDED.value
+			`, key, val)
+		}
+		data = map[string]interface{}{
+			"setGlobalMeta": map[string]interface{}{
+				"meta": map[string]interface{}{
+					"key":        key,
+					"value":      val,
+					"__typename": "GlobalMetaType",
+				},
+				"__typename": "SetGlobalMetaPayload",
 			},
 		}
 
@@ -2673,8 +2764,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"pageInfo": map[string]interface{}{
 					"hasNextPage":     false,
 					"hasPreviousPage": false,
-					"startCursor":     nil,
-					"endCursor":       nil,
+					"startCursor":     "0",
+					"endCursor":       fmt.Sprintf("%d", len(stores)),
 					"__typename":      "PageInfo",
 				},
 				"__typename": "ExtensionStoreNodeList",
@@ -2748,8 +2839,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"pageInfo": map[string]interface{}{
 					"hasNextPage":     false,
 					"hasPreviousPage": false,
-					"startCursor":     nil,
-					"endCursor":       nil,
+					"startCursor":     "0",
+					"endCursor":       fmt.Sprintf("%d", len(nodes)),
 					"__typename":      "PageInfo",
 				},
 				"__typename": "MangaNodeList",
@@ -2845,8 +2936,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"pageInfo": map[string]interface{}{
 					"hasNextPage":     false,
 					"hasPreviousPage": false,
-					"startCursor":     nil,
-					"endCursor":       nil,
+					"startCursor":     "0",
+					"endCursor":       fmt.Sprintf("%d", len(nodes)),
 					"__typename":      "PageInfo",
 				},
 				"__typename": "MangaNodeList",
@@ -2889,8 +2980,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			"pageInfo": map[string]interface{}{
 				"hasNextPage":     false,
 				"hasPreviousPage": false,
-				"startCursor":     nil,
-				"endCursor":       nil,
+				"startCursor":     "0",
+				"endCursor":       fmt.Sprintf("%d", len(cNodes)),
 				"__typename":      "PageInfo",
 			},
 			"__typename": "ChapterNodeList",
@@ -2900,7 +2991,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			"manga": mangaNode,
 		}
 
-	case "GET_TRACKERS_SETTINGS", "GET_TRACKERS_BIND":
+	case "GET_TRACKERS_SETTINGS", "GET_TRACKERS_BIND", "GetTrackers", "trackers":
 		trackers := []map[string]interface{}{
 			{
 				"id":                      1,
@@ -2911,6 +3002,14 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"supportsTrackDeletion":   true,
 				"supportsReadingDates":    true,
 				"supportsPrivateTracking": true,
+				"isTokenExpired":          false,
+				"scores":                  []string{},
+				"statuses":                []interface{}{},
+				"trackRecords": map[string]interface{}{
+					"totalCount": 0,
+					"nodes":      []interface{}{},
+					"__typename": "TrackRecordNodeList",
+				},
 				"__typename":              "TrackerType",
 			},
 			{
@@ -2922,6 +3021,14 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"supportsTrackDeletion":   true,
 				"supportsReadingDates":    true,
 				"supportsPrivateTracking": true,
+				"isTokenExpired":          false,
+				"scores":                  []string{},
+				"statuses":                []interface{}{},
+				"trackRecords": map[string]interface{}{
+					"totalCount": 0,
+					"nodes":      []interface{}{},
+					"__typename": "TrackRecordNodeList",
+				},
 				"__typename":              "TrackerType",
 			},
 			{
@@ -2933,6 +3040,14 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"supportsTrackDeletion":   true,
 				"supportsReadingDates":    true,
 				"supportsPrivateTracking": true,
+				"isTokenExpired":          false,
+				"scores":                  []string{},
+				"statuses":                []interface{}{},
+				"trackRecords": map[string]interface{}{
+					"totalCount": 0,
+					"nodes":      []interface{}{},
+					"__typename": "TrackRecordNodeList",
+				},
 				"__typename":              "TrackerType",
 			},
 			{
@@ -2944,6 +3059,14 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"supportsTrackDeletion":   true,
 				"supportsReadingDates":    true,
 				"supportsPrivateTracking": true,
+				"isTokenExpired":          false,
+				"scores":                  []string{},
+				"statuses":                []interface{}{},
+				"trackRecords": map[string]interface{}{
+					"totalCount": 0,
+					"nodes":      []interface{}{},
+					"__typename": "TrackRecordNodeList",
+				},
 				"__typename":              "TrackerType",
 			},
 			{
@@ -2955,6 +3078,14 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"supportsTrackDeletion":   true,
 				"supportsReadingDates":    true,
 				"supportsPrivateTracking": true,
+				"isTokenExpired":          false,
+				"scores":                  []string{},
+				"statuses":                []interface{}{},
+				"trackRecords": map[string]interface{}{
+					"totalCount": 0,
+					"nodes":      []interface{}{},
+					"__typename": "TrackRecordNodeList",
+				},
 				"__typename":              "TrackerType",
 			},
 		}
@@ -2966,8 +3097,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"pageInfo": map[string]interface{}{
 					"hasNextPage":     false,
 					"hasPreviousPage": false,
-					"startCursor":     nil,
-					"endCursor":       nil,
+					"startCursor":     "0",
+					"endCursor":       fmt.Sprintf("%d", len(trackers)),
 					"__typename":      "PageInfo",
 				},
 				"__typename": "TrackerNodeList",
@@ -3256,8 +3387,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"pageInfo": map[string]interface{}{
 					"hasNextPage":     false,
 					"hasPreviousPage": false,
-					"startCursor":     nil,
-					"endCursor":       nil,
+					"startCursor":     "0",
+					"endCursor":       fmt.Sprintf("%d", len(nodes)),
 					"__typename":      "PageInfo",
 				},
 				"__typename": "MangaNodeList",
@@ -3285,8 +3416,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					"pageInfo": map[string]interface{}{
 						"hasNextPage":     false,
 						"hasPreviousPage": false,
-						"startCursor":     nil,
-						"endCursor":       nil,
+						"startCursor":     "0",
+						"endCursor":       fmt.Sprintf("%d", len(nodes)),
 						"__typename":      "PageInfo",
 					},
 					"__typename": "MangaNodeList",
@@ -3476,7 +3607,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 		var chNode map[string]interface{}
 		if chapterID > 0 && database.DB != nil {
-			var name, scanlator, realUrl string
+			var name, scanlator, realUrl, chapterUrl string
 			var sourceOrder int
 			var chapterNumber float32
 			var read, isDownloaded, bookmark bool
@@ -3487,7 +3618,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			q := `
 				SELECT c.id, COALESCE(c.name, ''), COALESCE(c.scanlator, ''), COALESCE(c.real_url, ''), c.source_order, c.chapter_number, 
 				       COALESCE(cu.read, false), COALESCE(cu.is_downloaded, false), COALESCE(cu.bookmark, false), c.fetched_at, c.date_upload, COALESCE(cu.last_read_at, 0),
-				       COALESCE(cu.last_page_read, 0), COALESCE(c.page_count, -1), c.manga
+				       COALESCE(cu.last_page_read, 0), COALESCE(c.page_count, -1), c.manga, COALESCE(c.url, '')
 				FROM suwayomi.chapter c
 				LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
 				WHERE c.id = $1
@@ -3496,15 +3627,19 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			err := database.DB.QueryRow(c.Context(), q, chapterID).Scan(
 				&chapterID, &name, &scanlator, &realUrl, &sourceOrder, &chapterNumber,
 				&read, &isDownloaded, &bookmark, &fetchedAt, &dateUpload, &lastReadAt,
-				&lastPageRead, &pageCount, &mId,
+				&lastPageRead, &pageCount, &mId, &chapterUrl,
 			)
 			if err == nil {
+				if chapterUrl == "" {
+					chapterUrl = realUrl
+				}
 				chNode = map[string]interface{}{
 					"id":            chapterID,
 					"name":          name,
 					"mangaId":       mId,
 					"scanlator":     scanlator,
 					"realUrl":       realUrl,
+					"url":           chapterUrl,
 					"sourceOrder":   sourceOrder,
 					"chapterNumber": chapterNumber,
 					"isRead":        read,
@@ -3536,6 +3671,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"mangaId":       0,
 				"scanlator":     "",
 				"realUrl":       "",
+				"url":           "",
 				"sourceOrder":   0,
 				"chapterNumber": 0,
 				"isRead":        false,
@@ -3677,8 +3813,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"pageInfo": map[string]interface{}{
 					"hasNextPage":     false,
 					"hasPreviousPage": false,
-					"startCursor":     nil,
-					"endCursor":       nil,
+					"startCursor":     "0",
+					"endCursor":       fmt.Sprintf("%d", len(nodes)),
 					"__typename":      "PageInfo",
 				},
 				"__typename": "ChapterNodeList",
@@ -3823,7 +3959,18 @@ func HandleGraphQL(c *fiber.Ctx) error {
 								"__typename": "FetchChapterPagesPayload",
 							},
 						}
-						return c.JSON(fiber.Map{"data": data})
+						if dataMap, ok := data.(map[string]interface{}); ok && dataMap != nil {
+		if _, exists := dataMap["__typename"]; !exists {
+			isMutation := strings.HasPrefix(strings.TrimSpace(req.Query), "mutation") || strings.Contains(req.Query, "mutation ")
+			if isMutation {
+				dataMap["__typename"] = "Mutation"
+			} else {
+				dataMap["__typename"] = "Query"
+			}
+		}
+	}
+
+	return c.JSON(fiber.Map{"data": data})
 					}
 					log.Printf("[SOURCES] Native fetch failed for chapter %d: %v. Falling back to Java.", chapterID, err)
 				}
@@ -3865,14 +4012,25 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			}
 		}
 
+		var mangaNode map[string]interface{}
+		if mangaID > 0 {
+			mNodes, _ := fetchMangaGraphQLNodes(c.Context(), MangaGraphQLFilter{MangaIDs: []int64{mangaID}})
+			if len(mNodes) > 0 {
+				mangaNode = mNodes[0]
+			}
+		}
+		if mangaNode == nil {
+			mangaNode = map[string]interface{}{
+				"id":          mangaID,
+				"inLibrary":   inLib,
+				"inLibraryAt": now,
+				"__typename":  "MangaType",
+			}
+		}
+
 		res := map[string]interface{}{
 			"updateManga": map[string]interface{}{
-				"manga": map[string]interface{}{
-					"id":          mangaID,
-					"inLibrary":   inLib,
-					"inLibraryAt": now,
-					"__typename":  "MangaType",
-				},
+				"manga":      mangaNode,
 				"__typename": "UpdateMangaPayload",
 			},
 		}
@@ -4121,22 +4279,54 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			var mangaID int64
 			_ = database.DB.QueryRow(c.Context(), "SELECT manga FROM suwayomi.chapter WHERE id = $1", chapterID).Scan(&mangaID)
 
-			var mObj map[string]interface{}
 			if mangaID > 0 {
-				mNodes, _ := fetchMangaGraphQLNodes(c.Context(), MangaGraphQLFilter{MangaIDs: []int64{mangaID}})
-				if len(mNodes) > 0 {
-					mObj = mNodes[0]
+				chNodes, _ := fetchChaptersForMangaIDs(c.Context(), []int64{mangaID}, "")
+				for _, ch := range chNodes {
+					if idVal, ok := ch["id"].(int64); ok && idVal == chapterID {
+						updatedChapter = ch
+						break
+					}
 				}
 			}
 
-			updatedChapter = map[string]interface{}{
-				"id":           chapterID,
-				"isRead":       newRead,
-				"isBookmarked": newBookmark,
-				"lastPageRead": newLPR,
-				"lastReadAt":   newLRA,
-				"manga":        mObj,
-				"__typename":   "ChapterType",
+			if updatedChapter == nil {
+				var mObj map[string]interface{}
+				if mangaID > 0 {
+					mNodes, _ := fetchMangaGraphQLNodes(c.Context(), MangaGraphQLFilter{MangaIDs: []int64{mangaID}})
+					if len(mNodes) > 0 {
+						mObj = mNodes[0]
+					}
+				}
+				updatedChapter = map[string]interface{}{
+					"id":            chapterID,
+					"name":          "",
+					"url":           "",
+					"realUrl":       "",
+					"mangaId":       mangaID,
+					"scanlator":     "",
+					"sourceOrder":   0,
+					"chapterNumber": 0,
+					"isRead":        newRead,
+					"isDownloaded":  false,
+					"isBookmarked":  newBookmark,
+					"fetchedAt":     0,
+					"uploadDate":    0,
+					"lastReadAt":    newLRA,
+					"lastPageRead":  newLPR,
+					"pageCount":     0,
+					"meta":          []interface{}{},
+					"user": map[string]interface{}{
+						"chapterId":    chapterID,
+						"isRead":       newRead,
+						"isDownloaded": false,
+						"isBookmarked": newBookmark,
+						"lastReadAt":   newLRA,
+						"lastPageRead": newLPR,
+						"__typename":   "ChapterUserType",
+					},
+					"manga":      mObj,
+					"__typename": "ChapterType",
+				}
 			}
 		}
 
@@ -4189,6 +4379,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			}
 
 			now := time.Now().Unix()
+			mangaIDMap := make(map[int64]bool)
 			for _, cid := range chapterIDs {
 				var currentRead, currentBookmark bool
 				var currentLPR int
@@ -4235,23 +4426,26 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 				var chMangaID int64
 				_ = database.DB.QueryRow(c.Context(), "SELECT manga FROM suwayomi.chapter WHERE id = $1", cid).Scan(&chMangaID)
+				if chMangaID > 0 {
+					mangaIDMap[chMangaID] = true
+				}
+			}
 
-				updatedChapters = append(updatedChapters, map[string]interface{}{
-					"id":           cid,
-					"isRead":       newRead,
-					"isBookmarked": newBookmark,
-					"lastReadAt":   newLRA,
-					"lastPageRead": newLPR,
-					"manga": map[string]interface{}{
-						"id":                 chMangaID,
-						"unreadCount":        0,
-						"lastReadChapter":    map[string]interface{}{"id": cid, "lastPageRead": newLPR, "lastReadAt": newLRA, "__typename": "ChapterType"},
-						"latestReadChapter":  map[string]interface{}{"id": cid, "lastPageRead": newLPR, "lastReadAt": newLRA, "__typename": "ChapterType"},
-						"firstUnreadChapter": nil,
-						"__typename":         "MangaType",
-					},
-					"__typename": "ChapterType",
-				})
+			var mIDs []int64
+			for mid := range mangaIDMap {
+				mIDs = append(mIDs, mid)
+			}
+			allChs, _ := fetchChaptersForMangaIDs(c.Context(), mIDs, "")
+			chById := make(map[int64]map[string]interface{})
+			for _, ch := range allChs {
+				if cid, ok := ch["id"].(int64); ok {
+					chById[cid] = ch
+				}
+			}
+			for _, cid := range chapterIDs {
+				if chNode, ok := chById[cid]; ok {
+					updatedChapters = append(updatedChapters, chNode)
+				}
 			}
 		}
 
@@ -4373,10 +4567,16 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						"name":              cat.Name,
 						"order":             cat.Order,
 						"default":           cat.Default,
-						"isDefaultCategory": cat.ID == 0,
+						"defaultCategory":   cat.Default,
+						"isDefaultCategory": cat.ID == 0 || cat.Default,
 						"includeInUpdate":   cat.IncludeInUpdate.GraphQLEnum(),
 						"includeInDownload": cat.IncludeInDownload.GraphQLEnum(),
-						"__typename":        "CategoryType",
+						"mangas": map[string]interface{}{
+							"totalCount": 0,
+							"__typename": "MangaNodeList",
+						},
+						"meta":       []interface{}{},
+						"__typename": "CategoryType",
 					})
 				}
 			}
@@ -4496,9 +4696,19 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		for _, cat := range cats {
 			catOrderPayload = append(catOrderPayload, map[string]interface{}{
 				"id":                cat.ID,
+				"name":              cat.Name,
 				"order":             cat.Order,
-				"isDefaultCategory": cat.ID == 0,
-				"__typename":        "CategoryType",
+				"default":           cat.Default,
+				"defaultCategory":   cat.Default,
+				"isDefaultCategory": cat.ID == 0 || cat.Default,
+				"includeInUpdate":   cat.IncludeInUpdate.GraphQLEnum(),
+				"includeInDownload": cat.IncludeInDownload.GraphQLEnum(),
+				"mangas": map[string]interface{}{
+					"totalCount": 0,
+					"__typename": "MangaNodeList",
+				},
+				"meta":       []interface{}{},
+				"__typename": "CategoryType",
 			})
 		}
 		if catOrderPayload == nil {
@@ -4553,8 +4763,32 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				}
 
 				deletedChapters = append(deletedChapters, map[string]interface{}{
-					"id":           cid,
-					"isDownloaded": false,
+					"id":            cid,
+					"name":          chName.String,
+					"url":           "",
+					"realUrl":       "",
+					"mangaId":       chMangaID,
+					"scanlator":     scanlator.String,
+					"sourceOrder":   0,
+					"chapterNumber": 0,
+					"isRead":        false,
+					"isDownloaded":  false,
+					"isBookmarked":  false,
+					"fetchedAt":     0,
+					"uploadDate":    0,
+					"lastReadAt":    0,
+					"lastPageRead":  0,
+					"pageCount":     0,
+					"meta":          []interface{}{},
+					"user": map[string]interface{}{
+						"chapterId":    cid,
+						"isRead":       false,
+						"isDownloaded": false,
+						"isBookmarked": false,
+						"lastReadAt":   0,
+						"lastPageRead": 0,
+						"__typename":   "ChapterUserType",
+					},
 					"manga": map[string]interface{}{
 						"id":            chMangaID,
 						"downloadCount": 0,
@@ -4937,6 +5171,17 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"data": nil})
 	}
 
+	if dataMap, ok := data.(map[string]interface{}); ok && dataMap != nil {
+		if _, exists := dataMap["__typename"]; !exists {
+			isMutation := strings.HasPrefix(strings.TrimSpace(req.Query), "mutation") || strings.Contains(req.Query, "mutation ")
+			if isMutation {
+				dataMap["__typename"] = "Mutation"
+			} else {
+				dataMap["__typename"] = "Query"
+			}
+		}
+	}
+
 	return c.JSON(fiber.Map{"data": data})
 }
 
@@ -5201,6 +5446,8 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 				"name":          fuName,
 				"scanlator":     fuScanlator,
 				"lastPageRead":  fuLastPageRead,
+				"url":           "",
+				"realUrl":       "",
 				"user": map[string]interface{}{
 					"chapterId":    fuID,
 					"isRead":       false,
@@ -5218,6 +5465,9 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 		if maxLastReadAt > 0 {
 			lastReadChapter = map[string]interface{}{
 				"id":           lrID,
+				"name":         "",
+				"url":          "",
+				"realUrl":      "",
 				"sourceOrder":  lrSourceOrder,
 				"lastReadAt":   maxLastReadAt,
 				"lastPageRead": lrLastPageRead,
@@ -5238,6 +5488,9 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 		if maxLastReadAt > 0 {
 			latestReadChapter = map[string]interface{}{
 				"id":           lrID,
+				"name":         "",
+				"url":          "",
+				"realUrl":      "",
 				"sourceOrder":  lrSourceOrder,
 				"lastReadAt":   maxLastReadAt,
 				"lastPageRead": lrLastPageRead,
@@ -5258,6 +5511,9 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 		if maxDateUpload > 0 {
 			latestUploadedChapter = map[string]interface{}{
 				"id":         luID,
+				"name":       "",
+				"url":        "",
+				"realUrl":    "",
 				"uploadDate": maxDateUpload,
 				"__typename": "ChapterType",
 			}
@@ -5267,6 +5523,9 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 		if maxFetchedAt > 0 {
 			latestFetchedChapter = map[string]interface{}{
 				"id":         0,
+				"name":       "",
+				"url":        "",
+				"realUrl":    "",
 				"fetchedAt":  maxFetchedAt,
 				"__typename": "ChapterType",
 			}
@@ -5276,6 +5535,9 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 		if maxChapterNumber > 0 {
 			highestNumberedChapter = map[string]interface{}{
 				"id":            0,
+				"name":          "",
+				"url":           "",
+				"realUrl":       "",
 				"chapterNumber": maxChapterNumber,
 				"__typename":    "ChapterType",
 			}
@@ -5464,7 +5726,7 @@ func fetchChaptersForMangaIDs(ctx context.Context, mangaIDs []int64, orderBy str
 	query := fmt.Sprintf(`
 		SELECT c.id, COALESCE(c.name, ''), COALESCE(c.scanlator, ''), COALESCE(c.real_url, ''), c.source_order, c.chapter_number, 
 		       COALESCE(cu.read, false), COALESCE(cu.is_downloaded, false), COALESCE(cu.bookmark, false), c.fetched_at, c.date_upload, COALESCE(cu.last_read_at, 0),
-		       COALESCE(cu.last_page_read, 0), COALESCE(c.page_count, -1), c.manga
+		       COALESCE(cu.last_page_read, 0), COALESCE(c.page_count, -1), c.manga, COALESCE(c.url, '')
 		FROM suwayomi.chapter c
 		LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter
 		WHERE c.manga = ANY($1)
@@ -5480,7 +5742,7 @@ func fetchChaptersForMangaIDs(ctx context.Context, mangaIDs []int64, orderBy str
 	var nodes []map[string]interface{}
 	for rows.Next() {
 		var id int64
-		var name, scanlator, realUrl string
+		var name, scanlator, realUrl, chapterUrl string
 		var sourceOrder int
 		var chapterNumber float32
 		var read, isDownloaded, bookmark bool
@@ -5490,7 +5752,7 @@ func fetchChaptersForMangaIDs(ctx context.Context, mangaIDs []int64, orderBy str
 		err := rows.Scan(
 			&id, &name, &scanlator, &realUrl, &sourceOrder, &chapterNumber,
 			&read, &isDownloaded, &bookmark, &fetchedAt, &dateUpload, &lastReadAt,
-			&lastPageRead, &pageCount, &mId,
+			&lastPageRead, &pageCount, &mId, &chapterUrl,
 		)
 		if err == nil {
 			if chapterNumber <= 0 {
@@ -5499,6 +5761,9 @@ func fetchChaptersForMangaIDs(ctx context.Context, mangaIDs []int64, orderBy str
 				} else if sourceOrder > 0 {
 					chapterNumber = float32(sourceOrder)
 				}
+			}
+			if chapterUrl == "" {
+				chapterUrl = realUrl
 			}
 			nodes = append(nodes, map[string]interface{}{
 				"id":            id,
@@ -5510,6 +5775,8 @@ func fetchChaptersForMangaIDs(ctx context.Context, mangaIDs []int64, orderBy str
 					"thumbnailUrl":            fmt.Sprintf("/api/v1/manga/%d/thumbnail", mId),
 					"thumbnailUrlLastFetched": 0,
 					"sourceId":                "0",
+					"url":                     "",
+					"realUrl":                 "",
 					"inLibrary":               true,
 					"inLibraryAt":             0,
 					"initialized":             true,
@@ -5529,6 +5796,7 @@ func fetchChaptersForMangaIDs(ctx context.Context, mangaIDs []int64, orderBy str
 				},
 				"scanlator":     scanlator,
 				"realUrl":       realUrl,
+				"url":           chapterUrl,
 				"sourceOrder":   sourceOrder,
 				"chapterNumber": chapterNumber,
 				"isRead":        read,
@@ -5683,6 +5951,7 @@ func fetchUpdatesOrHistoryChapters(ctx context.Context, isHistory bool, limit, o
 
 	type chapterRow struct {
 		id            int64
+		url           string
 		name          string
 		scanlator     string
 		realUrl       string
@@ -5714,7 +5983,7 @@ func fetchUpdatesOrHistoryChapters(ctx context.Context, isHistory bool, limit, o
 
 		q := `
 			SELECT 
-				c.id, COALESCE(c.name, ''), COALESCE(c.scanlator, ''), COALESCE(c.real_url, ''), c.source_order, c.chapter_number,
+				c.id, COALESCE(c.url, ''), COALESCE(c.name, ''), COALESCE(c.scanlator, ''), COALESCE(c.real_url, ''), c.source_order, c.chapter_number,
 				COALESCE(cu.read, false), COALESCE(cu.is_downloaded, false), COALESCE(cu.bookmark, false),
 				c.fetched_at, c.date_upload, cu.last_read_at, COALESCE(cu.last_page_read, 0), COALESCE(c.page_count, -1),
 				m.id
@@ -5734,7 +6003,7 @@ func fetchUpdatesOrHistoryChapters(ctx context.Context, isHistory bool, limit, o
 		for r.Next() {
 			var cr chapterRow
 			if err := r.Scan(
-				&cr.id, &cr.name, &cr.scanlator, &cr.realUrl, &cr.sourceOrder, &cr.chapterNumber,
+				&cr.id, &cr.url, &cr.name, &cr.scanlator, &cr.realUrl, &cr.sourceOrder, &cr.chapterNumber,
 				&cr.read, &cr.isDownloaded, &cr.bookmark,
 				&cr.fetchedAt, &cr.dateUpload, &cr.lastReadAt, &cr.lastPageRead, &cr.pageCount,
 				&cr.mangaId,
@@ -5758,7 +6027,7 @@ func fetchUpdatesOrHistoryChapters(ctx context.Context, isHistory bool, limit, o
 
 		q := `
 			SELECT 
-				c.id, COALESCE(c.name, ''), COALESCE(c.scanlator, ''), COALESCE(c.real_url, ''), c.source_order, c.chapter_number,
+				c.id, COALESCE(c.url, ''), COALESCE(c.name, ''), COALESCE(c.scanlator, ''), COALESCE(c.real_url, ''), c.source_order, c.chapter_number,
 				COALESCE(cu.read, false), COALESCE(cu.is_downloaded, false), COALESCE(cu.bookmark, false),
 				c.fetched_at, c.date_upload, COALESCE(cu.last_read_at, 0), COALESCE(cu.last_page_read, 0), COALESCE(c.page_count, -1),
 				m.id
@@ -5779,7 +6048,7 @@ func fetchUpdatesOrHistoryChapters(ctx context.Context, isHistory bool, limit, o
 		for r.Next() {
 			var cr chapterRow
 			if err := r.Scan(
-				&cr.id, &cr.name, &cr.scanlator, &cr.realUrl, &cr.sourceOrder, &cr.chapterNumber,
+				&cr.id, &cr.url, &cr.name, &cr.scanlator, &cr.realUrl, &cr.sourceOrder, &cr.chapterNumber,
 				&cr.read, &cr.isDownloaded, &cr.bookmark,
 				&cr.fetchedAt, &cr.dateUpload, &cr.lastReadAt, &cr.lastPageRead, &cr.pageCount,
 				&cr.mangaId,
@@ -5836,6 +6105,15 @@ func fetchUpdatesOrHistoryChapters(ctx context.Context, isHistory bool, limit, o
 				"unreadCount":             0,
 				"downloadCount":           0,
 				"bookmarkCount":           0,
+				"age":                     0,
+				"artist":                  "",
+				"author":                  "",
+				"description":             "",
+				"status":                  "UNKNOWN",
+				"chaptersLastFetchedAt":   0,
+				"lastFetchedAt":           0,
+				"realUrl":                 "",
+				"url":                     "",
 				"user": map[string]interface{}{
 					"inLibrary":     true,
 					"inLibraryAt":   0,
@@ -5849,7 +6127,6 @@ func fetchUpdatesOrHistoryChapters(ctx context.Context, isHistory bool, limit, o
 				"meta":                    []interface{}{},
 				"hasDuplicateChapters":    false,
 				"updateStrategy":          "ALWAYS_UPDATE",
-				"url":                     "",
 				"chapters": map[string]interface{}{
 					"totalCount": 0,
 					"__typename": "ChapterNodeList",
@@ -5868,12 +6145,22 @@ func fetchUpdatesOrHistoryChapters(ctx context.Context, isHistory bool, limit, o
 			}
 		}
 
+		chUrl := cr.url
+		if chUrl == "" {
+			chUrl = cr.realUrl
+		}
+		chRealUrl := cr.realUrl
+		if chRealUrl == "" {
+			chRealUrl = chUrl
+		}
+
 		nodes = append(nodes, map[string]interface{}{
 			"id":            cr.id,
 			"name":          cr.name,
+			"url":           chUrl,
+			"realUrl":       chRealUrl,
 			"mangaId":       cr.mangaId,
 			"scanlator":     cr.scanlator,
-			"realUrl":       cr.realUrl,
 			"sourceOrder":   cr.sourceOrder,
 			"chapterNumber": cr.chapterNumber,
 			"isRead":        cr.read,

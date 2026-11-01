@@ -1,4 +1,4 @@
-package sources
+﻿package sources
 
 import (
 	"context"
@@ -113,5 +113,23 @@ func TestLectorXDParsing(t *testing.T) {
 	}
 	if len(pages) != 2 || pages[0] != "https://s1.cdnlxd.xyz/6910/2/1.webp" {
 		t.Errorf("Unexpected pages: %+v", pages)
+	}
+}
+
+func TestParseLectorXDRelativeDate(t *testing.T) {
+	d18 := parseLectorXDRelativeDate("18d")
+	if d18 == 0 {
+		t.Errorf("Expected non-zero timestamp for 18d")
+	}
+	d8 := parseLectorXDRelativeDate("8d")
+	if d8 == 0 {
+		t.Errorf("Expected non-zero timestamp for 8d")
+	}
+	if d18 >= d8 {
+		t.Errorf("Expected 18d to be older (smaller timestamp) than 8d: %d vs %d", d18, d8)
+	}
+	dHoy := parseLectorXDRelativeDate("hoy")
+	if dHoy <= d8 {
+		t.Errorf("Expected hoy to be newer than 8d")
 	}
 }

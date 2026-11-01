@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -178,6 +179,36 @@ func (h *LectorXDHandler) GetChapterList(ctx context.Context, mangaURL string) (
 	mTypeMatch := reType.FindStringSubmatch(html)
 	mListMatch := reList.FindStringSubmatch(html)
 
+	// Pre-extract chapter upload dates from DOM elements
+	chapterDates := make(map[string]int64)
+	if doc, errDoc := goquery.NewDocumentFromReader(strings.NewReader(html)); errDoc == nil {
+		doc.Find("div.group").Each(func(i int, s *goquery.Selection) {
+			a := s.Find("a[href*='/leer/']").First()
+			href, _ := a.Attr("href")
+			if href == "" {
+				return
+			}
+			parts := strings.Split(href, "/leer/")
+			if len(parts) < 2 {
+				return
+			}
+			chPart := strings.TrimSpace(strings.Split(parts[1], "?")[0])
+			if chPart == "" {
+				return
+			}
+
+			s.Find("span").Each(func(_ int, span *goquery.Selection) {
+				txt := strings.TrimSpace(span.Text())
+				if txt == "" || txt == "schedule" || strings.HasPrefix(txt, "Cap") {
+					return
+				}
+				if d := parseLectorXDRelativeDate(txt); d > 0 {
+					chapterDates[chPart] = d
+				}
+			})
+		})
+	}
+
 	if len(mListMatch) < 2 {
 		// Fallback to scraping a[href*="/leer/"]
 		doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
@@ -210,11 +241,14 @@ func (h *LectorXDHandler) GetChapterList(ctx context.Context, mangaURL string) (
 				name = fmt.Sprintf("Capítulo %s", chStr)
 			}
 
+			dateUp := chapterDates[chStr]
+
 			fallbackChapters = append(fallbackChapters, ChapterItem{
 				Name:          name,
 				URL:           chURL,
 				RealURL:       h.baseURL + chURL,
 				ChapterNumber: float32(num),
+				DateUpload:    dateUp,
 			})
 		})
 
@@ -272,16 +306,65 @@ func (h *LectorXDHandler) GetChapterList(ctx context.Context, mangaURL string) (
 		chURL := fmt.Sprintf("/%s/%s/leer/%s", mType, mSlug, entry.Chapter)
 		chName := fmt.Sprintf("Capítulo %s", entry.Chapter)
 
+		dateUp := chapterDates[entry.Chapter]
+
 		chapters = append(chapters, ChapterItem{
 			Name:          chName,
 			URL:           chURL,
 			RealURL:       h.baseURL + chURL,
 			ChapterNumber: float32(chNum),
+			DateUpload:    dateUp,
 			SourceOrder:   i + 1,
 		})
 	}
 
 	return chapters, nil
+}
+
+func parseLectorXDRelativeDate(dateStr string) int64 {
+	dateStr = strings.TrimSpace(strings.ToLower(dateStr))
+	if dateStr == "" {
+		return 0
+	}
+	now := time.Now()
+
+	if dateStr == "hoy" || strings.Contains(dateStr, "ahora") {
+		return now.UnixMilli()
+	}
+	if dateStr == "ayer" {
+		return now.Add(-24 * time.Hour).UnixMilli()
+	}
+
+	re := regexp.MustCompile(`(\d+)\s*([a-zA-Záéíóúñ]+)`)
+	m := re.FindStringSubmatch(dateStr)
+	if len(m) == 3 {
+		n, err := strconv.Atoi(m[1])
+		if err == nil && n > 0 {
+			unit := m[2]
+			switch {
+			case strings.HasPrefix(unit, "d"): // d, dia, dias, días
+				return now.Add(-time.Duration(n) * 24 * time.Hour).UnixMilli()
+			case strings.HasPrefix(unit, "h"): // h, hora, horas
+				return now.Add(-time.Duration(n) * time.Hour).UnixMilli()
+			case strings.HasPrefix(unit, "min") || unit == "m": // m, min, minuto, minutos
+				return now.Add(-time.Duration(n) * time.Minute).UnixMilli()
+			case strings.HasPrefix(unit, "sem") || strings.HasPrefix(unit, "w"): // sem, semanas, w
+				return now.Add(-time.Duration(n) * 7 * 24 * time.Hour).UnixMilli()
+			case strings.HasPrefix(unit, "mes"): // mes, meses
+				return now.Add(-time.Duration(n) * 30 * 24 * time.Hour).UnixMilli()
+			case strings.HasPrefix(unit, "a") || strings.HasPrefix(unit, "y"): // año, anos, a, year
+				return now.Add(-time.Duration(n) * 365 * 24 * time.Hour).UnixMilli()
+			}
+		}
+	}
+
+	for _, layout := range []string{"02/01/2006", "2006-01-02", "02-01-2006", "2 Jan 2006", "02/01/06"} {
+		if t, err := time.Parse(layout, dateStr); err == nil {
+			return t.UnixMilli()
+		}
+	}
+
+	return 0
 }
 
 // GetPageList retrieves all page image URLs from a chapter reader page.

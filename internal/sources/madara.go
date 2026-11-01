@@ -1,4 +1,4 @@
-package sources
+﻿package sources
 
 import (
 	"context"
@@ -237,7 +237,7 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 					dateStr := strings.TrimSpace(s.Find("span.chapter-release-date, .chapter-release-date").Text())
 					for _, layout := range []string{"2 January, 2006", "January 2, 2006", "02/01/2006", "2006-01-02", "02-01-2006", "2006-01-02 15:04:05"} {
 						if t, err := time.Parse(layout, dateStr); err == nil {
-							dateUpload = t.Unix()
+							dateUpload = t.UnixMilli()
 							break
 						}
 					}
