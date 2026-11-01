@@ -77,6 +77,29 @@ func ExtractDomain(rawURL string) string {
 	return extractDomain(rawURL)
 }
 
+// isStaticAssetURL returns true if the URL appears to point to a static asset
+// (image, font, etc.) rather than an HTML page. Used to avoid passing image
+// URLs directly to byparr/FlareSolverr, which cannot solve challenges for
+// non-HTML resources.
+func isStaticAssetURL(rawURL string) bool {
+	lower := strings.ToLower(rawURL)
+	staticExts := []string{".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".eot"}
+	for _, ext := range staticExts {
+		// Match extension before query string or end of path
+		if idx := strings.Index(lower, ext); idx != -1 {
+			after := lower[idx+len(ext):]
+			if after == "" || after[0] == '?' || after[0] == '#' || after[0] == '/' {
+				return true
+			}
+		}
+	}
+	// WordPress-style upload paths
+	if strings.Contains(lower, "/wp-content/uploads/") || strings.Contains(lower, "/uploads/") {
+		return true
+	}
+	return false
+}
+
 func getSession(domain string) ([]flareSolverrCookie, string, bool) {
 	if domain == "" {
 		return nil, "", false
@@ -320,8 +343,16 @@ func DownloadWithFlareSolverrAndReferer(ctx context.Context, cfg *config.Config,
 			}
 		}
 
-		log.Printf("[FLARESOLVERR] Solving challenge for %s (%s)", sfKey, targetURL)
-		cookies, ua, solveErr := solveCloudflareChallenge(ctx, cfg, targetURL)
+		// For static asset URLs (images, etc.), solve the challenge on the domain root.
+		// byparr/FlareSolverr cannot render image URLs — they need an HTML page.
+		challengeTarget := targetURL
+		if isStaticAssetURL(targetURL) && domain != "" {
+			challengeTarget = "https://" + domain + "/"
+			log.Printf("[FLARESOLVERR] Static asset detected — solving challenge on domain root: %s", challengeTarget)
+		} else {
+			log.Printf("[FLARESOLVERR] Solving challenge for %s (%s)", sfKey, targetURL)
+		}
+		cookies, ua, solveErr := solveCloudflareChallenge(ctx, cfg, challengeTarget)
 		if solveErr != nil {
 			return nil, solveErr
 		}

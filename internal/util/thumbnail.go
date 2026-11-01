@@ -20,12 +20,15 @@ func GetMangaThumbnailPath(cfg *config.Config, mangaId int) (string, string, err
 	extensions := []string{".jpg", ".jpeg", ".png", ".webp"}
 	for _, ext := range extensions {
 		fullPath := filepath.Join(thumbnailDir, mangaIdStr+ext)
-		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
+		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() && info.Size() > 0 {
 			mimeType := mime.TypeByExtension(ext)
 			if mimeType == "" {
 				mimeType = "image/jpeg"
 			}
 			return fullPath, mimeType, nil
+		} else if err == nil && info.Size() == 0 {
+			// Remove zero-byte stub files left by failed previous downloads
+			_ = os.Remove(fullPath)
 		}
 	}
 

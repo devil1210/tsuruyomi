@@ -66,9 +66,17 @@ func downloadImageRaw(ctx context.Context, cfg *config.Config, imgURL string) ([
 		return nil, "", fmt.Errorf("empty image URL")
 	}
 
+	// Use domain root as referer for static asset URLs (images from wp-content, etc.)
+	// Sending the image URL itself as its own referer looks suspicious and triggers 403.
+	imgDomain := util.ExtractDomain(imgURL)
+	imgReferer := imgURL
+	if imgDomain != "" {
+		imgReferer = "https://" + imgDomain + "/"
+	}
+
 	// Fast-path: If FlareSolverr is enabled and we already have a cached session for this domain, use it directly!
-	if cfg != nil && cfg.FlareSolverr.Enabled && util.HasSession(util.ExtractDomain(imgURL)) {
-		fsData, mimeType, fsErr := util.DownloadWithFlareSolverrAndReferer(ctx, cfg, imgURL, imgURL)
+	if cfg != nil && cfg.FlareSolverr.Enabled && util.HasSession(imgDomain) {
+		fsData, mimeType, fsErr := util.DownloadWithFlareSolverrAndReferer(ctx, cfg, imgURL, imgReferer)
 		if fsErr == nil && len(fsData) > 0 {
 			return fsData, mimeType, nil
 		}
@@ -79,7 +87,7 @@ func downloadImageRaw(ctx context.Context, cfg *config.Config, imgURL string) ([
 		return nil, "", reqErr
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Referer", imgURL)
+	req.Header.Set("Referer", imgReferer)
 	dlClient := &http.Client{Timeout: 8 * time.Second}
 	resp, respErr := dlClient.Do(req)
 	if respErr == nil && resp.StatusCode == http.StatusOK {
@@ -98,7 +106,7 @@ func downloadImageRaw(ctx context.Context, cfg *config.Config, imgURL string) ([
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
-		fsData, mimeType, fsErr := util.DownloadWithFlareSolverrAndReferer(ctx, cfg, imgURL, imgURL)
+		fsData, mimeType, fsErr := util.DownloadWithFlareSolverrAndReferer(ctx, cfg, imgURL, imgReferer)
 		if fsErr == nil && len(fsData) > 0 {
 			return fsData, mimeType, nil
 		}
