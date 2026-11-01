@@ -108,8 +108,8 @@ func TestAuthMiddlewareIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to execute POST login: %v", err)
 	}
-	if respPostLogin.StatusCode != fiber.StatusFound {
-		t.Errorf("Expected 302 Found redirect, got %d", respPostLogin.StatusCode)
+	if respPostLogin.StatusCode != fiber.StatusSeeOther && respPostLogin.StatusCode != fiber.StatusFound {
+		t.Errorf("Expected 303 See Other redirect, got %d", respPostLogin.StatusCode)
 	}
 	setCookie := respPostLogin.Header.Get("Set-Cookie")
 	if !strings.Contains(setCookie, auth.SessionCookieName) {

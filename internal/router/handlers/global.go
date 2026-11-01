@@ -25,7 +25,10 @@ import (
 func GetLogin(c *fiber.Ctx) error {
 	hasError := c.Query("error") == "1"
 	redirect := c.Query("redirect", "/")
+	return renderLoginForm(c, redirect, hasError)
+}
 
+func renderLoginForm(c *fiber.Ctx, redirect string, hasError bool) error {
 	errorBanner := ""
 	if hasError {
 		errorBanner = `<div style="background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #fca5a5; padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; text-align: center;">Usuario o contraseña incorrectos.</div>`
@@ -82,7 +85,7 @@ func GetLogin(c *fiber.Ctx) error {
 </html>`, errorBanner, html.EscapeString(redirect))
 
 	c.Set(fiber.HeaderContentType, fiber.MIMETextHTMLCharsetUTF8)
-	return c.SendString(htmlPage)
+	return c.Status(fiber.StatusOK).SendString(htmlPage)
 }
 
 // PostLogin handles submission of the login form.
@@ -96,12 +99,12 @@ func PostLogin(c *fiber.Ctx) error {
 
 	cfg, ok := c.Locals("config").(*config.Config)
 	if !ok || cfg == nil {
-		return c.Redirect("/login.html?error=1")
+		return renderLoginForm(c, redirect, true)
 	}
 
 	// If auth is disabled, allow entry
 	if cfg.Auth.Mode == "none" {
-		return c.Redirect(redirect)
+		return c.Redirect(redirect, fiber.StatusSeeOther)
 	}
 
 	// Validate credentials in constant time
@@ -109,7 +112,9 @@ func PostLogin(c *fiber.Ctx) error {
 	passMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(cfg.Auth.Password)) == 1
 
 	if !userMatch || !passMatch {
-		return c.Redirect(fmt.Sprintf("/login.html?error=1&redirect=%s", redirect))
+		// Return 200 with the login form containing name="user" and name="pass"
+		// Suwayomi/Tsumiru protocol signals invalid credentials with HTTP 200 + HTML form
+		return renderLoginForm(c, redirect, true)
 	}
 
 	// Issue signed session token
@@ -124,7 +129,8 @@ func PostLogin(c *fiber.Ctx) error {
 		Secure:   c.Protocol() == "https" || c.Get("X-Forwarded-Proto") == "https",
 	})
 
-	return c.Redirect(redirect)
+	// HTTP 303 See Other is strictly expected by Tsumiru and modern browsers following POST-redirect-GET
+	return c.Redirect(redirect, fiber.StatusSeeOther)
 }
 
 // GetLogout logs out the user by clearing the session cookie.

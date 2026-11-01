@@ -671,13 +671,50 @@ func HandleGraphQL(c *fiber.Ctx) error {
 	if req.OperationName == "" && req.Query != "" {
 		fields := strings.Fields(req.Query)
 		for i, f := range fields {
-			if (f == "query" || f == "mutation") && i+1 < len(fields) {
+			if (f == "query" || f == "mutation" || f == "subscription") && i+1 < len(fields) {
 				op := fields[i+1]
 				if idx := strings.IndexAny(op, "({"); idx != -1 {
 					op = op[:idx]
 				}
 				req.OperationName = strings.TrimSpace(op)
 				break
+			}
+		}
+
+		if req.OperationName == "" {
+			// Extract first root selection field from anonymous queries like "query { downloadStatus { __typename } }"
+			q := strings.TrimSpace(req.Query)
+			if idx := strings.Index(q, "{"); idx != -1 {
+				inner := strings.TrimSpace(q[idx+1:])
+				var token strings.Builder
+				for _, r := range inner {
+					if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+						token.WriteRune(r)
+					} else if token.Len() > 0 {
+						break
+					}
+				}
+				if token.Len() > 0 {
+					rootField := token.String()
+					switch rootField {
+					case "aboutServer", "aboutWebUI", "about":
+						req.OperationName = "GET_ABOUT"
+					case "downloadStatus":
+						req.OperationName = "GET_DOWNLOAD_STATUS"
+					case "settings":
+						req.OperationName = "GET_SERVER_SETTINGS"
+					case "categories":
+						req.OperationName = "GET_CATEGORIES_LIBRARY"
+					case "mangas":
+						req.OperationName = "GET_MANGAS_LIBRARY"
+					case "chapters":
+						req.OperationName = "GET_CHAPTERS_READER"
+					case "checkForServerUpdates", "serverUpdate":
+						req.OperationName = "CHECK_FOR_SERVER_UPDATES"
+					default:
+						req.OperationName = rootField
+					}
+				}
 			}
 		}
 	}
@@ -849,7 +886,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_ABOUT":
+	case "GET_ABOUT", "GetAbout", "aboutServer", "aboutWebUI", "about":
 		nowSec := fmt.Sprintf("%d", time.Now().Unix())
 		nowMilli := fmt.Sprintf("%d", time.Now().UnixMilli())
 		data = map[string]interface{}{
@@ -902,7 +939,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_DOWNLOAD_STATUS":
+	case "GET_DOWNLOAD_STATUS", "downloadStatus", "DownloadStatus":
 		data = map[string]interface{}{
 			"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
 		}
@@ -1176,7 +1213,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "CHECK_FOR_SERVER_UPDATES":
+	case "CHECK_FOR_SERVER_UPDATES", "GetServerUpdate", "checkForServerUpdates":
 		data = map[string]interface{}{
 			"checkForServerUpdates": []map[string]interface{}{
 				{
@@ -1260,7 +1297,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_CATEGORIES_LIBRARY", "GET_CATEGORIES", "GET_CATEGORIES_BASE", "GET_CATEGORIES_SETTINGS":
+	case "GET_CATEGORIES_LIBRARY", "GET_CATEGORIES", "GET_CATEGORIES_BASE", "GET_CATEGORIES_SETTINGS", "AllCategories", "categories":
 		// Fetch categories dynamically from database
 		nodes := []map[string]interface{}{}
 		cats, err := database.GetCategoryList(c.Context())
@@ -1419,7 +1456,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_SOURCES_LIST":
+	case "GET_SOURCES_LIST", "SourceList", "sources":
 		nodes := []map[string]interface{}{}
 		srcs, err := database.GetSourceList(c.Context())
 		if err == nil {
@@ -1756,7 +1793,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_CHAPTERS_HISTORY":
+	case "GET_CHAPTERS_HISTORY", "GetReadingHistory":
 		limit := 150
 		if f, ok := req.Variables["first"].(float64); ok && f > 0 {
 			limit = int(f)
@@ -2890,7 +2927,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			"__typename": "SyncPayload",
 		}
 
-	case "GET_MANGAS_LIBRARY", "GET_MANGAS", "GET_MANGAS_BASE", "GET_MANGAS_DUPLICATES":
+	case "GET_MANGAS_LIBRARY", "GET_MANGAS", "GET_MANGAS_BASE", "GET_MANGAS_DUPLICATES", "GetCategoryMangas", "mangas":
 		var sourceIDFilter *int64
 		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
 			if sIdF, ok := cond["sourceId"].(float64); ok {
@@ -4290,7 +4327,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_SOURCE_BROWSE", "GET_SOURCE_SETTINGS":
+	case "GET_SOURCE_BROWSE", "GET_SOURCE_SETTINGS", "SourceById", "source":
 		var sourceID int64
 		if sID, ok := req.Variables["id"].(string); ok {
 			_, _ = fmt.Sscan(sID, &sourceID)
