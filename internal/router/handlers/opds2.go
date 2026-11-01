@@ -764,7 +764,7 @@ func GetOpds2LibraryUpdates(c *fiber.Ctx) error {
 			},
 			Images: []Opds2Link{
 				{
-					Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail", manga.ID),
+					Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail?opds=true", manga.ID),
 					Type: OpdsMimeJpeg,
 				},
 			},
@@ -860,7 +860,7 @@ func GetOpds2History(c *fiber.Ctx) error {
 			},
 			Images: []Opds2Link{
 				{
-					Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail", mID),
+					Href: fmt.Sprintf("/api/v1/manga/%d/thumbnail?opds=true", mID),
 					Type: OpdsMimeJpeg,
 				},
 			},
