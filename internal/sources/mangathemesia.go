@@ -72,7 +72,9 @@ func (h *MangaThemesiaHandler) fetchMangaList(ctx context.Context, targetURL str
 	}
 
 	var items []MangaItem
-	doc.Find("div.bsx, div.listupd div.bs, div.animposx").Each(func(i int, s *goquery.Selection) {
+	seen := make(map[string]bool)
+
+	doc.Find("div.bsx, div.animposx, div.listupd div.bs").Each(func(i int, s *goquery.Selection) {
 		a := s.Find("a").First()
 		href, _ := a.Attr("href")
 		title, _ := a.Attr("title")
@@ -86,23 +88,29 @@ func (h *MangaThemesiaHandler) fetchMangaList(ctx context.Context, targetURL str
 			return
 		}
 
+		mangaURL := href
+		if strings.HasPrefix(mangaURL, h.baseURL) {
+			mangaURL = strings.TrimPrefix(mangaURL, h.baseURL)
+		}
+
+		if seen[mangaURL] {
+			return
+		}
+		seen[mangaURL] = true
+
 		img := s.Find("img").First()
-		thumb, _ := img.Attr("data-src")
-		if thumb == "" {
-			thumb, _ = img.Attr("data-lazy-src")
+		thumb := ""
+		for _, attr := range []string{"data-lazy-src", "data-src", "data-original", "data-wpfc-original-src", "data-cfsrc", "src"} {
+			if val, ok := img.Attr(attr); ok && strings.TrimSpace(val) != "" {
+				thumb = strings.TrimSpace(val)
+				break
+			}
 		}
-		if thumb == "" {
-			thumb, _ = img.Attr("src")
-		}
+
 		if strings.HasPrefix(thumb, "//") {
 			thumb = "https:" + thumb
 		} else if strings.HasPrefix(thumb, "/") {
 			thumb = h.baseURL + thumb
-		}
-
-		mangaURL := href
-		if strings.HasPrefix(mangaURL, h.baseURL) {
-			mangaURL = strings.TrimPrefix(mangaURL, h.baseURL)
 		}
 
 		items = append(items, MangaItem{
@@ -115,6 +123,90 @@ func (h *MangaThemesiaHandler) fetchMangaList(ctx context.Context, targetURL str
 
 	hasNext := doc.Find("a.next, a.r, div.hpage a.r").Length() > 0
 	return items, hasNext, nil
+}
+
+func (h *MangaThemesiaHandler) GetMangaDetails(ctx context.Context, mangaURL string) (*MangaItem, error) {
+	fullURL := mangaURL
+	if !strings.HasPrefix(fullURL, "http") {
+		fullURL = h.baseURL + "/" + strings.TrimLeft(mangaURL, "/")
+	}
+
+	html, err := FetchHTML(ctx, fullURL, h.baseURL+"/")
+	if err != nil {
+		return nil, fmt.Errorf("fetching MangaThemesia manga details: %w", err)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil, fmt.Errorf("parsing HTML: %w", err)
+	}
+
+	title := strings.TrimSpace(doc.Find("h1.entry-title").Text())
+	thumb := ""
+	img := doc.Find("div.thumb img, div.bigcontent img").First()
+	for _, attr := range []string{"data-lazy-src", "data-src", "data-original", "data-wpfc-original-src", "data-cfsrc", "src"} {
+		if val, ok := img.Attr(attr); ok && strings.TrimSpace(val) != "" {
+			thumb = strings.TrimSpace(val)
+			break
+		}
+	}
+	if strings.HasPrefix(thumb, "//") {
+		thumb = "https:" + thumb
+	} else if strings.HasPrefix(thumb, "/") {
+		thumb = h.baseURL + thumb
+	}
+
+	desc := strings.TrimSpace(doc.Find("div.entry-content[itemprop=\"description\"], div.desc, div.synopsis").Text())
+
+	status := 1
+	doc.Find(".imptdt, .tsinfo .imptdt").Each(func(i int, s *goquery.Selection) {
+		text := strings.ToLower(s.Text())
+		if strings.Contains(text, "status") || strings.Contains(text, "estado") {
+			val := strings.ToLower(s.Find("i").Text())
+			if strings.Contains(val, "complet") || strings.Contains(val, "finaliz") {
+				status = 2
+			} else if strings.Contains(val, "cancel") {
+				status = 5
+			} else if strings.Contains(val, "paus") || strings.Contains(val, "hiat") {
+				status = 6
+			}
+		}
+	})
+
+	var author, artist string
+	doc.Find(".imptdt, .tsinfo .imptdt").Each(func(i int, s *goquery.Selection) {
+		text := strings.ToLower(s.Text())
+		if strings.Contains(text, "autor") || strings.Contains(text, "author") {
+			author = strings.TrimSpace(s.Find("i").Text())
+		}
+		if strings.Contains(text, "artista") || strings.Contains(text, "artist") {
+			artist = strings.TrimSpace(s.Find("i").Text())
+		}
+	})
+
+	var genres []string
+	doc.Find(".mgen a, .seriestugenre a").Each(func(i int, s *goquery.Selection) {
+		g := strings.TrimSpace(s.Text())
+		if g != "" {
+			genres = append(genres, g)
+		}
+	})
+
+	cleanURL := mangaURL
+	if strings.HasPrefix(cleanURL, h.baseURL) {
+		cleanURL = strings.TrimPrefix(cleanURL, h.baseURL)
+	}
+
+	return &MangaItem{
+		Title:        title,
+		URL:          cleanURL,
+		ThumbnailURL: thumb,
+		Description:  desc,
+		Status:       status,
+		Author:       author,
+		Artist:       artist,
+		Genres:       genres,
+	}, nil
 }
 
 func (h *MangaThemesiaHandler) GetChapterList(ctx context.Context, mangaURL string) ([]ChapterItem, error) {

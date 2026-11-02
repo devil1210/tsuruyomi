@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +62,9 @@ func getCDNReferer(imgURL string) string {
 	if strings.Contains(imgURL, "img2mw.xyz") || strings.Contains(imgURL, "img1mw.xyz") || strings.Contains(imgURL, "manhwaweb") {
 		return "https://manhwaweb.com/"
 	}
+	if strings.Contains(imgURL, "uchuujinmangas.com") {
+		return "https://uchuujinmangas.com/"
+	}
 	if strings.Contains(imgURL, "dragontranslation.org") {
 		return "https://dragontranslation.org/"
 	}
@@ -84,7 +88,9 @@ func getCDNReferer(imgURL string) string {
 }
 
 func isKnownDeadDomain(rawUrl string) bool {
-	return strings.Contains(rawUrl, "otakuteca.com")
+	return strings.Contains(rawUrl, "otakuteca.com") ||
+		strings.Contains(rawUrl, "imageshack.com") ||
+		strings.Contains(rawUrl, "sin_portada")
 }
 
 func downloadImageRaw(ctx context.Context, cfg *config.Config, imgURL string) ([]byte, string, error) {
@@ -108,8 +114,12 @@ func downloadImageRaw(ctx context.Context, cfg *config.Config, imgURL string) ([
 	if reqErr != nil {
 		return nil, "", reqErr
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Referer", imgReferer)
+	if strings.Contains(imgURL, "mangadex.org") || strings.Contains(imgURL, "anilist.co") {
+		req.Header.Set("User-Agent", "Tsuruyomi/1.0 (https://github.com/Suwayomi)")
+	} else {
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		req.Header.Set("Referer", imgReferer)
+	}
 	dlClient := &http.Client{Timeout: 8 * time.Second}
 	resp, respErr := dlClient.Do(req)
 	if respErr == nil && resp.StatusCode == http.StatusOK {
@@ -209,11 +219,60 @@ func findSiblingCover(ctx context.Context, cfg *config.Config, mangaId int, titl
 	return nil, "", fmt.Errorf("no sibling cover found")
 }
 
-func findMangaDexCover(ctx context.Context, cfg *config.Config, title string) ([]byte, string, error) {
-	if title == "" {
-		return nil, "", fmt.Errorf("empty title")
+var (
+	rxPunctuation       = regexp.MustCompile(`[¿?¡!.,~"'()[\]{}:;/\\]+`)
+	rxMultiSpace        = regexp.MustCompile(`\s+`)
+	rxTrailingTimestamp = regexp.MustCompile(`[_-]\d{9,}$`)
+)
+
+var manualCoverMappings = map[int]string{
+	130: "Gotou-san",
+	200: "Danna ga Nani",
+	547: "Kouhai wa Inkya Agari no Influencer",
+	583: "Utsushicha Dame-na Kao",
+	686: "Tsukushitagari na Uchi no Yome",
+	713: "Heroine wa xx o Kasegitai",
+	737: "https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/bx203020-vkIuLptB7wsE.jpg",
+	747: "Saigai de Tamago wo Ushinatta Dragon",
+	748: "Yankee Shoujo to Tomodachi ni Naru Hanashi",
+	757: "Tora Tokidoki Bunny",
+	764: "Nibanme na Boku to Ichiban no Kanojo",
+	793: "Kurokami Seiso",
+	794: "Tsundere Hokuou Bishoujo no Classmate",
+}
+
+func cleanSearchQuery(s string) string {
+	s = rxPunctuation.ReplaceAllString(s, " ")
+	s = rxMultiSpace.ReplaceAllLiteralString(s, " ")
+	return strings.TrimSpace(s)
+}
+
+func extractSlugTitle(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	path := rawURL
+	if err == nil && u.Path != "" {
+		path = u.Path
 	}
-	apiURL := fmt.Sprintf("https://api.mangadex.org/manga?title=%s&limit=1&includes[]=cover_art", url.QueryEscape(title))
+	path = strings.Trim(path, "/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	slug := parts[len(parts)-1]
+	if _, err := strconv.Atoi(slug); err == nil && len(parts) > 1 {
+		slug = parts[len(parts)-2]
+	}
+	slug = rxTrailingTimestamp.ReplaceAllString(slug, "")
+	slug = strings.ReplaceAll(slug, "-", " ")
+	slug = strings.ReplaceAll(slug, "_", " ")
+	return cleanSearchQuery(slug)
+}
+
+func searchMangaDexCover(ctx context.Context, cfg *config.Config, query string) ([]byte, string, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, "", fmt.Errorf("empty query")
+	}
+	apiURL := fmt.Sprintf("https://api.mangadex.org/manga?title=%s&limit=1&includes[]=cover_art", url.QueryEscape(query))
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
 		return nil, "", err
@@ -266,6 +325,202 @@ func findMangaDexCover(ctx context.Context, cfg *config.Config, title string) ([
 	return data, mime, err
 }
 
+func searchAniListCover(ctx context.Context, cfg *config.Config, query string) ([]byte, string, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, "", fmt.Errorf("empty query")
+	}
+	type GQLRequest struct {
+		Query     string                 `json:"query"`
+		Variables map[string]interface{} `json:"variables"`
+	}
+	gqlQuery := `query ($search: String) {
+		Media(search: $search, type: MANGA) {
+			coverImage {
+				extraLarge
+				large
+			}
+		}
+	}`
+	reqBody, _ := json.Marshal(GQLRequest{
+		Query: gqlQuery,
+		Variables: map[string]interface{}{
+			"search": query,
+		},
+	})
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://graphql.anilist.co", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "Tsuruyomi/1.0 (https://github.com/Suwayomi)")
+
+	client := &http.Client{Timeout: 6 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, "", fmt.Errorf("anilist api request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data struct {
+			Media struct {
+				CoverImage struct {
+					ExtraLarge string `json:"extraLarge"`
+					Large      string `json:"large"`
+				} `json:"coverImage"`
+			} `json:"Media"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, "", fmt.Errorf("decoding anilist response: %w", err)
+	}
+	coverURL := result.Data.Media.CoverImage.ExtraLarge
+	if coverURL == "" {
+		coverURL = result.Data.Media.CoverImage.Large
+	}
+	if coverURL == "" {
+		return nil, "", fmt.Errorf("no cover image in anilist result")
+	}
+	return downloadImageRaw(ctx, cfg, coverURL)
+}
+
+func refreshManhwaWebCover(ctx context.Context, cfg *config.Config, mangaURL string) ([]byte, string, string, error) {
+	u, err := url.Parse(mangaURL)
+	path := mangaURL
+	if err == nil && u.Path != "" {
+		path = u.Path
+	}
+	path = strings.Trim(path, "/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 {
+		return nil, "", "", fmt.Errorf("empty manga URL")
+	}
+	slug := parts[len(parts)-1]
+	if slug == "" {
+		return nil, "", "", fmt.Errorf("empty slug")
+	}
+
+	client := &http.Client{Timeout: 6 * time.Second}
+	endpoints := []string{
+		fmt.Sprintf("https://api.manhwaweb.com/manhwa/see/%s", slug),
+		fmt.Sprintf("https://api.manhwaweb.com/manga/see/%s", slug),
+	}
+
+	for _, ep := range endpoints {
+		req, err := http.NewRequestWithContext(ctx, "GET", ep, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		req.Header.Set("Referer", "https://manhwaweb.com/")
+
+		resp, err := client.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			continue
+		}
+
+		var apiRes struct {
+			Imagen string `json:"_imagen"`
+			Cover  string `json:"cover"`
+			Image  string `json:"image"`
+		}
+		decErr := json.NewDecoder(resp.Body).Decode(&apiRes)
+		_ = resp.Body.Close()
+
+		remoteImg := apiRes.Imagen
+		if remoteImg == "" {
+			remoteImg = apiRes.Cover
+		}
+		if remoteImg == "" {
+			remoteImg = apiRes.Image
+		}
+
+		if decErr == nil && remoteImg != "" && !isKnownDeadDomain(remoteImg) {
+			coverURL := rewriteKnownCDN(remoteImg)
+			data, mime, dlErr := downloadImageRaw(ctx, cfg, coverURL)
+			if dlErr == nil && len(data) > 0 {
+				return data, mime, coverURL, nil
+			}
+		}
+	}
+	return nil, "", "", fmt.Errorf("failed to refresh ManhwaWeb cover")
+}
+
+func findRemoteCover(ctx context.Context, cfg *config.Config, mangaId int, title, mangaURL string) ([]byte, string, error) {
+	// 1. Check manual mapping
+	if target, ok := manualCoverMappings[mangaId]; ok {
+		if strings.HasPrefix(target, "http") {
+			if data, mime, err := downloadImageRaw(ctx, cfg, target); err == nil && len(data) > 0 {
+				return data, mime, nil
+			}
+		} else {
+			if data, mime, err := searchMangaDexCover(ctx, cfg, target); err == nil && len(data) > 0 {
+				return data, mime, nil
+			}
+			if data, mime, err := searchAniListCover(ctx, cfg, target); err == nil && len(data) > 0 {
+				return data, mime, nil
+			}
+		}
+	}
+
+	var candidates []string
+	cleanTitle := cleanSearchQuery(title)
+	if cleanTitle != "" {
+		candidates = append(candidates, cleanTitle)
+		words := strings.Fields(cleanTitle)
+		if len(words) >= 4 {
+			candidates = append(candidates, strings.Join(words[:4], " "))
+		}
+		if len(words) >= 3 {
+			candidates = append(candidates, strings.Join(words[:3], " "))
+		}
+		if len(words) >= 2 {
+			candidates = append(candidates, strings.Join(words[:2], " "))
+		}
+		for _, sep := range []string{":", " - ", "—", "~"} {
+			if strings.Contains(title, sep) {
+				prefix := cleanSearchQuery(strings.Split(title, sep)[0])
+				if prefix != "" && len(prefix) > 3 {
+					candidates = append(candidates, prefix)
+				}
+			}
+		}
+	}
+
+	slugTitle := extractSlugTitle(mangaURL)
+	if slugTitle != "" {
+		candidates = append(candidates, slugTitle)
+	}
+
+	seenCand := make(map[string]bool)
+	for _, cand := range candidates {
+		cand = strings.TrimSpace(cand)
+		if cand == "" || seenCand[cand] {
+			continue
+		}
+		seenCand[cand] = true
+
+		// Try MangaDex
+		if data, mime, err := searchMangaDexCover(ctx, cfg, cand); err == nil && len(data) > 0 {
+			return data, mime, nil
+		}
+		// Try AniList
+		if data, mime, err := searchAniListCover(ctx, cfg, cand); err == nil && len(data) > 0 {
+			return data, mime, nil
+		}
+	}
+
+	return nil, "", fmt.Errorf("no remote cover found for manga %d (%q)", mangaId, title)
+}
+
 // GetMangaThumbnail serves the cover image file from local cache or storage.
 func GetMangaThumbnail(c *fiber.Ctx) error {
 	mangaId, err := strconv.Atoi(c.Params("mangaId"))
@@ -306,8 +561,9 @@ func GetMangaThumbnail(c *fiber.Ctx) error {
 
 	// 3. Fallback: Download remotely via database URL or smart fallbacks
 	if database.DB != nil {
-		var dbUrl, title string
-		errDb := database.DB.QueryRow(c.Context(), "SELECT COALESCE(thumbnail_url, ''), COALESCE(title, '') FROM suwayomi.manga WHERE id = $1", mangaId).Scan(&dbUrl, &title)
+		var dbUrl, title, mangaURL string
+		var sourceID int64
+		errDb := database.DB.QueryRow(c.Context(), "SELECT COALESCE(thumbnail_url, ''), COALESCE(title, ''), COALESCE(source, 0), COALESCE(url, '') FROM suwayomi.manga WHERE id = $1", mangaId).Scan(&dbUrl, &title, &sourceID, &mangaURL)
 		if errDb == nil {
 			cleanUrl := rewriteKnownCDN(dbUrl)
 			if cleanUrl != dbUrl {
@@ -325,8 +581,21 @@ func GetMangaThumbnail(c *fiber.Ctx) error {
 				}
 			}
 
-			// If direct download failed or domain is known dead (like otakuteca.com):
-			// Strategy A: Check siblings in local library with identical title
+			// If direct download failed or domain is known dead (like otakuteca.com or imageshack.com):
+			// Strategy A: If ManhwaWeb (source 5943212552955476721), refresh directly from official API
+			if sourceID == 5943212552955476721 && mangaURL != "" {
+				if data, mimeType, newCoverURL, mwErr := refreshManhwaWebCover(c.Context(), cfg, mangaURL); mwErr == nil && len(data) > 0 {
+					saveThumbnailToDisk(cfg, mangaId, data)
+					if newCoverURL != "" {
+						_, _ = database.DB.Exec(c.Context(), "UPDATE suwayomi.manga SET thumbnail_url = $1 WHERE id = $2", newCoverURL, mangaId)
+					}
+					c.Set(fiber.HeaderContentType, mimeType)
+					c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
+					return c.Send(data)
+				}
+			}
+
+			// Strategy B: Check siblings in local library with identical title
 			if title != "" {
 				if data, mimeType, sibErr := findSiblingCover(c.Context(), cfg, mangaId, title); sibErr == nil && len(data) > 0 {
 					saveThumbnailToDisk(cfg, mangaId, data)
@@ -334,9 +603,11 @@ func GetMangaThumbnail(c *fiber.Ctx) error {
 					c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
 					return c.Send(data)
 				}
+			}
 
-				// Strategy B: Search MangaDex for official high-res cover
-				if data, mimeType, mdErr := findMangaDexCover(c.Context(), cfg, title); mdErr == nil && len(data) > 0 {
+			// Strategy C: Smart remote cover search via candidate titles/slugs across MangaDex & AniList
+			if title != "" || mangaURL != "" {
+				if data, mimeType, remErr := findRemoteCover(c.Context(), cfg, mangaId, title, mangaURL); remErr == nil && len(data) > 0 {
 					saveThumbnailToDisk(cfg, mangaId, data)
 					c.Set(fiber.HeaderContentType, mimeType)
 					c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
