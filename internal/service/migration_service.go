@@ -573,7 +573,7 @@ var TopSpanishSourceIDs = []int64{
 	4078570629457850125, // LectorXD (Native)
 	8701445043633550960, // LeerManhwas (Madara)
 	3044113561993269522, // ApollComics (Madara)
-	5943212552955476721, // ManhwaWeb (MangaThemesia)
+	5943212552955476721, // ManhwaWeb (Native API)
 	1136717301008230074, // Submanhwa (MangaThemesia)
 	829053423099062956,  // Mangas No Sekai (MangaThemesia)
 	3548601371328353875, // Manhwa-Latino (Madara)

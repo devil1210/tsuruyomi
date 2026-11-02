@@ -719,6 +719,8 @@ func buildGraphQLDownloadStatus(ctx context.Context) map[string]interface{} {
 			},
 			"manga": map[string]interface{}{
 				"id":                      item.MangaID,
+				"age":                     0,
+				"chaptersAge":             0,
 				"sourceId":                fmt.Sprintf("%d", mSourceID),
 				"title":                   mTitle,
 				"thumbnailUrl":            mThumb,
@@ -3889,6 +3891,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		} else {
 			mangaData = map[string]interface{}{
 				"id":           id,
+				"age":          0,
+				"chaptersAge":  0,
 				"title":        "",
 				"thumbnailUrl": fmt.Sprintf("/api/v1/manga/%d/thumbnail", id),
 				"genre":        []string{},
@@ -5938,11 +5942,11 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 		}
 
 		nowSec := time.Now().Unix()
-		var ageVal interface{} = nil
+		var ageVal int64 = 0
 		if lastFetchedAt > 0 {
 			ageVal = nowSec - lastFetchedAt
 		}
-		var chaptersAgeVal interface{} = nil
+		var chaptersAgeVal int64 = 0
 		if chaptersLastFetchedAt > 0 {
 			chaptersAgeVal = nowSec - chaptersLastFetchedAt
 		}
@@ -6150,6 +6154,8 @@ func fetchChaptersForMangaIDs(ctx context.Context, mangaIDs []int64, orderBy str
 				"mangaId":       mId,
 				"manga": map[string]interface{}{
 					"id":                      mId,
+					"age":                     0,
+					"chaptersAge":             0,
 					"title":                   "",
 					"thumbnailUrl":            fmt.Sprintf("/api/v1/manga/%d/thumbnail", mId),
 					"thumbnailUrlLastFetched": 0,

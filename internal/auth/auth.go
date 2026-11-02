@@ -123,5 +123,13 @@ func IsPublicAsset(path string) bool {
 		return true
 	}
 
+	// Media thumbnails and source/extension icons (allow <img> tags without credentials)
+	if strings.HasPrefix(path, "/api/v1/manga/") && strings.Contains(path, "/thumbnail") {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/v1/extension/icon/") || (strings.HasPrefix(path, "/api/v1/source/") && strings.Contains(path, "/icon")) {
+		return true
+	}
+
 	return false
 }

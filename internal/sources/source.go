@@ -616,7 +616,7 @@ func GetMangaURL(sourceID int64, mangaURL string) string {
 		return "https://bokugents.com/" + strings.TrimLeft(cleanURL, "/")
 
 	case 5943212552955476721: // ManhwaWeb
-		return "https://manhwa-web.com/" + strings.TrimLeft(cleanURL, "/")
+		return "https://manhwaweb.com/" + strings.TrimLeft(cleanURL, "/")
 
 	case 1136717301008230074: // Submanhwa
 		return "https://submanhwa.com/" + strings.TrimLeft(cleanURL, "/")

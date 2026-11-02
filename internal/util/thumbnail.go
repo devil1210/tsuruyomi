@@ -22,6 +22,13 @@ func GetMangaThumbnailPath(cfg *config.Config, mangaId int) (string, string, err
 		fullPath := filepath.Join(thumbnailDir, mangaIdStr+ext)
 		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() && info.Size() > 0 {
 			mimeType := mime.TypeByExtension(ext)
+			if f, err := os.Open(fullPath); err == nil {
+				buf := make([]byte, 32)
+				if n, rErr := f.Read(buf); rErr == nil && n > 0 {
+					mimeType = DetectImageType(buf[:n])
+				}
+				_ = f.Close()
+			}
 			if mimeType == "" {
 				mimeType = "image/jpeg"
 			}

@@ -57,6 +57,32 @@ func rewriteKnownCDN(rawUrl string) string {
 	return u
 }
 
+func getCDNReferer(imgURL string) string {
+	if strings.Contains(imgURL, "img2mw.xyz") || strings.Contains(imgURL, "img1mw.xyz") || strings.Contains(imgURL, "manhwaweb") {
+		return "https://manhwaweb.com/"
+	}
+	if strings.Contains(imgURL, "dragontranslation.org") {
+		return "https://dragontranslation.org/"
+	}
+	if strings.Contains(imgURL, "manhwalatino.org") {
+		return "https://manhwalatino.org/"
+	}
+	if strings.Contains(imgURL, "cdnlxd.xyz") {
+		return "https://lectorxd.com/"
+	}
+	if strings.Contains(imgURL, "shademanga.com") {
+		return "https://shademanga.com/"
+	}
+	if strings.Contains(imgURL, "submanhwa.com") {
+		return "https://submanhwa.com/"
+	}
+	imgDomain := util.ExtractDomain(imgURL)
+	if imgDomain != "" {
+		return "https://" + imgDomain + "/"
+	}
+	return imgURL
+}
+
 func isKnownDeadDomain(rawUrl string) bool {
 	return strings.Contains(rawUrl, "otakuteca.com")
 }
@@ -66,13 +92,9 @@ func downloadImageRaw(ctx context.Context, cfg *config.Config, imgURL string) ([
 		return nil, "", fmt.Errorf("empty image URL")
 	}
 
-	// Use domain root as referer for static asset URLs (images from wp-content, etc.)
-	// Sending the image URL itself as its own referer looks suspicious and triggers 403.
+	// Use specialized referer for known CDNs (e.g. img2mw.xyz requires manhwaweb.com)
+	imgReferer := getCDNReferer(imgURL)
 	imgDomain := util.ExtractDomain(imgURL)
-	imgReferer := imgURL
-	if imgDomain != "" {
-		imgReferer = "https://" + imgDomain + "/"
-	}
 
 	// Fast-path: If FlareSolverr is enabled and we already have a cached session for this domain, use it directly!
 	if cfg != nil && cfg.FlareSolverr.Enabled && util.HasSession(imgDomain) {
@@ -96,7 +118,7 @@ func downloadImageRaw(ctx context.Context, cfg *config.Config, imgURL string) ([
 		if readErr == nil && len(data) > 0 && !strings.Contains(string(data[:min(len(data), 512)]), "<html") {
 			mimeType := resp.Header.Get("Content-Type")
 			if mimeType == "" {
-				mimeType = "image/jpeg"
+				mimeType = util.DetectImageType(data)
 			}
 			return data, mimeType, nil
 		}
@@ -120,8 +142,19 @@ func saveThumbnailToDisk(cfg *config.Config, mangaId int, data []byte) {
 	}
 	thumbnailDir := filepath.Join(cfg.Data.RootDir, "downloads", "thumbnails")
 	_ = os.MkdirAll(thumbnailDir, 0755)
-	targetFile := filepath.Join(thumbnailDir, fmt.Sprintf("%d.jpg", mangaId))
+
+	ext := ".jpg"
+	detected := util.DetectImageType(data)
+	if detected == "image/webp" {
+		ext = ".webp"
+	} else if detected == "image/png" {
+		ext = ".png"
+	}
+	targetFile := filepath.Join(thumbnailDir, fmt.Sprintf("%d%s", mangaId, ext))
 	_ = os.WriteFile(targetFile, data, 0644)
+	if ext != ".jpg" {
+		_ = os.Remove(filepath.Join(thumbnailDir, fmt.Sprintf("%d.jpg", mangaId)))
+	}
 	if database.DB != nil && mangaId > 0 {
 		_, _ = database.DB.Exec(context.Background(), "UPDATE suwayomi.manga SET thumbnail_url_last_fetched = $1 WHERE id = $2", time.Now().Unix(), mangaId)
 	}
@@ -698,6 +731,17 @@ func GetPageImage(c *fiber.Ctx) error {
 			ref = chapter.URL
 		} else if manga != nil && manga.RealURL != nil {
 			ref = *manga.RealURL
+		}
+
+		cdnRef := getCDNReferer(imageURL)
+		if cdnRef != "" && cdnRef != imageURL {
+			ref = cdnRef
+		} else if ref != "" && !strings.HasPrefix(ref, "http://") && !strings.HasPrefix(ref, "https://") {
+			// Don't set relative paths (e.g. /leer/...) as Referer header!
+			imgDomain := util.ExtractDomain(imageURL)
+			if imgDomain != "" {
+				ref = "https://" + imgDomain + "/"
+			}
 		}
 
 		// Fast-path: If FlareSolverr is enabled and we already have a cached session for this domain,
