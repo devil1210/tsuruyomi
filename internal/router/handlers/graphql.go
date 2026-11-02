@@ -2594,7 +2594,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 		data = resMap
 
-	case "UPDATE_CATEGORY_METADATA":
+	case "UPDATE_CATEGORY_METADATA", "SetCategoryMetas", "setCategoryMetas", "DeleteCategoryMetas", "deleteCategoryMetas":
 		updatedMetas := []map[string]interface{}{}
 		deletedMetas := []map[string]interface{}{}
 		if database.DB != nil {
@@ -5094,9 +5094,9 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "SET_CATEGORY_META", "SetCategoryMeta", "setCategoryMeta":
-		if input, ok := req.Variables["input"].(map[string]interface{}); ok && database.DB != nil {
-			var catID int
-			var k, v string
+		var catID int = -1
+		var k, v string
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if metaMap, ok := input["meta"].(map[string]interface{}); ok {
 				if idF, ok := metaMap["categoryId"].(float64); ok {
 					catID = int(idF)
@@ -5104,38 +5104,71 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				k, _ = metaMap["key"].(string)
 				v, _ = metaMap["value"].(string)
 			}
-			if catID > 0 && k != "" {
-				_, _ = database.DB.Exec(c.Context(), `
-					INSERT INTO suwayomi.categorymeta (user_id, category_ref, meta_key, value)
-					VALUES (1, $1, $2, $3)
-					ON CONFLICT (user_id, category_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
-				`, catID, k, v)
+		} else {
+			reCatID := regexp.MustCompile(`categoryId\s*:\s*(\d+)`)
+			reKey := regexp.MustCompile(`key\s*:\s*"([^"]+)"`)
+			reVal := regexp.MustCompile(`value\s*:\s*"([^"]+)"`)
+			mCat := reCatID.FindStringSubmatch(req.Query)
+			mKey := reKey.FindStringSubmatch(req.Query)
+			mVal := reVal.FindStringSubmatch(req.Query)
+			if len(mCat) > 1 && len(mKey) > 1 && len(mVal) > 1 {
+				catID, _ = strconv.Atoi(mCat[1])
+				k = mKey[1]
+				v = mVal[1]
 			}
+		}
+		if catID >= 0 && k != "" && database.DB != nil {
+			_, _ = database.DB.Exec(c.Context(), `
+				INSERT INTO suwayomi.categorymeta (user_id, category_ref, meta_key, value)
+				VALUES (1, $1, $2, $3)
+				ON CONFLICT (user_id, category_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
+			`, catID, k, v)
 		}
 		data = map[string]interface{}{
 			"setCategoryMeta": map[string]interface{}{
+				"meta": map[string]interface{}{
+					"categoryId": catID,
+					"key":        k,
+					"value":      v,
+					"__typename": "CategoryMetaType",
+				},
 				"clientMutationId": nil,
 				"__typename":       "SetCategoryMetaPayload",
 			},
 		}
 
 	case "DELETE_CATEGORY_META", "DeleteCategoryMeta", "deleteCategoryMeta":
-		if input, ok := req.Variables["input"].(map[string]interface{}); ok && database.DB != nil {
-			var catID int
-			var k string
+		var catID int = -1
+		var k string
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if idF, ok := input["categoryId"].(float64); ok {
 				catID = int(idF)
 			}
 			k, _ = input["key"].(string)
-			if catID > 0 && k != "" {
-				_, _ = database.DB.Exec(c.Context(), `
-					DELETE FROM suwayomi.categorymeta
-					WHERE user_id = 1 AND category_ref = $1 AND meta_key = $2
-				`, catID, k)
+		} else {
+			reCatID := regexp.MustCompile(`categoryId\s*:\s*(\d+)`)
+			reKey := regexp.MustCompile(`key\s*:\s*"([^"]+)"`)
+			mCat := reCatID.FindStringSubmatch(req.Query)
+			mKey := reKey.FindStringSubmatch(req.Query)
+			if len(mCat) > 1 && len(mKey) > 1 {
+				catID, _ = strconv.Atoi(mCat[1])
+				k = mKey[1]
 			}
+		}
+		if catID >= 0 && k != "" && database.DB != nil {
+			_, _ = database.DB.Exec(c.Context(), `
+				DELETE FROM suwayomi.categorymeta
+				WHERE user_id = 1 AND category_ref = $1 AND meta_key = $2
+			`, catID, k)
 		}
 		data = map[string]interface{}{
 			"deleteCategoryMeta": map[string]interface{}{
+				"meta": map[string]interface{}{
+					"categoryId": catID,
+					"key":        k,
+					"value":      "",
+					"__typename": "CategoryMetaType",
+				},
 				"clientMutationId": nil,
 				"__typename":       "DeleteCategoryMetaPayload",
 			},
