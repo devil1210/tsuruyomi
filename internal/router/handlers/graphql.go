@@ -782,6 +782,40 @@ func toInt64(val interface{}) (int64, bool) {
 	}
 }
 
+func formatMetaValue(val interface{}) string {
+	if val == nil {
+		return ""
+	}
+	switch v := val.(type) {
+	case string:
+		return v
+	case float64:
+		if v == float64(int64(v)) {
+			return fmt.Sprintf("%d", int64(v))
+		}
+		return fmt.Sprintf("%g", v)
+	case float32:
+		if v == float32(int64(v)) {
+			return fmt.Sprintf("%d", int64(v))
+		}
+		return fmt.Sprintf("%g", v)
+	case int:
+		return fmt.Sprintf("%d", v)
+	case int64:
+		return fmt.Sprintf("%d", v)
+	case int32:
+		return fmt.Sprintf("%d", v)
+	case bool:
+		return fmt.Sprintf("%t", v)
+	default:
+		b, err := json.Marshal(v)
+		if err == nil {
+			return string(b)
+		}
+		return fmt.Sprintf("%v", v)
+	}
+}
+
 // GraphQLRequest maps incoming query parameters or POST bodies.
 type GraphQLRequest struct {
 	OperationName string                 `json:"operationName"`
@@ -2375,50 +2409,52 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 		data = resMap
 
-	case "UPDATE_MANGA_METADATA":
+	case "UPDATE_MANGA_METADATA", "SetMangaMetas", "setMangaMetas", "SetWebUiMangaMetas", "DeleteMangaMetas", "deleteMangaMetas", "DeleteWebUiMangaMetas":
 		updatedMetas := []map[string]interface{}{}
 		deletedMetas := []map[string]interface{}{}
-		if database.DB != nil {
-			processDeletions := func(delInput map[string]interface{}) {
-				if delInput == nil {
-					return
-				}
-				// 1. Array of items
-				if items, ok := delInput["items"].([]interface{}); ok {
-					for _, item := range items {
-						if itemMap, ok := item.(map[string]interface{}); ok {
-							var mIDs []int64
-							if ids, ok := itemMap["mangaIds"].([]interface{}); ok {
-								for _, idVal := range ids {
-									if idF, ok := idVal.(float64); ok {
-										mIDs = append(mIDs, int64(idF))
-									}
+		processDeletions := func(delInput map[string]interface{}) {
+			if delInput == nil {
+				return
+			}
+			// 1. Array of items
+			if items, ok := delInput["items"].([]interface{}); ok {
+				for _, item := range items {
+					if itemMap, ok := item.(map[string]interface{}); ok {
+						var mIDs []int64
+						if ids, ok := itemMap["mangaIds"].([]interface{}); ok {
+							for _, idVal := range ids {
+								if idF, ok := toInt64(idVal); ok {
+									mIDs = append(mIDs, idF)
 								}
-							} else if idF, ok := itemMap["mangaId"].(float64); ok {
-								mIDs = append(mIDs, int64(idF))
 							}
+						} else if idF, ok := toInt64(itemMap["mangaId"]); ok {
+							mIDs = append(mIDs, idF)
+						}
 
-							// Keys
-							if keys, ok := itemMap["keys"].([]interface{}); ok {
-								for _, kVal := range keys {
-									if kStr, ok := kVal.(string); ok {
-										for _, mID := range mIDs {
+						// Keys
+						if keys, ok := itemMap["keys"].([]interface{}); ok {
+							for _, kVal := range keys {
+								if kStr, ok := kVal.(string); ok {
+									for _, mID := range mIDs {
+										if database.DB != nil {
 											_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.mangameta WHERE user_id = 1 AND manga_ref = $1 AND meta_key = $2", mID, kStr)
-											deletedMetas = append(deletedMetas, map[string]interface{}{
-												"mangaId":    mID,
-												"key":        kStr,
-												"value":      "",
-												"__typename": "MangaMetaType",
-											})
 										}
+										deletedMetas = append(deletedMetas, map[string]interface{}{
+											"mangaId":    mID,
+											"key":        kStr,
+											"value":      "",
+											"__typename": "MangaMetaType",
+										})
 									}
 								}
 							}
-							// Prefixes
-							if prefixes, ok := itemMap["prefixes"].([]interface{}); ok {
-								for _, pVal := range prefixes {
-									if pStr, ok := pVal.(string); ok {
-										for _, mID := range mIDs {
+						}
+						// Prefixes
+						if prefixes, ok := itemMap["prefixes"].([]interface{}); ok {
+							for _, pVal := range prefixes {
+								if pStr, ok := pVal.(string); ok {
+									for _, mID := range mIDs {
+										if database.DB != nil {
 											_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.mangameta WHERE user_id = 1 AND manga_ref = $1 AND meta_key LIKE $2 || '%'", mID, pStr)
 										}
 									}
@@ -2427,135 +2463,124 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						}
 					}
 				}
-				// 2. Direct keys (legacy)
-				var mID int64
-				if idF, ok := delInput["mangaId"].(float64); ok {
-					mID = int64(idF)
-				}
-				if keys, ok := delInput["keys"].([]interface{}); ok && mID > 0 {
-					for _, kVal := range keys {
-						if kStr, ok := kVal.(string); ok {
+			}
+			// 2. Direct keys (legacy)
+			var mID int64
+			if idF, ok := toInt64(delInput["mangaId"]); ok {
+				mID = idF
+			}
+			if keys, ok := delInput["keys"].([]interface{}); ok && mID > 0 {
+				for _, kVal := range keys {
+					if kStr, ok := kVal.(string); ok {
+						if database.DB != nil {
 							_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.mangameta WHERE user_id = 1 AND manga_ref = $1 AND meta_key = $2", mID, kStr)
-							deletedMetas = append(deletedMetas, map[string]interface{}{
+						}
+						deletedMetas = append(deletedMetas, map[string]interface{}{
+							"mangaId":    mID,
+							"key":        kStr,
+							"value":      "",
+							"__typename": "MangaMetaType",
+						})
+					}
+				}
+			}
+		}
+
+		processUpdates := func(upInput map[string]interface{}) {
+			if upInput == nil {
+				return
+			}
+			// 1. Array of items
+			if items, ok := upInput["items"].([]interface{}); ok {
+				for _, item := range items {
+					if itemMap, ok := item.(map[string]interface{}); ok {
+						var mIDs []int64
+						if ids, ok := itemMap["mangaIds"].([]interface{}); ok {
+							for _, idVal := range ids {
+								if idF, ok := toInt64(idVal); ok {
+									mIDs = append(mIDs, idF)
+								}
+							}
+						} else if idF, ok := toInt64(itemMap["mangaId"]); ok {
+							mIDs = append(mIDs, idF)
+						}
+
+						if metas, ok := itemMap["metas"].([]interface{}); ok {
+							for _, m := range metas {
+								if metaMap, ok := m.(map[string]interface{}); ok {
+									k, _ := metaMap["key"].(string)
+									valStr := formatMetaValue(metaMap["value"])
+
+									if k != "" {
+										for _, mID := range mIDs {
+											if database.DB != nil {
+												_, _ = database.DB.Exec(c.Context(), `
+													INSERT INTO suwayomi.mangameta (user_id, manga_ref, meta_key, value)
+													VALUES (1, $1, $2, $3)
+													ON CONFLICT (user_id, manga_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
+												`, mID, k, valStr)
+											}
+
+											updatedMetas = append(updatedMetas, map[string]interface{}{
+												"mangaId":    mID,
+												"key":        k,
+												"value":      valStr,
+												"__typename": "MangaMetaType",
+											})
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			// 2. Direct updates (legacy)
+			var mID int64
+			if idF, ok := toInt64(upInput["mangaId"]); ok {
+				mID = idF
+			}
+			if metas, ok := upInput["metas"].([]interface{}); ok && mID > 0 {
+				for _, m := range metas {
+					if metaMap, ok := m.(map[string]interface{}); ok {
+						k, _ := metaMap["key"].(string)
+						valStr := formatMetaValue(metaMap["value"])
+						if k != "" {
+							if database.DB != nil {
+								_, _ = database.DB.Exec(c.Context(), `
+									INSERT INTO suwayomi.mangameta (user_id, manga_ref, meta_key, value)
+									VALUES (1, $1, $2, $3)
+									ON CONFLICT (user_id, manga_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
+								`, mID, k, valStr)
+							}
+
+							updatedMetas = append(updatedMetas, map[string]interface{}{
 								"mangaId":    mID,
-								"key":        kStr,
-								"value":      "",
+								"key":        k,
+								"value":      valStr,
 								"__typename": "MangaMetaType",
 							})
 						}
 					}
 				}
 			}
+		}
 
-			if preDel, ok := req.Variables["preUpdateDeleteInput"].(map[string]interface{}); ok {
-				processDeletions(preDel)
-			}
-			if postDel, ok := req.Variables["postUpdateDeleteInput"].(map[string]interface{}); ok {
-				processDeletions(postDel)
-			}
-
-			processUpdates := func(upInput map[string]interface{}) {
-				if upInput == nil {
-					return
-				}
-				// 1. Array of items
-				if items, ok := upInput["items"].([]interface{}); ok {
-					for _, item := range items {
-						if itemMap, ok := item.(map[string]interface{}); ok {
-							var mIDs []int64
-							if ids, ok := itemMap["mangaIds"].([]interface{}); ok {
-								for _, idVal := range ids {
-									if idF, ok := idVal.(float64); ok {
-										mIDs = append(mIDs, int64(idF))
-									}
-								}
-							} else if idF, ok := itemMap["mangaId"].(float64); ok {
-								mIDs = append(mIDs, int64(idF))
-							}
-
-							if metas, ok := itemMap["metas"].([]interface{}); ok {
-								for _, m := range metas {
-									if metaMap, ok := m.(map[string]interface{}); ok {
-										k, _ := metaMap["key"].(string)
-										var valStr string
-										if s, ok := metaMap["value"].(string); ok {
-											valStr = s
-										} else if f, ok := metaMap["value"].(float64); ok {
-											if f == float64(int64(f)) {
-												valStr = fmt.Sprintf("%d", int64(f))
-											} else {
-												valStr = fmt.Sprintf("%g", f)
-											}
-										} else if b, ok := metaMap["value"].(bool); ok {
-											valStr = fmt.Sprintf("%t", b)
-										} else {
-											vBytes, _ := json.Marshal(metaMap["value"])
-											valStr = string(vBytes)
-										}
-
-										if k != "" {
-											for _, mID := range mIDs {
-												_, _ = database.DB.Exec(c.Context(), `
-													INSERT INTO suwayomi.mangameta (user_id, manga_ref, meta_key, value)
-													VALUES (1, $1, $2, $3)
-													ON CONFLICT (user_id, manga_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
-												`, mID, k, valStr)
-
-												updatedMetas = append(updatedMetas, map[string]interface{}{
-													"mangaId":    mID,
-													"key":        k,
-													"value":      valStr,
-													"__typename": "MangaMetaType",
-												})
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-				// 2. Direct updates (legacy)
-				var mID int64
-				if idF, ok := upInput["mangaId"].(float64); ok {
-					mID = int64(idF)
-				}
-				if metas, ok := upInput["metas"].([]interface{}); ok && mID > 0 {
-					for _, m := range metas {
-						if metaMap, ok := m.(map[string]interface{}); ok {
-							k, _ := metaMap["key"].(string)
-							var valStr string
-							if s, ok := metaMap["value"].(string); ok {
-								valStr = s
-							} else {
-								vBytes, _ := json.Marshal(metaMap["value"])
-								valStr = string(vBytes)
-							}
-							if k != "" {
-								_, _ = database.DB.Exec(c.Context(), `
-									INSERT INTO suwayomi.mangameta (user_id, manga_ref, meta_key, value)
-									VALUES (1, $1, $2, $3)
-									ON CONFLICT (user_id, manga_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
-								`, mID, k, valStr)
-
-								updatedMetas = append(updatedMetas, map[string]interface{}{
-									"mangaId":    mID,
-									"key":        k,
-									"value":      valStr,
-									"__typename": "MangaMetaType",
-								})
-							}
-						}
-					}
-				}
-			}
-
-			if upInput, ok := req.Variables["updateInput"].(map[string]interface{}); ok {
-				processUpdates(upInput)
-			}
-			if migInput, ok := req.Variables["migrateInput"].(map[string]interface{}); ok {
-				processUpdates(migInput)
-			}
+		if preDel, ok := req.Variables["preUpdateDeleteInput"].(map[string]interface{}); ok {
+			processDeletions(preDel)
+		}
+		if postDel, ok := req.Variables["postUpdateDeleteInput"].(map[string]interface{}); ok {
+			processDeletions(postDel)
+		}
+		if inputMap, ok := req.Variables["input"].(map[string]interface{}); ok {
+			processUpdates(inputMap)
+			processDeletions(inputMap)
+		}
+		if upInput, ok := req.Variables["updateInput"].(map[string]interface{}); ok {
+			processUpdates(upInput)
+		}
+		if migInput, ok := req.Variables["migrateInput"].(map[string]interface{}); ok {
+			processUpdates(migInput)
 		}
 
 		resMap := make(map[string]interface{})
@@ -2591,6 +2616,17 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"metas":      []interface{}{},
 				"__typename": "SetMangaMetasPayload",
 			}
+		}
+		resMap["setMangaMetas"] = map[string]interface{}{
+			"clientMutationId": nil,
+			"mangas":           []interface{}{},
+			"metas":            updatedMetas,
+			"__typename":       "SetMangaMetasPayload",
+		}
+		resMap["deleteMangaMetas"] = map[string]interface{}{
+			"clientMutationId": nil,
+			"metas":            deletedMetas,
+			"__typename":       "DeleteMangaMetasPayload",
 		}
 		data = resMap
 
@@ -5171,6 +5207,103 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				},
 				"clientMutationId": nil,
 				"__typename":       "DeleteCategoryMetaPayload",
+			},
+		}
+
+	case "SET_MANGA_META", "SetMangaMeta", "setMangaMeta":
+		var mID int64 = -1
+		var k, valStr string
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if metaMap, ok := input["meta"].(map[string]interface{}); ok {
+				if idF, ok := toInt64(metaMap["mangaId"]); ok {
+					mID = idF
+				}
+				k, _ = metaMap["key"].(string)
+				valStr = formatMetaValue(metaMap["value"])
+			} else {
+				if idF, ok := toInt64(input["mangaId"]); ok {
+					mID = idF
+				}
+				k, _ = input["key"].(string)
+				valStr = formatMetaValue(input["value"])
+			}
+		} else {
+			reMID := regexp.MustCompile(`mangaId\s*:\s*(\d+)`)
+			reKey := regexp.MustCompile(`key\s*:\s*"([^"]+)"`)
+			reVal := regexp.MustCompile(`value\s*:\s*"([^"]+)"`)
+			mMID := reMID.FindStringSubmatch(req.Query)
+			mKey := reKey.FindStringSubmatch(req.Query)
+			mVal := reVal.FindStringSubmatch(req.Query)
+			if len(mMID) > 1 {
+				mID, _ = strconv.ParseInt(mMID[1], 10, 64)
+			}
+			if len(mKey) > 1 {
+				k = mKey[1]
+			}
+			if len(mVal) > 1 {
+				valStr = mVal[1]
+			}
+		}
+		if mID > 0 && k != "" && database.DB != nil {
+			_, _ = database.DB.Exec(c.Context(), `
+				INSERT INTO suwayomi.mangameta (user_id, manga_ref, meta_key, value)
+				VALUES (1, $1, $2, $3)
+				ON CONFLICT (user_id, manga_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
+			`, mID, k, valStr)
+		}
+		data = map[string]interface{}{
+			"setMangaMeta": map[string]interface{}{
+				"meta": map[string]interface{}{
+					"mangaId":    mID,
+					"key":        k,
+					"value":      valStr,
+					"__typename": "MangaMetaType",
+				},
+				"clientMutationId": nil,
+				"__typename":       "SetMangaMetaPayload",
+			},
+		}
+
+	case "DELETE_MANGA_META", "DeleteMangaMeta", "deleteMangaMeta":
+		var mID int64 = -1
+		var k string
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if idF, ok := toInt64(input["mangaId"]); ok {
+				mID = idF
+			}
+			k, _ = input["key"].(string)
+		} else {
+			reMID := regexp.MustCompile(`mangaId\s*:\s*(\d+)`)
+			reKey := regexp.MustCompile(`key\s*:\s*"([^"]+)"`)
+			mMID := reMID.FindStringSubmatch(req.Query)
+			mKey := reKey.FindStringSubmatch(req.Query)
+			if len(mMID) > 1 {
+				mID, _ = strconv.ParseInt(mMID[1], 10, 64)
+			}
+			if len(mKey) > 1 {
+				k = mKey[1]
+			}
+		}
+		if mID > 0 && k != "" && database.DB != nil {
+			_, _ = database.DB.Exec(c.Context(), `
+				DELETE FROM suwayomi.mangameta
+				WHERE user_id = 1 AND manga_ref = $1 AND meta_key = $2
+			`, mID, k)
+		}
+		data = map[string]interface{}{
+			"deleteMangaMeta": map[string]interface{}{
+				"manga": map[string]interface{}{
+					"id":         mID,
+					"__typename": "MangaType",
+				},
+				"meta": map[string]interface{}{
+					"mangaId":    mID,
+					"key":        k,
+					"value":      "",
+					"__typename": "MangaMetaType",
+				},
+				"clientMutationId": nil,
+				"__typename":       "DeleteMangaMetaPayload",
 			},
 		}
 
