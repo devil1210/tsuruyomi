@@ -18,11 +18,16 @@ func GetChapterPath(cfg *config.Config, sourceName, mangaTitle, chapterName, sca
 	sanSourceName := SanitizeFilename(sourceName)
 	sanMangaTitle := SanitizeFilename(mangaTitle)
 
+	cleanChapterName := strings.TrimSpace(chapterName)
+	if strings.HasSuffix(strings.ToLower(cleanChapterName), ".cbz") {
+		cleanChapterName = strings.TrimSpace(cleanChapterName[:len(cleanChapterName)-4])
+	}
+
 	var rawChapterName string
 	if scanlator != "" {
-		rawChapterName = scanlator + "_" + chapterName
+		rawChapterName = scanlator + "_" + cleanChapterName
 	} else {
-		rawChapterName = chapterName
+		rawChapterName = cleanChapterName
 	}
 	sanChapterName := SanitizeFilename(rawChapterName)
 

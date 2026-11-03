@@ -709,6 +709,11 @@ func buildGraphQLDownloadStatus(ctx context.Context) map[string]interface{} {
 			}
 		}
 
+		var errMessage *string
+		if item.ErrorMessage != nil && (itemState == "ERROR" || itemState == "FAILED") {
+			errMessage = item.ErrorMessage
+		}
+
 		queue = append(queue, map[string]interface{}{
 			"chapter": map[string]interface{}{
 				"id":            item.ChapterID,
@@ -747,11 +752,12 @@ func buildGraphQLDownloadStatus(ctx context.Context) map[string]interface{} {
 				"source":     buildSourceMap(fmt.Sprintf("%d", mSourceID), mSourceName, mSourceName, "all", false, true),
 				"__typename": "MangaType",
 			},
-			"state":      itemState,
-			"progress":   item.Progress,
-			"tries":      item.Tries,
-			"position":   item.Position,
-			"__typename": "DownloadType",
+			"state":        itemState,
+			"progress":     item.Progress,
+			"tries":        item.Tries,
+			"position":     item.Position,
+			"errorMessage": errMessage,
+			"__typename":   "DownloadType",
 		})
 	}
 
@@ -949,6 +955,19 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 	log.Printf("GraphQL Dispatcher — Operation: %q, Query: %q, Variables: %v\n", req.OperationName, req.Query, req.Variables)
 
+	getClientMutationID := func() interface{} {
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if cid, ok := input["clientMutationId"]; ok && cid != nil {
+				return cid
+			}
+		}
+		re := regexp.MustCompile(`clientMutationId\s*:\s*"([^"]+)"`)
+		if m := re.FindStringSubmatch(req.Query); len(m) > 1 {
+			return m[1]
+		}
+		return nil
+	}
+
 	var data interface{}
 	switch req.OperationName {
 	case "__typename":
@@ -1015,6 +1034,14 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					"clearCachedImages", "bindTrackRecord", "bindTrack", "updateTrack", "unbindTrack",
 					"fetchTrack", "trackProgress", "loginTrackerOAuth", "loginTrackerCredentials",
 					"logoutTracker", "__typename",
+				}
+			case "DownloadType":
+				fieldNames = []string{
+					"chapter", "manga", "state", "progress", "tries", "position", "errorMessage", "__typename",
+				}
+			case "DownloadStatus":
+				fieldNames = []string{
+					"state", "queue", "__typename",
 				}
 			default:
 				fieldNames = []string{"id", "name", "user", "roles", "permissions", "__typename"}
@@ -1318,29 +1345,41 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 	case "START_DOWNLOADER", "StartDownloader", "startDownloader":
 		service.GlobalDownloadManager.Start()
+		startPayload := map[string]interface{}{
+			"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+			"__typename":     "StartDownloaderPayload",
+		}
+		if cid := getClientMutationID(); cid != nil {
+			startPayload["clientMutationId"] = cid
+		}
 		data = map[string]interface{}{
-			"startDownloader": map[string]interface{}{
-				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
-				"__typename":     "StartDownloaderPayload",
-			},
+			"startDownloader": startPayload,
 		}
 
 	case "STOP_DOWNLOADER", "StopDownloader", "stopDownloader":
 		service.GlobalDownloadManager.Stop()
+		stopPayload := map[string]interface{}{
+			"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+			"__typename":     "StopDownloaderPayload",
+		}
+		if cid := getClientMutationID(); cid != nil {
+			stopPayload["clientMutationId"] = cid
+		}
 		data = map[string]interface{}{
-			"stopDownloader": map[string]interface{}{
-				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
-				"__typename":     "StopDownloaderPayload",
-			},
+			"stopDownloader": stopPayload,
 		}
 
 	case "CLEAR_DOWNLOADER", "ClearDownloader", "clearDownloader":
 		service.GlobalDownloadManager.Clear()
+		clearPayload := map[string]interface{}{
+			"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
+			"__typename":     "ClearDownloaderPayload",
+		}
+		if cid := getClientMutationID(); cid != nil {
+			clearPayload["clientMutationId"] = cid
+		}
 		data = map[string]interface{}{
-			"clearDownloader": map[string]interface{}{
-				"downloadStatus": buildGraphQLDownloadStatus(c.Context()),
-				"__typename":     "ClearDownloaderPayload",
-			},
+			"clearDownloader": clearPayload,
 		}
 
 	case "ENQUEUE_CHAPTER_DOWNLOAD", "EnqueueChapterDownload", "enqueueChapterDownload",
@@ -1387,16 +1426,26 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			_ = service.GlobalDownloadManager.Enqueue(c.Context(), chIDs)
 			service.GlobalDownloadManager.Start()
 		}
+		var clientMutationId interface{}
+		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+			clientMutationId = input["clientMutationId"]
+		}
 		status := buildGraphQLDownloadStatus(c.Context())
+		enqSingle := map[string]interface{}{
+			"downloadStatus": status,
+			"__typename":     "EnqueueChapterDownloadPayload",
+		}
+		enqMulti := map[string]interface{}{
+			"downloadStatus": status,
+			"__typename":     "EnqueueChapterDownloadsPayload",
+		}
+		if clientMutationId != nil {
+			enqSingle["clientMutationId"] = clientMutationId
+			enqMulti["clientMutationId"] = clientMutationId
+		}
 		data = map[string]interface{}{
-			"enqueueChapterDownload": map[string]interface{}{
-				"downloadStatus": status,
-				"__typename":     "EnqueueChapterDownloadPayload",
-			},
-			"enqueueChapterDownloads": map[string]interface{}{
-				"downloadStatus": status,
-				"__typename":     "EnqueueChapterDownloadsPayload",
-			},
+			"enqueueChapterDownload":  enqSingle,
+			"enqueueChapterDownloads": enqMulti,
 		}
 
 	case "DEQUEUE_CHAPTER_DOWNLOAD", "DequeueChapterDownload", "dequeueChapterDownload",

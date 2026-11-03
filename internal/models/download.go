@@ -19,6 +19,7 @@ type DownloadQueueItem struct {
 	State        DownloadState `json:"state"`
 	Progress     float32       `json:"progress"`
 	Tries        int           `json:"tries"`
+	ErrorMessage *string       `json:"errorMessage,omitempty"`
 }
 
 type DownloadChapter struct {
@@ -30,6 +31,7 @@ type DownloadChapter struct {
 	State        DownloadState    `json:"state"`
 	Progress     float32          `json:"progress"`
 	Tries        int              `json:"tries"`
+	ErrorMessage *string          `json:"errorMessage,omitempty"`
 }
 
 type DownloadStatus struct {

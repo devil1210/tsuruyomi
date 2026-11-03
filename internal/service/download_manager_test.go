@@ -25,6 +25,12 @@ func TestDownloadManager_LifecycleAndQueue(t *testing.T) {
 		t.Fatalf("expected empty queue")
 	}
 
+	// 1b. PR #2472: Start on empty queue returns Stopped
+	dm.Start()
+	if dm.GetStatus().Status != "Stopped" {
+		t.Fatalf("expected status to remain Stopped on empty queue Start, got %s", dm.GetStatus().Status)
+	}
+
 	// 2. Set config
 	cfg := &config.Config{}
 	cfg.Data.RootDir = "/tmp/tsuruyomi_test"

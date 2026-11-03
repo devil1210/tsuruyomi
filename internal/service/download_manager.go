@@ -92,6 +92,7 @@ func (dm *DownloadManager) GetOldStatus(ctx context.Context) (models.OldDownload
 			State:        item.State,
 			Progress:     item.Progress,
 			Tries:        item.Tries,
+			ErrorMessage: item.ErrorMessage,
 		})
 	}
 
@@ -111,6 +112,12 @@ func (dm *DownloadManager) SetConfig(cfg *config.Config) {
 // Start starts queue execution and initiates the background worker if not already running.
 func (dm *DownloadManager) Start() {
 	dm.mu.Lock()
+	if len(dm.queue) == 0 {
+		dm.status = "Stopped"
+		dm.mu.Unlock()
+		dm.BroadcastStatus()
+		return
+	}
 	dm.status = "Started"
 	if !dm.workerRunning {
 		dm.workerRunning = true
@@ -146,27 +153,15 @@ func (dm *DownloadManager) workerLoop() {
 
 		if nextIdx == -1 {
 			// No more items queued right now
+			dm.status = "Stopped"
 			dm.mu.Unlock()
-			time.Sleep(1 * time.Second)
-			dm.mu.Lock()
-			// If still nothing queued after sleep and still running, check again
-			hasQueued := false
-			for i := range dm.queue {
-				if dm.queue[i].State == models.DownloadStateQueued {
-					hasQueued = true
-					break
-				}
-			}
-			if !hasQueued {
-				dm.mu.Unlock()
-				return
-			}
-			dm.mu.Unlock()
-			continue
+			dm.BroadcastStatus()
+			return
 		}
 
 		// Mark as downloading
 		dm.queue[nextIdx].State = models.DownloadStateDownloading
+		dm.queue[nextIdx].ErrorMessage = nil
 		chID := dm.queue[nextIdx].ChapterID
 		cfg := dm.cfg
 		dm.mu.Unlock()
@@ -191,6 +186,8 @@ func (dm *DownloadManager) workerLoop() {
 			log.Printf("[DOWNLOAD_MANAGER] Download error for chapter %d: %v", chID, err)
 			if currIdx != -1 {
 				dm.queue[currIdx].Tries++
+				errMsg := err.Error()
+				dm.queue[currIdx].ErrorMessage = &errMsg
 				if dm.queue[currIdx].Tries >= 3 {
 					dm.queue[currIdx].State = models.DownloadStateError
 				} else {

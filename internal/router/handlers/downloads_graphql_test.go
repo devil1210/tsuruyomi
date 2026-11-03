@@ -139,3 +139,66 @@ func TestHandleGraphQL_DownloadMutations(t *testing.T) {
 		})
 	}
 }
+
+func TestStartDownloader_EmptyQueueReturnsStopped(t *testing.T) {
+	app := fiber.New()
+	cfg := &config.Config{
+		Data: config.DataConfig{
+			RootDir: t.TempDir(),
+		},
+	}
+	app.Use(func(c *fiber.Ctx) error {
+		c.Locals("config", cfg)
+		return c.Next()
+	})
+	app.Post("/api/graphql", HandleGraphQL)
+
+	// Ensure queue is empty
+	payload := map[string]interface{}{
+		"query": `
+			mutation {
+				startDownloader(input: {clientMutationId: "test-client-id"}) {
+					clientMutationId
+					downloadStatus {
+						state
+						queue {
+							state
+							errorMessage
+						}
+					}
+				}
+			}
+		`,
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest("POST", "/api/graphql", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var resMap map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&resMap); err != nil {
+		t.Fatalf("failed decoding response: %v", err)
+	}
+
+	data := resMap["data"].(map[string]interface{})
+	startDownloader := data["startDownloader"].(map[string]interface{})
+	if startDownloader["clientMutationId"] != "test-client-id" {
+		t.Fatalf("expected clientMutationId 'test-client-id', got %v", startDownloader["clientMutationId"])
+	}
+
+	status := startDownloader["downloadStatus"].(map[string]interface{})
+	if status["state"] != "STOPPED" {
+		t.Fatalf("expected state STOPPED for empty queue, got %v", status["state"])
+	}
+	queue := status["queue"].([]interface{})
+	if len(queue) != 0 {
+		t.Fatalf("expected empty queue, got %d items", len(queue))
+	}
+}
