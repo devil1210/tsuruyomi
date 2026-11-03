@@ -526,6 +526,17 @@ func buildServerSettingsMap(ctx context.Context, cfg *config.Config) map[string]
 		}
 	}
 
+	switch strings.ToUpper(strings.TrimSpace(authMode)) {
+	case "BASIC", "BASIC_AUTH":
+		authMode = "BASIC_AUTH"
+	case "SIMPLE_LOGIN":
+		authMode = "SIMPLE_LOGIN"
+	case "UI_LOGIN":
+		authMode = "UI_LOGIN"
+	default:
+		authMode = "NONE"
+	}
+
 	var browseLangs []string
 	if bStr, ok := dbSettings["browseLanguages"]; ok && bStr != "" {
 		_ = json.Unmarshal([]byte(bStr), &browseLangs)
@@ -1156,7 +1167,16 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						sources.ConfigureProxy(c.Context())
 					case "authMode":
 						if s, ok := v.(string); ok {
-							cfg.Auth.Mode = strings.ToLower(s)
+							m := strings.ToUpper(strings.TrimSpace(s))
+							if m == "BASIC" || m == "BASIC_AUTH" {
+								cfg.Auth.Mode = "basic"
+							} else if m == "SIMPLE_LOGIN" {
+								cfg.Auth.Mode = "simple_login"
+							} else if m == "UI_LOGIN" {
+								cfg.Auth.Mode = "ui_login"
+							} else {
+								cfg.Auth.Mode = "none"
+							}
 						}
 					case "authUsername":
 						if s, ok := v.(string); ok {

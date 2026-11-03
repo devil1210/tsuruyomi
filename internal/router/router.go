@@ -103,7 +103,7 @@ func Setup(cfg *config.Config) *fiber.App {
 		}
 
 		// Browser request: if basic mode, challenge via WWW-Authenticate; if simple_login, redirect to login.html
-		if cfg.Auth.Mode == "basic" {
+		if cfg.Auth.Mode == "basic" || cfg.Auth.Mode == "basic_auth" {
 			c.Set(fiber.HeaderWWWAuthenticate, `Basic realm="Suwayomi"`)
 			return c.Status(fiber.StatusUnauthorized).SendString("Unauthorized")
 		}

@@ -103,7 +103,7 @@ func PostLogin(c *fiber.Ctx) error {
 	}
 
 	// If auth is disabled, allow entry
-	if cfg.Auth.Mode == "none" {
+	if cfg.Auth.Mode == "none" || cfg.Auth.Mode == "" {
 		return c.Redirect(redirect, fiber.StatusSeeOther)
 	}
 
