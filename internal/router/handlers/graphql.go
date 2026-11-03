@@ -1551,7 +1551,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_EXTENSIONS_FETCH", "FetchExtensionListStore", "fetchExtensions":
+	case "GET_EXTENSIONS_FETCH", "FETCH_EXTENSIONS", "FetchExtensionListStore", "fetchExtensions":
 		// Sync configured extension repositories in background
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -1694,7 +1694,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_CATEGORIES_LIBRARY", "GET_CATEGORIES", "GET_CATEGORIES_BASE", "GET_CATEGORIES_SETTINGS", "AllCategories", "AccountCategoryIdentities", "categories":
+	case "GET_CATEGORIES_LIBRARY", "GET_LIBRARY_CATEGORIES", "GET_CATEGORIES", "GET_CATEGORIES_BASE", "GET_CATEGORIES_SETTINGS", "AllCategories", "AccountCategoryIdentities", "categories":
 		// Fetch categories dynamically from database
 		nodes := []map[string]interface{}{}
 		cats, err := database.GetCategoryList(c.Context())
@@ -1855,7 +1855,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_SOURCES_LIST", "SourceList", "sources":
+	case "GET_SOURCES_LIST", "GET_SOURCES", "getSources", "SourceList", "sources":
 		nodes := []map[string]interface{}{}
 		srcs, err := database.GetSourceList(c.Context())
 		if err == nil {
@@ -3577,7 +3577,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			"__typename": "SyncPayload",
 		}
 
-	case "GET_MANGAS_LIBRARY", "GET_MANGAS", "GET_MANGAS_BASE", "GET_MANGAS_DUPLICATES", "GetCategoryMangas", "GetLibraryMangas", "NonLibraryCategorizedMangas", "mangas":
+	case "GET_MANGAS_LIBRARY", "GET_LIBRARY_MANGAS", "GET_MANGA_BY_ID", "GetLibraryMangas", "GetLibraryManga", "GET_LIBRARY_MANGA", "GET_MANGAS", "GET_MANGAS_BASE", "GET_MANGAS_DUPLICATES", "GetCategoryMangas", "NonLibraryCategorizedMangas", "mangas":
 		var sourceIDFilter *int64
 		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
 			if sIdF, ok := cond["sourceId"].(float64); ok {
@@ -3619,6 +3619,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 		var categoryIds []int64
+		var mangaIDs []int64
 		var titleSearch string
 
 		// 1. Try parsing from variables condition
@@ -3673,6 +3674,17 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						term := strings.Trim(s, "%")
 						if term != "" {
 							titleSearch = term
+						}
+					}
+				}
+			}
+			if idFilter, ok := filterMap["id"].(map[string]interface{}); ok {
+				if eq, ok := idFilter["equalTo"].(float64); ok {
+					mangaIDs = []int64{int64(eq)}
+				} else if inArr, ok := idFilter["in"].([]interface{}); ok {
+					for _, item := range inArr {
+						if idF, ok := item.(float64); ok {
+							mangaIDs = append(mangaIDs, int64(idF))
 						}
 					}
 				}
@@ -3747,19 +3759,48 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			InLibrary:   inLibraryFilter,
 			SourceID:    sourceIDFilter,
 			CategoryIDs: categoryIds,
+			MangaIDs:    mangaIDs,
 			TitleSearch: titleSearch,
 			OrderBy:     orderByClause,
 		})
 
+		totalCount := len(nodes)
+		var firstVal *int
+		var offsetVal int
+
+		if f, ok := req.Variables["first"].(float64); ok && f > 0 {
+			i := int(f)
+			firstVal = &i
+		}
+		if o, ok := req.Variables["offset"].(float64); ok && o >= 0 {
+			offsetVal = int(o)
+		}
+
+		paginatedNodes := nodes
+		hasNextPage := false
+		if offsetVal > 0 {
+			if offsetVal < len(nodes) {
+				paginatedNodes = nodes[offsetVal:]
+			} else {
+				paginatedNodes = []map[string]interface{}{}
+			}
+		}
+		if firstVal != nil {
+			if *firstVal < len(paginatedNodes) {
+				paginatedNodes = paginatedNodes[:*firstVal]
+				hasNextPage = true
+			}
+		}
+
 		data = map[string]interface{}{
 			"mangas": map[string]interface{}{
-				"nodes":      nodes,
-				"totalCount": len(nodes),
+				"nodes":      paginatedNodes,
+				"totalCount": totalCount,
 				"pageInfo": map[string]interface{}{
-					"hasNextPage":     false,
-					"hasPreviousPage": false,
-					"startCursor":     "0",
-					"endCursor":       fmt.Sprintf("%d", len(nodes)),
+					"hasNextPage":     hasNextPage,
+					"hasPreviousPage": offsetVal > 0,
+					"startCursor":     fmt.Sprintf("%d", offsetVal),
+					"endCursor":       fmt.Sprintf("%d", offsetVal+len(paginatedNodes)),
 					"__typename":      "PageInfo",
 				},
 				"__typename": "MangaNodeList",
@@ -4399,7 +4440,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			}
 		}
 
-	case "UPDATE_MANGA", "UpdateManga", "updateManga":
+	case "UPDATE_MANGA", "UPDATE_MANGA_LIBRARY", "UpdateManga", "updateManga":
 		var mangaID int64
 		var inLib bool
 		var inLibSet bool
@@ -4617,7 +4658,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "UPDATE_CHAPTER", "UpdateChapter", "updateChapter":
+	case "UPDATE_CHAPTER", "UPDATE_CHAPTER_READ", "UpdateChapter", "updateChapter":
 		var chapterID int64
 		var patch map[string]interface{}
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
@@ -4759,7 +4800,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "UPDATE_CHAPTERS", "UpdateChapters", "updateChapters":
+	case "UPDATE_CHAPTERS", "UPDATE_CHAPTERS_READ", "UpdateChapters", "updateChapters":
 		var chapterIDs []int64
 		var patch map[string]interface{}
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
@@ -5417,7 +5458,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "GET_SOURCE_BROWSE", "GET_SOURCE_SETTINGS", "SourceById", "source":
+	case "GET_SOURCE_BROWSE", "GET_SOURCE_SETTINGS", "GET_SOURCE_FILTERS", "GET_SOURCE_METADATA", "SourceById", "source":
 		var sourceID int64
 		if sID, ok := req.Variables["id"].(string); ok {
 			_, _ = fmt.Sscan(sID, &sourceID)
