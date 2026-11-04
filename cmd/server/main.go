@@ -83,6 +83,14 @@ func main() {
 	// Start background automated backup scheduler
 	service.StartBackupScheduler(context.Background(), cfg)
 
+	// Run background download storage reconciliation
+	go func() {
+		time.Sleep(2 * time.Second)
+		if _, err := service.ReconcileDownloads(context.Background(), cfg); err != nil {
+			log.Printf("[RECONCILER] Startup reconciliation error: %v", err)
+		}
+	}()
+
 	// Initialize Fiber app setup
 	app := router.Setup(cfg)
 

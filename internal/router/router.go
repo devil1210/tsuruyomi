@@ -223,6 +223,8 @@ func Setup(cfg *config.Config) *fiber.App {
 	api.Patch("/download/:mangaId/chapter/:chapterIndex/reorder/:to", handlers.ReorderChapterInQueue)
 	api.Post("/download/batch", handlers.QueueChaptersBatch)
 	api.Delete("/download/batch", handlers.UnqueueChaptersBatch)
+	api.Post("/download/reconcile", handlers.ReconcileDownloadsHandler)
+	api.Get("/download/reconcile", handlers.ReconcileDownloadsHandler)
 
 	// Updates Routes
 	api.Get("/update/recentChapters/:pageNum", handlers.GetRecentChapters)
@@ -328,6 +330,7 @@ func Setup(cfg *config.Config) *fiber.App {
 	})
 
 	// GraphQL Endpoints (Tachidesk-WebUI Compatibility - protected under root)
+	root.Get("/api/graphql/files/backup/:token", handlers.GetBackupFileByToken)
 	root.All("/api/graphql", handlers.HandleGraphQL)
 	root.All("/graphql", handlers.HandleGraphQL)
 

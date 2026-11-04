@@ -7,6 +7,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/service"
 )
 
@@ -122,4 +123,37 @@ func ExportBackupFile(c *fiber.Ctx) error {
 	c.Set(fiber.HeaderContentType, "application/gzip")
 	c.Set(fiber.HeaderContentDisposition, fmt.Sprintf(`attachment; filename="%s"`, filename))
 	return c.Send(data)
+}
+
+// GetBackupFileByToken retrieves an exported backup file using its temporary opaque token (Suwayomi PR #2509).
+func GetBackupFileByToken(c *fiber.Ctx) error {
+	token := c.Params("token")
+	if token == "" {
+		return c.Status(fiber.StatusBadRequest).SendString("Token required")
+	}
+
+	stored, ok := service.GlobalTempFileStorage.RetrieveFile(token)
+	if !ok || stored == nil {
+		return c.Status(fiber.StatusNotFound).SendString("Backup file not found or expired")
+	}
+
+	c.Set(fiber.HeaderContentType, "application/octet-stream")
+	c.Set(fiber.HeaderContentDisposition, fmt.Sprintf(`attachment; filename="%s"`, stored.Filename))
+	return c.SendFile(stored.Path)
+}
+
+// ReconcileDownloadsHandler runs storage reconciliation between disk files and database.
+func ReconcileDownloadsHandler(c *fiber.Ctx) error {
+	cfg := c.Locals("config").(*config.Config)
+	result, err := service.ReconcileDownloads(c.Context(), cfg)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Reconciliation failed",
+			"message": err.Error(),
+		})
+	}
+	return c.JSON(fiber.Map{
+		"success": true,
+		"result":  result,
+	})
 }

@@ -1033,7 +1033,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					"deleteMangaMeta", "deleteMangaMetas", "setSettings", "resetSettings", "updateWebUI",
 					"clearCachedImages", "bindTrackRecord", "bindTrack", "updateTrack", "unbindTrack",
 					"fetchTrack", "trackProgress", "loginTrackerOAuth", "loginTrackerCredentials",
-					"logoutTracker", "__typename",
+					"logoutTracker", "createBackup", "reconcileDownloads", "__typename",
 				}
 			case "DownloadType":
 				fieldNames = []string{
@@ -5690,10 +5690,48 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 	case "CREATE_BACKUP", "createBackup":
+		var dataBytes []byte
+		var err error
+		if database.DB != nil {
+			dataBytes, err = service.ExportBackup(c.Context())
+			if err != nil {
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+					"errors": []interface{}{fiber.Map{"message": err.Error()}},
+				})
+			}
+		} else {
+			dataBytes = []byte("\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+		}
+		filename := fmt.Sprintf("tsuruyomi_backup_%s.tachibk", time.Now().Format("2006-01-02_150405"))
+		token, err := service.GlobalTempFileStorage.SaveFile(filename, dataBytes)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"errors": []interface{}{fiber.Map{"message": err.Error()}},
+			})
+		}
+		createBackupPayload := map[string]interface{}{
+			"url":        fmt.Sprintf("/api/graphql/files/backup/%s", token),
+			"__typename": "CreateBackupPayload",
+		}
+		if cid := getClientMutationID(); cid != nil {
+			createBackupPayload["clientMutationId"] = cid
+		}
 		data = map[string]interface{}{
-			"createBackup": map[string]interface{}{
-				"url":        "/api/v1/backup/export/file",
-				"__typename": "CreateBackupPayload",
+			"createBackup": createBackupPayload,
+		}
+
+	case "RECONCILE_DOWNLOADS", "reconcileDownloads", "RESCAN_DOWNLOADS", "rescanDownloads":
+		cfg := c.Locals("config").(*config.Config)
+		res, err := service.ReconcileDownloads(c.Context(), cfg)
+		success := err == nil
+		data = map[string]interface{}{
+			"reconcileDownloads": map[string]interface{}{
+				"success":               success,
+				"cleanedGhostDownloads": res.CleanedGhostDownloads,
+				"restoredDownloads":     res.RestoredDownloads,
+				"totalChecked":          res.TotalChecked,
+				"durationMs":            res.DurationMs,
+				"__typename":            "ReconcileDownloadsPayload",
 			},
 		}
 
