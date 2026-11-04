@@ -2919,6 +2919,166 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		data = resMap
 
 	case "UPDATE_CHAPTER_METADATA":
+		updatedMetas := []map[string]interface{}{}
+		deletedMetas := []map[string]interface{}{}
+		processChapterDeletions := func(delInput map[string]interface{}) {
+			if delInput == nil {
+				return
+			}
+			if items, ok := delInput["items"].([]interface{}); ok {
+				for _, item := range items {
+					if itemMap, ok := item.(map[string]interface{}); ok {
+						var chIDs []int64
+						if ids, ok := itemMap["chapterIds"].([]interface{}); ok {
+							for _, idVal := range ids {
+								if idF, ok := toInt64(idVal); ok && idF > 0 {
+									chIDs = append(chIDs, idF)
+								}
+							}
+						} else if idF, ok := toInt64(itemMap["chapterId"]); ok && idF > 0 {
+							chIDs = append(chIDs, idF)
+						}
+
+						if keys, ok := itemMap["keys"].([]interface{}); ok {
+							for _, kVal := range keys {
+								if kStr, ok := kVal.(string); ok && kStr != "" {
+									for _, chID := range chIDs {
+										if database.DB != nil {
+											_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.chaptermeta WHERE user_id = 1 AND chapter_ref = $1 AND meta_key = $2", chID, kStr)
+										}
+										deletedMetas = append(deletedMetas, map[string]interface{}{
+											"chapterId":  chID,
+											"key":        kStr,
+											"value":      "",
+											"__typename": "ChapterMetaType",
+										})
+									}
+								}
+							}
+						}
+						if prefixes, ok := itemMap["prefixes"].([]interface{}); ok {
+							for _, pVal := range prefixes {
+								if pStr, ok := pVal.(string); ok && pStr != "" {
+									for _, chID := range chIDs {
+										if database.DB != nil {
+											_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.chaptermeta WHERE user_id = 1 AND chapter_ref = $1 AND meta_key LIKE $2 || '%'", chID, pStr)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			var chID int64
+			if idF, ok := toInt64(delInput["chapterId"]); ok {
+				chID = idF
+			}
+			if keys, ok := delInput["keys"].([]interface{}); ok && chID > 0 {
+				for _, kVal := range keys {
+					if kStr, ok := kVal.(string); ok && kStr != "" {
+						if database.DB != nil {
+							_, _ = database.DB.Exec(c.Context(), "DELETE FROM suwayomi.chaptermeta WHERE user_id = 1 AND chapter_ref = $1 AND meta_key = $2", chID, kStr)
+						}
+						deletedMetas = append(deletedMetas, map[string]interface{}{
+							"chapterId":  chID,
+							"key":        kStr,
+							"value":      "",
+							"__typename": "ChapterMetaType",
+						})
+					}
+				}
+			}
+		}
+
+		processChapterUpdates := func(upInput map[string]interface{}) {
+			if upInput == nil {
+				return
+			}
+			if items, ok := upInput["items"].([]interface{}); ok {
+				for _, item := range items {
+					if itemMap, ok := item.(map[string]interface{}); ok {
+						var chIDs []int64
+						if ids, ok := itemMap["chapterIds"].([]interface{}); ok {
+							for _, idVal := range ids {
+								if idF, ok := toInt64(idVal); ok && idF > 0 {
+									chIDs = append(chIDs, idF)
+								}
+							}
+						} else if idF, ok := toInt64(itemMap["chapterId"]); ok && idF > 0 {
+							chIDs = append(chIDs, idF)
+						}
+
+						if metas, ok := itemMap["metas"].([]interface{}); ok {
+							for _, m := range metas {
+								if metaMap, ok := m.(map[string]interface{}); ok {
+									k, _ := metaMap["key"].(string)
+									valStr := formatMetaValue(metaMap["value"])
+									if k != "" {
+										for _, chID := range chIDs {
+											if database.DB != nil {
+												_, _ = database.DB.Exec(c.Context(), `
+													INSERT INTO suwayomi.chaptermeta (user_id, chapter_ref, meta_key, value)
+													VALUES (1, $1, $2, $3)
+													ON CONFLICT (user_id, chapter_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
+												`, chID, k, valStr)
+											}
+											updatedMetas = append(updatedMetas, map[string]interface{}{
+												"chapterId":  chID,
+												"key":        k,
+												"value":      valStr,
+												"__typename": "ChapterMetaType",
+											})
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			var chID int64
+			if idF, ok := toInt64(upInput["chapterId"]); ok {
+				chID = idF
+			}
+			if metas, ok := upInput["metas"].([]interface{}); ok && chID > 0 {
+				for _, m := range metas {
+					if metaMap, ok := m.(map[string]interface{}); ok {
+						k, _ := metaMap["key"].(string)
+						valStr := formatMetaValue(metaMap["value"])
+						if k != "" {
+							if database.DB != nil {
+								_, _ = database.DB.Exec(c.Context(), `
+									INSERT INTO suwayomi.chaptermeta (user_id, chapter_ref, meta_key, value)
+									VALUES (1, $1, $2, $3)
+									ON CONFLICT (user_id, chapter_ref, meta_key) DO UPDATE SET value = EXCLUDED.value
+								`, chID, k, valStr)
+							}
+							updatedMetas = append(updatedMetas, map[string]interface{}{
+								"chapterId":  chID,
+								"key":        k,
+								"value":      valStr,
+								"__typename": "ChapterMetaType",
+							})
+						}
+					}
+				}
+			}
+		}
+
+		if preDel, ok := req.Variables["preUpdateDeleteInput"].(map[string]interface{}); ok {
+			processChapterDeletions(preDel)
+		}
+		if postDel, ok := req.Variables["postUpdateDeleteInput"].(map[string]interface{}); ok {
+			processChapterDeletions(postDel)
+		}
+		if upInput, ok := req.Variables["updateInput"].(map[string]interface{}); ok {
+			processChapterUpdates(upInput)
+		}
+		if migInput, ok := req.Variables["migrateInput"].(map[string]interface{}); ok {
+			processChapterUpdates(migInput)
+		}
+
 		resMap := make(map[string]interface{})
 		hasPre, _ := req.Variables["hasPreUpdateDeletions"].(bool)
 		hasUp, _ := req.Variables["hasUpdates"].(bool)
@@ -2931,25 +3091,25 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 		if hasPre {
 			resMap["preUpdateDeletedMeta"] = map[string]interface{}{
-				"metas":      []interface{}{},
+				"metas":      deletedMetas,
 				"__typename": "DeleteChapterMetasPayload",
 			}
 		}
 		if hasUp {
 			resMap["updatedMeta"] = map[string]interface{}{
-				"metas":      []interface{}{},
+				"metas":      updatedMetas,
 				"__typename": "SetChapterMetasPayload",
 			}
 		}
 		if hasPost {
 			resMap["postUpdateDeletedMeta"] = map[string]interface{}{
-				"metas":      []interface{}{},
+				"metas":      deletedMetas,
 				"__typename": "DeleteChapterMetasPayload",
 			}
 		}
 		if isMig {
 			resMap["migrationMeta"] = map[string]interface{}{
-				"metas":      []interface{}{},
+				"metas":      updatedMetas,
 				"__typename": "SetChapterMetasPayload",
 			}
 		}
@@ -3189,10 +3349,13 @@ func HandleGraphQL(c *fiber.Ctx) error {
 	case "GET_MIGRATABLE_SOURCE_MANGAS":
 		var sourceID int64
 		if cond, ok := req.Variables["condition"].(map[string]interface{}); ok {
-			if sId, ok := cond["sourceId"].(string); ok {
-				sourceID, _ = strconv.ParseInt(sId, 10, 64)
-			} else if sId, ok := cond["sourceId"].(float64); ok {
-				sourceID = int64(sId)
+			if sId, ok := toInt64(cond["sourceId"]); ok && sId > 0 {
+				sourceID = sId
+			}
+		}
+		if sourceID == 0 {
+			if sId, ok := toInt64(req.Variables["sourceId"]); ok && sId > 0 {
+				sourceID = sId
 			}
 		}
 
@@ -3229,10 +3392,14 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 	case "GET_MANGA_TO_MIGRATE":
 		var id int64
-		if val, ok := req.Variables["id"].(float64); ok {
-			id = int64(val)
-		} else if s, ok := req.Variables["id"].(string); ok {
-			id, _ = strconv.ParseInt(s, 10, 64)
+		if idVal, ok := toInt64(req.Variables["id"]); ok && idVal > 0 {
+			id = idVal
+		}
+		if id == 0 {
+			re := regexp.MustCompile(`manga\s*\(\s*id\s*:\s*(\d+)`)
+			if m := re.FindStringSubmatch(req.Query); len(m) > 1 {
+				id, _ = strconv.ParseInt(m[1], 10, 64)
+			}
 		}
 
 		if id <= 0 {
@@ -3249,14 +3416,40 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			mangaNode = mNodes[0]
 		} else {
 			mangaNode = map[string]interface{}{
-				"id":         id,
-				"title":      "",
-				"inLibrary":  false,
-				"__typename": "MangaType",
+				"id":          id,
+				"title":       "",
+				"inLibrary":   false,
+				"__typename":  "MangaType",
+				"categories": map[string]interface{}{
+					"nodes":      []interface{}{},
+					"totalCount": 0,
+					"__typename": "CategoryNodeList",
+				},
+				"trackRecords": map[string]interface{}{
+					"nodes":      []interface{}{},
+					"totalCount": 0,
+					"__typename": "TrackRecordNodeList",
+				},
+				"meta": []interface{}{},
 			}
 		}
 
 		cNodes, _ := fetchChapterGraphQLNodes(c.Context(), id)
+		if len(cNodes) == 0 && database.DB != nil {
+			var sourceID int64
+			var mangaURL string
+			if err := database.DB.QueryRow(c.Context(), "SELECT source, url FROM suwayomi.manga WHERE id = $1", id).Scan(&sourceID, &mangaURL); err == nil {
+				if sources.Has(sourceID) {
+					_, _ = sources.FetchAndSaveMangaChapters(c.Context(), sourceID, id, mangaURL)
+					cNodes, _ = fetchChapterGraphQLNodes(c.Context(), id)
+				}
+			}
+		}
+
+		if cNodes == nil {
+			cNodes = []map[string]interface{}{}
+		}
+
 		mangaNode["chapters"] = map[string]interface{}{
 			"nodes":      cNodes,
 			"totalCount": len(cNodes),
@@ -3268,6 +3461,21 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"__typename":      "PageInfo",
 			},
 			"__typename": "ChapterNodeList",
+		}
+
+		if _, ok := mangaNode["categories"]; !ok {
+			mangaNode["categories"] = map[string]interface{}{
+				"nodes":      []interface{}{},
+				"totalCount": 0,
+				"__typename": "CategoryNodeList",
+			}
+		}
+		if _, ok := mangaNode["trackRecords"]; !ok {
+			mangaNode["trackRecords"] = map[string]interface{}{
+				"nodes":      []interface{}{},
+				"totalCount": 0,
+				"__typename": "TrackRecordNodeList",
+			}
 		}
 
 		data = map[string]interface{}{
@@ -4494,16 +4702,19 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		var inLib bool
 		var inLibSet bool
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
-			if idF, ok := input["id"].(float64); ok {
-				mangaID = int64(idF)
-			} else if idS, ok := input["id"].(string); ok {
-				mangaID, _ = strconv.ParseInt(idS, 10, 64)
+			if idVal, ok := toInt64(input["id"]); ok && idVal > 0 {
+				mangaID = idVal
 			}
 			if patch, ok := input["patch"].(map[string]interface{}); ok {
 				if v, ok := patch["inLibrary"].(bool); ok {
 					inLib = v
 					inLibSet = true
 				}
+			}
+		}
+		if mangaID == 0 {
+			if idVal, ok := toInt64(req.Variables["id"]); ok && idVal > 0 {
+				mangaID = idVal
 			}
 		}
 
@@ -4518,9 +4729,13 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 		var catNodes []map[string]interface{}
-		if updateCat, ok := req.Variables["updateCategories"].(bool); ok && updateCat {
+		updateCat, _ := req.Variables["updateCategories"].(bool)
+		if updateCat {
 			if catInput, ok := req.Variables["updateCategoryInput"].(map[string]interface{}); ok {
 				catNodes, _ = updateMangaCategoriesInDB(c.Context(), mangaID, catInput)
+			}
+			if catNodes == nil {
+				catNodes = []map[string]interface{}{}
 			}
 		}
 
@@ -4546,7 +4761,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"__typename": "UpdateMangaPayload",
 			},
 		}
-		if catNodes != nil {
+		if updateCat {
 			res["updateMangaCategories"] = map[string]interface{}{
 				"manga": map[string]interface{}{
 					"id": mangaID,
@@ -4569,8 +4784,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if ids, ok := input["ids"].([]interface{}); ok {
 				for _, idV := range ids {
-					if idF, ok := idV.(float64); ok {
-						mangaIDs = append(mangaIDs, int64(idF))
+					if idF, ok := toInt64(idV); ok && idF > 0 {
+						mangaIDs = append(mangaIDs, idF)
 					}
 				}
 			}
@@ -4603,20 +4818,27 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		}
 
 		var mangasCatPayload []map[string]interface{}
-		if updateCat, ok := req.Variables["updateCategories"].(bool); ok && updateCat {
-			if catInput, ok := req.Variables["updateCategoryInput"].(map[string]interface{}); ok {
-				for _, mID := range mangaIDs {
-					cNodes, _ := updateMangaCategoriesInDB(c.Context(), mID, catInput)
-					mangasCatPayload = append(mangasCatPayload, map[string]interface{}{
-						"id": mID,
-						"categories": map[string]interface{}{
-							"nodes":      cNodes,
-							"totalCount": len(cNodes),
-							"__typename": "CategoryNodeList",
-						},
-						"__typename": "MangaType",
-					})
+		updateCat, _ := req.Variables["updateCategories"].(bool)
+		if updateCat {
+			mangasCatPayload = make([]map[string]interface{}, 0, len(mangaIDs))
+			catInput, _ := req.Variables["updateCategoryInput"].(map[string]interface{})
+			for _, mID := range mangaIDs {
+				var cNodes []map[string]interface{}
+				if catInput != nil {
+					cNodes, _ = updateMangaCategoriesInDB(c.Context(), mID, catInput)
 				}
+				if cNodes == nil {
+					cNodes = []map[string]interface{}{}
+				}
+				mangasCatPayload = append(mangasCatPayload, map[string]interface{}{
+					"id": mID,
+					"categories": map[string]interface{}{
+						"nodes":      cNodes,
+						"totalCount": len(cNodes),
+						"__typename": "CategoryNodeList",
+					},
+					"__typename": "MangaType",
+				})
 			}
 		}
 
@@ -4626,7 +4848,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"__typename": "UpdateMangasPayload",
 			},
 		}
-		if mangasCatPayload != nil {
+		if updateCat {
 			resM["updateMangasCategories"] = map[string]interface{}{
 				"mangas":     mangasCatPayload,
 				"__typename": "UpdateMangasCategoriesPayload",
@@ -4855,12 +5077,14 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if ids, ok := input["ids"].([]interface{}); ok {
 				for _, idVal := range ids {
-					if idF, ok := idVal.(float64); ok {
-						chapterIDs = append(chapterIDs, int64(idF))
+					if idF, ok := toInt64(idVal); ok && idF > 0 {
+						chapterIDs = append(chapterIDs, idF)
 					}
 				}
-			} else if idF, ok := input["ids"].(float64); ok {
-				chapterIDs = append(chapterIDs, int64(idF))
+			} else if idF, ok := toInt64(input["ids"]); ok && idF > 0 {
+				chapterIDs = append(chapterIDs, idF)
+			} else if idF, ok := toInt64(input["id"]); ok && idF > 0 {
+				chapterIDs = append(chapterIDs, idF)
 			}
 			if p, ok := input["patch"].(map[string]interface{}); ok {
 				patch = p
@@ -5422,16 +5646,16 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if ids, ok := input["ids"].([]interface{}); ok {
 				for _, idVal := range ids {
-					if idF, ok := idVal.(float64); ok {
-						chapterIDs = append(chapterIDs, int64(idF))
+					if idF, ok := toInt64(idVal); ok && idF > 0 {
+						chapterIDs = append(chapterIDs, idF)
 					}
 				}
-			} else if idF, ok := input["ids"].(float64); ok {
-				chapterIDs = append(chapterIDs, int64(idF))
-			} else if idF, ok := input["id"].(float64); ok {
-				chapterIDs = append(chapterIDs, int64(idF))
-			} else if idF, ok := input["chapterId"].(float64); ok {
-				chapterIDs = append(chapterIDs, int64(idF))
+			} else if idF, ok := toInt64(input["ids"]); ok && idF > 0 {
+				chapterIDs = append(chapterIDs, idF)
+			} else if idF, ok := toInt64(input["id"]); ok && idF > 0 {
+				chapterIDs = append(chapterIDs, idF)
+			} else if idF, ok := toInt64(input["chapterId"]); ok && idF > 0 {
+				chapterIDs = append(chapterIDs, idF)
 			}
 		}
 
@@ -6546,8 +6770,7 @@ func updateMangaCategoriesInDB(ctx context.Context, mangaID int64, inputMap map[
 	// 1. removeFromCategories
 	if remList, ok := patch["removeFromCategories"].([]interface{}); ok {
 		for _, rVal := range remList {
-			if rIdF, ok := rVal.(float64); ok {
-				rId := int64(rIdF)
+			if rId, ok := toInt64(rVal); ok && rId > 0 {
 				_, _ = database.DB.Exec(ctx, "DELETE FROM suwayomi.categorymanga WHERE manga = $1 AND category = $2 AND user_id = 1", mangaID, rId)
 			}
 		}
@@ -6556,15 +6779,12 @@ func updateMangaCategoriesInDB(ctx context.Context, mangaID int64, inputMap map[
 	// 2. addToCategories
 	if addList, ok := patch["addToCategories"].([]interface{}); ok {
 		for _, aVal := range addList {
-			if aIdF, ok := aVal.(float64); ok {
-				aId := int64(aIdF)
-				if aId > 0 {
-					_, _ = database.DB.Exec(ctx, `
-						INSERT INTO suwayomi.categorymanga (category, manga, user_id) 
-						VALUES ($1, $2, 1) 
-						ON CONFLICT (user_id, category, manga) DO NOTHING
-					`, aId, mangaID)
-				}
+			if aId, ok := toInt64(aVal); ok && aId > 0 {
+				_, _ = database.DB.Exec(ctx, `
+					INSERT INTO suwayomi.categorymanga (category, manga, user_id) 
+					VALUES ($1, $2, 1) 
+					ON CONFLICT (user_id, category, manga) DO NOTHING
+				`, aId, mangaID)
 			}
 		}
 	}
@@ -6580,15 +6800,12 @@ func updateMangaCategoriesInDB(ctx context.Context, mangaID int64, inputMap map[
 	if catIds != nil {
 		_, _ = database.DB.Exec(ctx, "DELETE FROM suwayomi.categorymanga WHERE manga = $1 AND user_id = 1", mangaID)
 		for _, cVal := range catIds {
-			if cIdF, ok := cVal.(float64); ok {
-				cId := int64(cIdF)
-				if cId > 0 {
-					_, _ = database.DB.Exec(ctx, `
-						INSERT INTO suwayomi.categorymanga (category, manga, user_id) 
-						VALUES ($1, $2, 1) 
-						ON CONFLICT (user_id, category, manga) DO NOTHING
-					`, cId, mangaID)
-				}
+			if cId, ok := toInt64(cVal); ok && cId > 0 {
+				_, _ = database.DB.Exec(ctx, `
+					INSERT INTO suwayomi.categorymanga (category, manga, user_id) 
+					VALUES ($1, $2, 1) 
+					ON CONFLICT (user_id, category, manga) DO NOTHING
+				`, cId, mangaID)
 			}
 		}
 	}

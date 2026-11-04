@@ -594,8 +594,10 @@ func GetMangaURL(sourceID int64, mangaURL string) string {
 	case 2202687009511923782: // MangaOni
 		return "https://manga-oni.com/" + strings.TrimLeft(cleanURL, "/")
 
-	case 2499283573021220255, 6400665728063187402, 4938773340256184018: // MangaDex
-		return "https://mangadex.org/title/" + strings.TrimLeft(cleanURL, "/")
+	case 2499283573021220255, 6400665728063187402, 4938773340256184018, 4638673959522768501: // MangaDex
+		trimmed := strings.Trim(cleanURL, "/")
+		trimmed = strings.TrimPrefix(trimmed, "title/")
+		return "https://mangadex.org/title/" + trimmed
 
 	case 7925520943983324764: // TuMangaOnline
 		if strings.HasPrefix(cleanURL, "/") {
