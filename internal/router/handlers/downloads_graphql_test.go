@@ -102,6 +102,40 @@ func TestHandleGraphQL_DownloadMutations(t *testing.T) {
 			},
 			expectedKey: "reorderChapterDownload",
 		},
+		{
+			name:          "EnqueueChapterDownloads mixed types (int and string)",
+			operationName: "EnqueueChapterDownloads",
+			query:         "mutation EnqueueChapterDownloads($input: EnqueueChapterDownloadsInput!) { enqueueChapterDownloads(input: $input) { __typename } }",
+			variables: map[string]interface{}{
+				"input": map[string]interface{}{
+					"ids": []interface{}{int(94972), "94973", int64(94974)},
+				},
+			},
+			expectedKey: "enqueueChapterDownloads",
+		},
+		{
+			name:          "DequeueChapterDownloads with int",
+			operationName: "DequeueChapterDownloads",
+			query:         "mutation DequeueChapterDownloads($input: DequeueChapterDownloadInput!) { dequeueChapterDownload(input: $input) { __typename } }",
+			variables: map[string]interface{}{
+				"input": map[string]interface{}{
+					"id": int(94972),
+				},
+			},
+			expectedKey: "dequeueChapterDownload",
+		},
+		{
+			name:          "ReorderChapterDownload with int and int64",
+			operationName: "ReorderChapterDownload",
+			query:         "mutation ReorderChapterDownload($input: ReorderChapterDownloadInput!) { reorderChapterDownload(input: $input) { __typename } }",
+			variables: map[string]interface{}{
+				"input": map[string]interface{}{
+					"chapterId": int(94972),
+					"to":        int64(1),
+				},
+			},
+			expectedKey: "reorderChapterDownload",
+		},
 	}
 
 	for _, tc := range tests {

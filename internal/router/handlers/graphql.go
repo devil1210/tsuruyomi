@@ -1386,13 +1386,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		"ENQUEUE_CHAPTER_DOWNLOADS", "EnqueueChapterDownloads", "enqueueChapterDownloads":
 		var chIDs []int
 		parseID := func(v interface{}) (int, bool) {
-			if f, ok := v.(float64); ok {
-				return int(f), true
-			}
-			if s, ok := v.(string); ok {
-				if i, err := strconv.Atoi(s); err == nil {
-					return i, true
-				}
+			if id64, ok := toInt64(v); ok && id64 > 0 {
+				return int(id64), true
 			}
 			return 0, false
 		}
@@ -1454,13 +1449,13 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		if input, ok := req.Variables["input"].(map[string]interface{}); ok {
 			if ids, ok := input["ids"].([]interface{}); ok {
 				for _, idVal := range ids {
-					if idF, ok := idVal.(float64); ok {
+					if idF, ok := toInt64(idVal); ok && idF > 0 {
 						chIDs = append(chIDs, int(idF))
 					}
 				}
-			} else if idF, ok := input["id"].(float64); ok {
+			} else if idF, ok := toInt64(input["id"]); ok && idF > 0 {
 				chIDs = append(chIDs, int(idF))
-			} else if idF, ok := input["chapterId"].(float64); ok {
+			} else if idF, ok := toInt64(input["chapterId"]); ok && idF > 0 {
 				chIDs = append(chIDs, int(idF))
 			}
 		}
@@ -1486,11 +1481,11 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				for _, rItem := range reorders {
 					if rMap, ok := rItem.(map[string]interface{}); ok {
 						chID := 0
-						if idF, ok := rMap["chapterId"].(float64); ok {
+						if idF, ok := toInt64(rMap["chapterId"]); ok {
 							chID = int(idF)
 						}
 						to := 0
-						if toF, ok := rMap["to"].(float64); ok {
+						if toF, ok := toInt64(rMap["to"]); ok {
 							to = int(toF)
 						}
 						if chID > 0 {
@@ -1500,11 +1495,11 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				}
 			} else {
 				chID := 0
-				if idF, ok := input["chapterId"].(float64); ok {
+				if idF, ok := toInt64(input["chapterId"]); ok {
 					chID = int(idF)
 				}
 				to := 0
-				if toF, ok := input["to"].(float64); ok {
+				if toF, ok := toInt64(input["to"]); ok {
 					to = int(toF)
 				}
 				if chID > 0 {
