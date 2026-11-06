@@ -943,8 +943,10 @@ func HandleGraphQL(c *fiber.Ctx) error {
 		req.OperationName = "setSettings"
 	} else if strings.Contains(req.Query, "resetSettings") {
 		req.OperationName = "resetSettings"
-	} else if strings.Contains(req.Query, "setGlobalMeta") || strings.Contains(req.Query, "SetOfflineServerIdentity") {
+	} else if (regexp.MustCompile(`\bsetGlobalMeta\b`).MatchString(req.Query) || strings.Contains(req.Query, "SetOfflineServerIdentity")) && !strings.Contains(req.Query, "setGlobalMetas") && req.OperationName != "UPDATE_GLOBAL_METADATA" {
 		req.OperationName = "setGlobalMeta"
+	} else if strings.Contains(req.Query, "setGlobalMetas") && (req.OperationName == "" || req.OperationName == "setGlobalMetas" || req.OperationName == "SetGlobalMetas") {
+		req.OperationName = "UPDATE_GLOBAL_METADATA"
 	} else if strings.Contains(req.Query, "libraryUpdateStatus") && !strings.Contains(req.Query, "updateLibrary") {
 		req.OperationName = "GET_UPDATE_STATUS"
 	}
@@ -2352,7 +2354,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "UPDATE_GLOBAL_METADATA":
+	case "UPDATE_GLOBAL_METADATA", "setGlobalMetas", "SetGlobalMetas":
 		preDeletedMetas := []map[string]interface{}{}
 		postDeletedMetas := []map[string]interface{}{}
 		updatedMetas := []map[string]interface{}{}
@@ -2431,6 +2433,8 @@ func HandleGraphQL(c *fiber.Ctx) error {
 
 			if updateInput, ok := req.Variables["updateInput"].(map[string]interface{}); ok {
 				updatedMetas = processGlobalUpdates(updateInput)
+			} else if input, ok := req.Variables["input"].(map[string]interface{}); ok {
+				updatedMetas = processGlobalUpdates(input)
 			}
 			if migrateInput, ok := req.Variables["migrateInput"].(map[string]interface{}); ok {
 				migrationMetas = processGlobalUpdates(migrateInput)
@@ -2452,15 +2456,27 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				"metas":      preDeletedMetas,
 				"__typename": "DeleteGlobalMetasPayload",
 			}
+			resMap["deleteGlobalMetas"] = map[string]interface{}{
+				"metas":      preDeletedMetas,
+				"__typename": "DeleteGlobalMetasPayload",
+			}
 		}
 		if hasUp {
 			resMap["updatedMeta"] = map[string]interface{}{
 				"metas":      updatedMetas,
 				"__typename": "SetGlobalMetasPayload",
 			}
+			resMap["setGlobalMetas"] = map[string]interface{}{
+				"metas":      updatedMetas,
+				"__typename": "SetGlobalMetasPayload",
+			}
 		}
 		if hasPost {
 			resMap["postUpdateDeletedMeta"] = map[string]interface{}{
+				"metas":      postDeletedMetas,
+				"__typename": "DeleteGlobalMetasPayload",
+			}
+			resMap["deleteGlobalMetas"] = map[string]interface{}{
 				"metas":      postDeletedMetas,
 				"__typename": "DeleteGlobalMetasPayload",
 			}
