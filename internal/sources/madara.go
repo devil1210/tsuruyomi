@@ -258,8 +258,9 @@ func ParseSpanishOrEnglishDate(dateStr string) int64 {
 		}
 	}
 
-	// Replace Spanish words: " de " -> " "
+	// Replace Spanish words: " de " -> " ", strip dots
 	normalized := lower
+	normalized = strings.ReplaceAll(normalized, ".", "")
 	normalized = strings.ReplaceAll(normalized, " de ", " ")
 	for es, en := range spanishMonths {
 		if strings.Contains(normalized, es) {
@@ -277,7 +278,9 @@ func ParseSpanishOrEnglishDate(dateStr string) int64 {
 		"02-01-2006",
 		"2006-01-02",
 		"2006-01-02 15:04:05",
+		"02 Jan 2006",
 		"2 Jan 2006",
+		"Jan 02, 2006",
 		"Jan 2, 2006",
 	}
 

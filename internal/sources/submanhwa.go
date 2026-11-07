@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -256,7 +257,7 @@ func (h *SubmanhwaHandler) GetChapterList(ctx context.Context, mangaURL string) 
 		}
 
 		status := 1 // ongoing
-		if doc.Find(".ended").Length() > 0 {
+		if doc.Find(".ended").Length() > 0 || strings.Contains(strings.ToLower(doc.Find(".sr-status, .status, .sr-info").Text()), "completado") {
 			status = 2 // completed
 		}
 
@@ -285,9 +286,40 @@ func (h *SubmanhwaHandler) GetChapterList(ctx context.Context, mangaURL string) 
 		`, title, thumb, desc, status, genreStr, cleanRelURL, fullURL)
 	}
 
+	chaptersDoc := doc
+	// Try fetching full chapter list via AJAX endpoint if available
+	reSerieID := regexp.MustCompile(`lista-capitulos/serie/(\d+)`)
+	if mSerie := reSerieID.FindStringSubmatch(html); len(mSerie) >= 2 {
+		ajaxURL := fmt.Sprintf("%s/lista-capitulos/serie/%s?orden=desc&offset=0&limit=5000", h.baseURL, mSerie[1])
+		req, errReq := http.NewRequestWithContext(ctx, http.MethodGet, ajaxURL, nil)
+		if errReq == nil {
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
+			req.Header.Set("Referer", fullURL)
+			req.Header.Set("X-Requested-With", "XMLHttpRequest")
+			if resp, errResp := DefaultClient.Do(req); errResp == nil {
+				defer resp.Body.Close()
+				var ajaxRes struct {
+					Ok   bool   `json:"ok"`
+					HTML string `json:"html"`
+				}
+				if errDec := json.NewDecoder(resp.Body).Decode(&ajaxRes); errDec == nil && ajaxRes.HTML != "" {
+					if d, errParse := goquery.NewDocumentFromReader(strings.NewReader(ajaxRes.HTML)); errParse == nil {
+						chaptersDoc = d
+					}
+				}
+			}
+		}
+	}
+
 	var chapters []ChapterItem
-	doc.Find(".chapters-grid [class^=chapter-card], div[class*='chapter-card']").Each(func(i int, s *goquery.Selection) {
-		a := s.Find("a.chapter-link").First()
+	chaptersDoc.Find(".lc-row, div[id^='chapter-card'], .chapters-grid [class^=chapter-card], div[class*='chapter-card']").Each(func(i int, s *goquery.Selection) {
+		a := s.Find("a.lc-t").First()
+		if a.Length() == 0 {
+			a = s.Find("a.lc-n").First()
+		}
+		if a.Length() == 0 {
+			a = s.Find("a.chapter-link").First()
+		}
 		if a.Length() == 0 {
 			a = s.Find("a").First()
 		}
@@ -300,14 +332,23 @@ func (h *SubmanhwaHandler) GetChapterList(ctx context.Context, mangaURL string) 
 			}
 
 			var chNum float32
-			matches := reSubmanhwaChNum.FindStringSubmatch(chName)
-			if len(matches) >= 2 {
-				if parsed, errNum := strconv.ParseFloat(matches[1], 32); errNum == nil {
+			if dataNum, ok := s.Attr("data-num"); ok && dataNum != "" {
+				if parsed, errNum := strconv.ParseFloat(dataNum, 32); errNum == nil {
 					chNum = float32(parsed)
 				}
 			}
+			if chNum == 0 {
+				matches := reSubmanhwaChNum.FindStringSubmatch(chName)
+				if len(matches) >= 2 {
+					if parsed, errNum := strconv.ParseFloat(matches[1], 32); errNum == nil {
+						chNum = float32(parsed)
+					}
+				}
+			}
 
-			dateStr := strings.TrimSpace(s.Find("time, .chapter-date, span.date, span.chapter-time, small, .chapter-meta").Text())
+			dateElem := s.Find(".lc-d, time, .chapter-date, span.date, span.chapter-time, small, .chapter-meta").First()
+			dateStr := strings.TrimSpace(dateElem.Text())
+			dateStr = strings.TrimSpace(strings.ReplaceAll(dateStr, "🕒", ""))
 			dateUpload := ParseSpanishOrEnglishDate(dateStr)
 
 			chapters = append(chapters, ChapterItem{
@@ -345,12 +386,12 @@ func (h *SubmanhwaHandler) GetPageList(ctx context.Context, chapterURL string, m
 	}
 
 	var pages []string
-	doc.Find("#all img, .chapter-content img, div.page-break img").Each(func(i int, s *goquery.Selection) {
+	doc.Find("#all img, .rd-viewer img, .viewer-cnt img, .chapter-content img, div.page-break img").Each(func(i int, s *goquery.Selection) {
 		src, exists := s.Attr("data-src")
-		if !exists || src == "" {
+		if !exists || src == "" || strings.HasPrefix(src, "data:") {
 			src, exists = s.Attr("src")
 		}
-		if exists && src != "" && !strings.Contains(src, "logo") && !strings.Contains(src, "banner") {
+		if exists && src != "" && !strings.HasPrefix(src, "data:") && !strings.Contains(src, "logo") && !strings.Contains(src, "banner") {
 			cleanSrc := strings.TrimSpace(src)
 			if strings.HasPrefix(cleanSrc, "//") {
 				cleanSrc = "https:" + cleanSrc
@@ -358,6 +399,22 @@ func (h *SubmanhwaHandler) GetPageList(ctx context.Context, chapterURL string, m
 			pages = append(pages, cleanSrc)
 		}
 	})
+
+	if len(pages) == 0 {
+		reVarPages := regexp.MustCompile(`var\s+pages\s*=\s*(\[\{.*?\}\]);`)
+		if m := reVarPages.FindStringSubmatch(html); len(m) >= 2 {
+			var jsonPages []struct {
+				PageImage string `json:"page_image"`
+			}
+			if errJ := json.Unmarshal([]byte(m[1]), &jsonPages); errJ == nil {
+				for _, jp := range jsonPages {
+					if jp.PageImage != "" {
+						pages = append(pages, jp.PageImage)
+					}
+				}
+			}
+		}
+	}
 
 	if len(pages) == 0 {
 		return nil, fmt.Errorf("no pages found in Submanhwa chapter %s", fullURL)
