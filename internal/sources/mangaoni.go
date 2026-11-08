@@ -82,6 +82,64 @@ func (h *MangaOniHandler) GetPageList(ctx context.Context, chapterURL string, ma
 
 var reMangaOniChapter = regexp.MustCompile(`<a[^>]+href="([^"]+)"[^>]*>\s*<div class="entry-title">\s*<span[^>]*data-user="([^"]*)"[^>]*data-num="([^"]*)"[^>]*datetime="([^"]*)"[^>]*><\/span>\s*<h3 class="entry-title-h2">([^<]+)<\/h3>`)
 
+func (h *MangaOniHandler) GetMangaDetails(ctx context.Context, mangaURL string) (*MangaItem, error) {
+	fullURL := mangaURL
+	if !strings.HasPrefix(fullURL, "http") {
+		fullURL = "https://manga-oni.com" + "/" + strings.TrimLeft(mangaURL, "/")
+	}
+
+	html, err := FetchHTML(ctx, fullURL, "https://manga-oni.com/")
+	if err != nil {
+		return nil, fmt.Errorf("fetching manga page from MangaOni: %w", err)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil, fmt.Errorf("parsing HTML: %w", err)
+	}
+
+	title := strings.TrimSpace(doc.Find("h1.entry-title, .entry-title").First().Text())
+	desc := strings.TrimSpace(doc.Find(".entry-content, .sinopsis, .review-content, p.desc, div.manga-info p").Text())
+	if desc == "" {
+		if mDesc, ok := doc.Find("meta[property='og:description']").Attr("content"); ok {
+			desc = strings.TrimSpace(mDesc)
+		}
+	}
+
+	author := strings.TrimSpace(doc.Find("span.author a, .author").First().Text())
+	artist := strings.TrimSpace(doc.Find("span.artist a, .artist").First().Text())
+
+	status := 1
+	statusText := strings.ToLower(doc.Find("span.status, div.post-status").Text())
+	if strings.Contains(statusText, "complet") || strings.Contains(statusText, "finaliz") {
+		status = 2
+	}
+
+	var genres []string
+	doc.Find("div.genres-content a, .genres a, .genre a").Each(func(i int, s *goquery.Selection) {
+		g := strings.TrimSpace(s.Text())
+		if g != "" {
+			genres = append(genres, g)
+		}
+	})
+
+	thumb, _ := doc.Find("div.thumb img").Attr("src")
+	if thumb == "" {
+		thumb = doc.Find("meta[property='og:image']").AttrOr("content", "")
+	}
+
+	return &MangaItem{
+		Title:        title,
+		Description:  desc,
+		Author:       author,
+		Artist:       artist,
+		Status:       status,
+		Genres:       genres,
+		ThumbnailURL: thumb,
+		URL:          mangaURL,
+	}, nil
+}
+
 func (h *MangaOniHandler) GetChapterList(ctx context.Context, mangaURL string) ([]ChapterItem, error) {
 	fullURL := mangaURL
 	if !strings.HasPrefix(fullURL, "http") {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"tsuruyomi/internal/database"
 )
 
 func init() {
@@ -293,6 +294,128 @@ func ParseSpanishOrEnglishDate(dateStr string) int64 {
 	return 0
 }
 
+func (h *MadaraHandler) GetMangaDetails(ctx context.Context, mangaURL string) (*MangaItem, error) {
+	fullURL := mangaURL
+	if !strings.HasPrefix(fullURL, "http") {
+		fullURL = h.baseURL + "/" + strings.TrimLeft(mangaURL, "/")
+	}
+
+	html, err := FetchHTML(ctx, fullURL, h.baseURL+"/")
+	if err != nil {
+		return nil, fmt.Errorf("fetching Madara manga details: %w", err)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil, fmt.Errorf("parsing HTML: %w", err)
+	}
+
+	if database.DB != nil {
+		title := strings.TrimSpace(doc.Find(".post-title h1, div.post-title > h1, .post-title, h1.entry-title, .entry-title").First().Text())
+		desc := strings.TrimSpace(doc.Find("div.description-summary div.summary__content, div.summary__content, div.short-desc-content, div.manga-excerpt, .c-page-content p, div.post-content_item:contains('Sinopsis') .summary-content, .sinopsis-text, .sinopsis").Text())
+		if desc == "" {
+			if mDesc, ok := doc.Find("meta[property='og:description']").Attr("content"); ok && strings.TrimSpace(mDesc) != "" {
+				desc = strings.TrimSpace(mDesc)
+			} else if mDesc, ok := doc.Find("meta[name='description']").Attr("content"); ok && strings.TrimSpace(mDesc) != "" {
+				desc = strings.TrimSpace(mDesc)
+			}
+		}
+
+		author := strings.TrimSpace(doc.Find("div.author-content a, div.author-content, a[href*='/autor/']").First().Text())
+		artist := strings.TrimSpace(doc.Find("div.artist-content a, div.artist-content, a[href*='/artista/']").First().Text())
+
+		status := 1
+		statusText := strings.ToLower(doc.Find("div.post-status, div.post-content_item:contains('Estado'), .status").Text())
+		if strings.Contains(statusText, "complet") || strings.Contains(statusText, "finaliz") {
+			status = 2
+		}
+
+		var genres []string
+		doc.Find("div.genres-content a, .genres a, a[href*='/genero/']").Each(func(i int, s *goquery.Selection) {
+			g := strings.TrimSpace(s.Text())
+			if g != "" {
+				genres = append(genres, g)
+			}
+		})
+		genreStr := strings.Join(genres, ", ")
+
+		cleanRelURL := mangaURL
+		if strings.HasPrefix(cleanRelURL, h.baseURL) {
+			cleanRelURL = strings.TrimPrefix(cleanRelURL, h.baseURL)
+		}
+
+		_, _ = database.DB.Exec(ctx, `
+			UPDATE suwayomi.manga SET
+				title = COALESCE(NULLIF($1, ''), title),
+				description = COALESCE(NULLIF($2, ''), description),
+				author = COALESCE(NULLIF($3, ''), author),
+				artist = COALESCE(NULLIF($4, ''), artist),
+				status = CASE WHEN $5 > 0 THEN $5 ELSE status END,
+				genre = COALESCE(NULLIF($6, ''), genre)
+			WHERE url = $7 OR url = $8
+		`, title, desc, author, artist, status, genreStr, cleanRelURL, fullURL)
+	}
+
+	title := strings.TrimSpace(doc.Find(".post-title h1, div.post-title > h1, .post-title, h1.entry-title, .entry-title").First().Text())
+	if title == "" {
+		title = strings.TrimSpace(doc.Find("meta[property='og:title']").AttrOr("content", ""))
+	}
+
+	desc := strings.TrimSpace(doc.Find("div.description-summary div.summary__content, div.summary__content, div.short-desc-content, div.manga-excerpt, .c-page-content p, div.post-content_item:contains('Sinopsis') .summary-content, .sinopsis-text, .sinopsis").Text())
+	if desc == "" {
+		if mDesc, ok := doc.Find("meta[property='og:description']").Attr("content"); ok && strings.TrimSpace(mDesc) != "" {
+			desc = strings.TrimSpace(mDesc)
+		} else if mDesc, ok := doc.Find("meta[name='description']").Attr("content"); ok && strings.TrimSpace(mDesc) != "" {
+			desc = strings.TrimSpace(mDesc)
+		}
+	}
+
+	author := strings.TrimSpace(doc.Find("div.author-content a, div.author-content, a[href*='/autor/']").First().Text())
+	artist := strings.TrimSpace(doc.Find("div.artist-content a, div.artist-content, a[href*='/artista/']").First().Text())
+
+	status := 1 // ongoing
+	statusText := strings.ToLower(doc.Find("div.post-status, div.post-content_item:contains('Estado'), .status").Text())
+	if strings.Contains(statusText, "complet") || strings.Contains(statusText, "finaliz") {
+		status = 2 // completed
+	}
+
+	var genres []string
+	doc.Find("div.genres-content a, .genres a, a[href*='/genero/']").Each(func(i int, s *goquery.Selection) {
+		g := strings.TrimSpace(s.Text())
+		if g != "" {
+			genres = append(genres, g)
+		}
+	})
+
+	img := doc.Find("div.summary_image img, .tab-summary img").First()
+	thumb, _ := img.Attr("data-src")
+	if thumb == "" {
+		thumb, _ = img.Attr("data-lazy-src")
+	}
+	if thumb == "" {
+		thumb, _ = img.Attr("src")
+	}
+	if strings.HasPrefix(thumb, "//") {
+		thumb = "https:" + thumb
+	} else if strings.HasPrefix(thumb, "/") {
+		thumb = h.baseURL + thumb
+	}
+	if thumb == "" {
+		thumb = strings.TrimSpace(doc.Find("meta[property='og:image']").AttrOr("content", ""))
+	}
+
+	return &MangaItem{
+		Title:        title,
+		Description:  desc,
+		Author:       author,
+		Artist:       artist,
+		Status:       status,
+		Genres:       genres,
+		ThumbnailURL: thumb,
+		URL:          mangaURL,
+	}, nil
+}
+
 func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]ChapterItem, error) {
 	fullURL := mangaURL
 	if !strings.HasPrefix(fullURL, "http") {
@@ -307,6 +430,52 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return nil, fmt.Errorf("parsing HTML: %w", err)
+	}
+
+	if database.DB != nil {
+		title := strings.TrimSpace(doc.Find(".post-title h1, div.post-title > h1, .post-title, h1.entry-title, .entry-title").First().Text())
+		desc := strings.TrimSpace(doc.Find("div.description-summary div.summary__content, div.summary__content, div.short-desc-content, div.manga-excerpt, .c-page-content p, div.post-content_item:contains('Sinopsis') .summary-content, .sinopsis-text, .sinopsis").Text())
+		if desc == "" {
+			if mDesc, ok := doc.Find("meta[property='og:description']").Attr("content"); ok && strings.TrimSpace(mDesc) != "" {
+				desc = strings.TrimSpace(mDesc)
+			} else if mDesc, ok := doc.Find("meta[name='description']").Attr("content"); ok && strings.TrimSpace(mDesc) != "" {
+				desc = strings.TrimSpace(mDesc)
+			}
+		}
+
+		author := strings.TrimSpace(doc.Find("div.author-content a, div.author-content, a[href*='/autor/']").First().Text())
+		artist := strings.TrimSpace(doc.Find("div.artist-content a, div.artist-content, a[href*='/artista/']").First().Text())
+
+		status := 1
+		statusText := strings.ToLower(doc.Find("div.post-status, div.post-content_item:contains('Estado'), .status").Text())
+		if strings.Contains(statusText, "complet") || strings.Contains(statusText, "finaliz") {
+			status = 2
+		}
+
+		var genres []string
+		doc.Find("div.genres-content a, .genres a, a[href*='/genero/']").Each(func(i int, s *goquery.Selection) {
+			g := strings.TrimSpace(s.Text())
+			if g != "" {
+				genres = append(genres, g)
+			}
+		})
+		genreStr := strings.Join(genres, ", ")
+
+		cleanRelURL := mangaURL
+		if strings.HasPrefix(cleanRelURL, h.baseURL) {
+			cleanRelURL = strings.TrimPrefix(cleanRelURL, h.baseURL)
+		}
+
+		_, _ = database.DB.Exec(ctx, `
+			UPDATE suwayomi.manga SET
+				title = COALESCE(NULLIF($1, ''), title),
+				description = COALESCE(NULLIF($2, ''), description),
+				author = COALESCE(NULLIF($3, ''), author),
+				artist = COALESCE(NULLIF($4, ''), artist),
+				status = CASE WHEN $5 > 0 THEN $5 ELSE status END,
+				genre = COALESCE(NULLIF($6, ''), genre)
+			WHERE url = $7 OR url = $8
+		`, title, desc, author, artist, status, genreStr, cleanRelURL, fullURL)
 	}
 
 	var chapters []ChapterItem
@@ -466,6 +635,52 @@ func (h *MadaraHandler) GetPageList(ctx context.Context, chapterURL string, mang
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return nil, fmt.Errorf("parsing HTML: %w", err)
+	}
+
+	if database.DB != nil {
+		title := strings.TrimSpace(doc.Find(".post-title h1, div.post-title > h1, .post-title, h1.entry-title, .entry-title").First().Text())
+		desc := strings.TrimSpace(doc.Find("div.description-summary div.summary__content, div.summary__content, div.short-desc-content, div.manga-excerpt, .c-page-content p, div.post-content_item:contains('Sinopsis') .summary-content, .sinopsis-text, .sinopsis").Text())
+		if desc == "" {
+			if mDesc, ok := doc.Find("meta[property='og:description']").Attr("content"); ok && strings.TrimSpace(mDesc) != "" {
+				desc = strings.TrimSpace(mDesc)
+			} else if mDesc, ok := doc.Find("meta[name='description']").Attr("content"); ok && strings.TrimSpace(mDesc) != "" {
+				desc = strings.TrimSpace(mDesc)
+			}
+		}
+
+		author := strings.TrimSpace(doc.Find("div.author-content a, div.author-content, a[href*='/autor/']").First().Text())
+		artist := strings.TrimSpace(doc.Find("div.artist-content a, div.artist-content, a[href*='/artista/']").First().Text())
+
+		status := 1
+		statusText := strings.ToLower(doc.Find("div.post-status, div.post-content_item:contains('Estado'), .status").Text())
+		if strings.Contains(statusText, "complet") || strings.Contains(statusText, "finaliz") {
+			status = 2
+		}
+
+		var genres []string
+		doc.Find("div.genres-content a, .genres a, a[href*='/genero/']").Each(func(i int, s *goquery.Selection) {
+			g := strings.TrimSpace(s.Text())
+			if g != "" {
+				genres = append(genres, g)
+			}
+		})
+		genreStr := strings.Join(genres, ", ")
+
+		cleanRelURL := mangaURL
+		if strings.HasPrefix(cleanRelURL, h.baseURL) {
+			cleanRelURL = strings.TrimPrefix(cleanRelURL, h.baseURL)
+		}
+
+		_, _ = database.DB.Exec(ctx, `
+			UPDATE suwayomi.manga SET
+				title = COALESCE(NULLIF($1, ''), title),
+				description = COALESCE(NULLIF($2, ''), description),
+				author = COALESCE(NULLIF($3, ''), author),
+				artist = COALESCE(NULLIF($4, ''), artist),
+				status = CASE WHEN $5 > 0 THEN $5 ELSE status END,
+				genre = COALESCE(NULLIF($6, ''), genre)
+			WHERE url = $7 OR url = $8
+		`, title, desc, author, artist, status, genreStr, cleanRelURL, fullURL)
 	}
 
 	var pages []string

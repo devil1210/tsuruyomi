@@ -322,6 +322,21 @@ func Setup(cfg *config.Config) *fiber.App {
 	opds2 := root.Group("/opds/2.0")
 	registerOpds2Routes(opds2)
 
+	serveIndexHTML := func(c *fiber.Ctx) error {
+		c.Set(fiber.HeaderCacheControl, "no-cache, no-store, must-revalidate")
+		c.Set(fiber.HeaderPragma, "no-cache")
+		c.Set(fiber.HeaderExpires, "0")
+		return c.SendFile(filepath.Join(cfg.Data.RootDir, "webUI", "index.html"))
+	}
+	root.Get("/", serveIndexHTML)
+	root.Get("/index.html", serveIndexHTML)
+
+	// Ensure browser always validates webUI assets against server
+	root.Use("/assets", func(c *fiber.Ctx) error {
+		c.Set(fiber.HeaderCacheControl, "no-cache")
+		return c.Next()
+	})
+
 	// Serve WebUI static files from root_dir + "/webUI"
 	root.Static("/", filepath.Join(cfg.Data.RootDir, "webUI"), fiber.Static{
 		Compress:  true,
@@ -340,7 +355,7 @@ func Setup(cfg *config.Config) *fiber.App {
 		if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/opds") || strings.HasPrefix(path, "/graphql") || strings.HasSuffix(path, "/update-server") || strings.Contains(path, ".") {
 			return c.Next()
 		}
-		return c.SendFile(filepath.Join(cfg.Data.RootDir, "webUI", "index.html"))
+		return serveIndexHTML(c)
 	})
 
 	return app

@@ -231,6 +231,55 @@ func (h *SubmanhwaHandler) SearchManga(ctx context.Context, query string, page i
 
 var reSubmanhwaChNum = regexp.MustCompile(`(?i)(?:cap[ií]tulo|cap\.?|ch\.?)\s*(\d+(?:\.\d+)?)`)
 
+func (h *SubmanhwaHandler) GetMangaDetails(ctx context.Context, mangaURL string) (*MangaItem, error) {
+	fullURL := mangaURL
+	if !strings.HasPrefix(fullURL, "http") {
+		fullURL = h.baseURL + "/" + strings.TrimLeft(mangaURL, "/")
+	}
+
+	html, err := FetchHTML(ctx, fullURL, h.baseURL+"/")
+	if err != nil {
+		return nil, fmt.Errorf("fetching Submanhwa manga details: %w", err)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil, fmt.Errorf("parsing HTML: %w", err)
+	}
+
+	title := strings.TrimSpace(doc.Find(".sr-info > h1").Text())
+	desc := strings.TrimSpace(doc.Find(".sr-summary > p, #sr-summary, .sr-summary").Text())
+	if desc == "" {
+		desc = doc.Find("meta[property='og:description']").AttrOr("content", "")
+	}
+	thumb, _ := doc.Find("img.sr-cover").Attr("src")
+	if thumb == "" {
+		thumb, _ = doc.Find("img.sr-cover").Attr("data-src")
+	}
+
+	status := 1 // ongoing
+	if doc.Find(".ended").Length() > 0 || strings.Contains(strings.ToLower(doc.Find(".sr-status, .status, .sr-info").Text()), "completado") {
+		status = 2 // completed
+	}
+
+	var genres []string
+	doc.Find(".sr-badge.type, .sr-cat, .sr-tag").Each(func(i int, s *goquery.Selection) {
+		g := strings.TrimSpace(s.Text())
+		if g != "" {
+			genres = append(genres, g)
+		}
+	})
+
+	return &MangaItem{
+		Title:        title,
+		Description:  desc,
+		Status:       status,
+		Genres:       genres,
+		ThumbnailURL: thumb,
+		URL:          mangaURL,
+	}, nil
+}
+
 func (h *SubmanhwaHandler) GetChapterList(ctx context.Context, mangaURL string) ([]ChapterItem, error) {
 	fullURL := mangaURL
 	if !strings.HasPrefix(fullURL, "http") {

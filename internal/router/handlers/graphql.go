@@ -4298,6 +4298,14 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					}
 				}
 			}
+			if predText, _ := sources.PredictNextChapter(c.Context(), id); predText != "" {
+				mangaMetaNodes = append(mangaMetaNodes, map[string]interface{}{
+					"mangaId":    id,
+					"key":        "next_chapter_expected",
+					"value":      predText,
+					"__typename": "MangaMetaType",
+				})
+			}
 		}
 		mangaData["meta"] = mangaMetaNodes
 
@@ -4574,7 +4582,7 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			var mangaURL string
 			if err := database.DB.QueryRow(c.Context(), "SELECT source, url FROM suwayomi.manga WHERE id = $1", mangaId).Scan(&sourceID, &mangaURL); err == nil {
 				if sources.Has(sourceID) {
-					if fetchChapters {
+					if fetchChapters || fetchManga {
 						log.Printf("[SOURCES] Refreshing chapters for manga %d (source %d, url %s)...", mangaId, sourceID, mangaURL)
 						_, err := sources.FetchAndSaveMangaChapters(c.Context(), sourceID, mangaId, mangaURL)
 						if err != nil {
@@ -5852,13 +5860,13 @@ func HandleGraphQL(c *fiber.Ctx) error {
 					if errFind == nil && mID > 0 {
 						_, _ = database.DB.Exec(c.Context(), `
 							UPDATE suwayomi.manga SET
-								title = $1,
+								title = COALESCE(NULLIF($1, ''), title),
 								thumbnail_url = COALESCE(NULLIF($2, ''), thumbnail_url),
-								description = $3,
-								genre = $4,
-								status = $5,
-								artist = $6,
-								author = $7
+								description = COALESCE(NULLIF($3, ''), description),
+								genre = COALESCE(NULLIF($4, ''), genre),
+								status = CASE WHEN $5 > 0 THEN $5 ELSE status END,
+								artist = COALESCE(NULLIF($6, ''), artist),
+								author = COALESCE(NULLIF($7, ''), author)
 							WHERE id = $8
 						`, it.Title, it.ThumbnailURL, it.Description, genreStr, it.Status, it.Artist, it.Author, mID)
 					} else {
@@ -6629,9 +6637,22 @@ func fetchMangaGraphQLNodes(ctx context.Context, filter MangaGraphQLFilter) ([]m
 
 		for _, node := range nodes {
 			mId := node["id"].(int64)
-			if metas, ok := mangaMetas[mId]; ok {
-				node["meta"] = metas
+			metas := mangaMetas[mId]
+			if metas == nil {
+				metas = []map[string]interface{}{}
 			}
+			// Add next chapter prediction for ongoing manga
+			if statusInt, ok := node["status"].(int); (ok && statusInt != 2) || !ok {
+				if predText, _ := sources.PredictNextChapter(ctx, mId); predText != "" {
+					metas = append(metas, map[string]interface{}{
+						"mangaId":    mId,
+						"key":        "next_chapter_expected",
+						"value":      predText,
+						"__typename": "MangaMetaType",
+					})
+				}
+			}
+			node["meta"] = metas
 		}
 	}
 

@@ -70,13 +70,13 @@ func saveAndFormatMangaList(ctx context.Context, sourceID int64, items []sources
 		if errFind == nil && mID > 0 {
 			_, _ = database.DB.Exec(ctx, `
 				UPDATE suwayomi.manga SET
-					title = $1,
+					title = COALESCE(NULLIF($1, ''), title),
 					thumbnail_url = COALESCE(NULLIF($2, ''), thumbnail_url),
-					description = $3,
-					genre = $4,
-					status = $5,
-					artist = $6,
-					author = $7
+					description = COALESCE(NULLIF($3, ''), description),
+					genre = COALESCE(NULLIF($4, ''), genre),
+					status = CASE WHEN $5 > 0 THEN $5 ELSE status END,
+					artist = COALESCE(NULLIF($6, ''), artist),
+					author = COALESCE(NULLIF($7, ''), author)
 				WHERE id = $8
 			`, it.Title, it.ThumbnailURL, it.Description, genreStr, it.Status, it.Artist, it.Author, mID)
 		} else {

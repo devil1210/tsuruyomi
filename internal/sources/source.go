@@ -498,6 +498,23 @@ func FetchAndSaveMangaChapters(ctx context.Context, sourceID int64, mangaID int6
 				`, nowSec, mangaID)
 			}
 
+			// Automatically update manga metadata if handler supports details fetching
+			if fetcher, ok := handler.(MangaDetailsFetcher); ok {
+				if details, err := fetcher.GetMangaDetails(ctx, mangaURL); err == nil && details != nil {
+					genreStr := strings.Join(details.Genres, ", ")
+					_, _ = tx.Exec(ctx, `
+						UPDATE suwayomi.manga SET
+							description = COALESCE(NULLIF($1, ''), description),
+							genre = COALESCE(NULLIF($2, ''), genre),
+							status = CASE WHEN $3 > 0 THEN $3 ELSE status END,
+							artist = COALESCE(NULLIF($4, ''), artist),
+							author = COALESCE(NULLIF($5, ''), author),
+							thumbnail_url = COALESCE(NULLIF($6, ''), thumbnail_url)
+						WHERE id = $7
+					`, details.Description, genreStr, details.Status, details.Artist, details.Author, details.ThumbnailURL, mangaID)
+				}
+			}
+
 			// Guarantee strictly contiguous 1-based source_order (1..N) without gaps or duplicate values
 			_, _ = tx.Exec(ctx, `
 				WITH numbered AS (
