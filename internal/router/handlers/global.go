@@ -207,15 +207,178 @@ func CheckUpdate(c *fiber.Ctx) error {
 	})
 }
 
-// GetWebview retrieves the integrated webview status or forwards to the sidecar.
+const webviewHTML = `<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tsuruyomi - WebView</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 0;
+            background: #121212;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            text-align: center;
+        }
+        .card {
+            background: #1e1e1e;
+            border: 1px solid #333333;
+            padding: 36px 28px;
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+            max-width: 520px;
+            width: 90%;
+        }
+        .logo {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 16px;
+        }
+        h2 {
+            margin: 0 0 10px 0;
+            font-size: 1.4rem;
+            color: #ffffff;
+        }
+        p {
+            color: #a0a0a0;
+            font-size: 0.95rem;
+            margin: 0 0 20px 0;
+            line-height: 1.4;
+        }
+        .url-box {
+            background: #141414;
+            border: 1px solid #2a2a2a;
+            padding: 12px 14px;
+            border-radius: 8px;
+            word-break: break-all;
+            margin-bottom: 24px;
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #4caf50;
+        }
+        .btn-group {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+        }
+        .btn-primary {
+            background: #e53935;
+            color: #ffffff;
+        }
+        .btn-primary:hover {
+            background: #d32f2f;
+        }
+        .btn-secondary {
+            background: #2c2c2c;
+            color: #ffffff;
+        }
+        .btn-secondary:hover {
+            background: #3d3d3d;
+        }
+        .spinner {
+            border: 3px solid rgba(255,255,255,0.1);
+            border-top: 3px solid #e53935;
+            border-radius: 50%;
+            width: 28px;
+            height: 28px;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 16px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <svg class="logo" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M256 32L64 224L256 480L448 224L256 32Z" stroke="#e53935" stroke-width="24" stroke-linejoin="round"/>
+            <path d="M256 32V480M64 224H448" stroke="#e53935" stroke-width="16"/>
+        </svg>
+        <div class="spinner" id="spinner"></div>
+        <h2 id="heading">Abriendo enlace externo...</h2>
+        <p id="subtext">Redirigiendo a la fuente original del manga.</p>
+        <div class="url-box" id="url-box">Detectando enlace...</div>
+        <div class="btn-group">
+            <a id="btn-open" class="btn btn-primary" href="#" target="_blank" rel="noreferrer">Abrir ahora</a>
+            <a class="btn btn-secondary" href="/library">Volver a la Biblioteca</a>
+        </div>
+    </div>
+    <script>
+        (function() {
+            let hash = window.location.hash;
+            let target = '';
+            if (hash && hash.length > 1) {
+                try {
+                    target = decodeURIComponent(hash.substring(1));
+                } catch(e) {
+                    target = hash.substring(1);
+                }
+            }
+            const urlBox = document.getElementById('url-box');
+            const btnOpen = document.getElementById('btn-open');
+            const heading = document.getElementById('heading');
+            const subtext = document.getElementById('subtext');
+            const spinner = document.getElementById('spinner');
+
+            if (target && (target.startsWith('http://') || target.startsWith('https://'))) {
+                urlBox.textContent = target;
+                btnOpen.href = target;
+                try {
+                    window.location.replace(target);
+                } catch(e) {
+                    spinner.style.display = 'none';
+                    heading.textContent = 'Haz clic para abrir';
+                }
+            } else {
+                spinner.style.display = 'none';
+                heading.textContent = 'Tsuruyomi WebView';
+                subtext.textContent = 'No se ha especificado ninguna URL en el fragmento (#URL).';
+                urlBox.textContent = 'Ejemplo: /api/v1/webview#https://manga-oni.com/manga/dandadan/';
+                btnOpen.style.display = 'none';
+            }
+        })();
+    </script>
+</body>
+</html>`
+
+// GetWebview retrieves the integrated webview status, forwards to sidecar, or renders the webview portal.
 func GetWebview(c *fiber.Ctx) error {
 	cfg, ok := c.Locals("config").(*config.Config)
 	if ok && cfg != nil && cfg.Sidecar.Enabled && cfg.Sidecar.BaseURL != "" {
 		return extensions.ForwardToSidecar(c, cfg.Sidecar.BaseURL)
 	}
-	return c.JSON(fiber.Map{
-		"status": "not_supported",
-	})
+
+	accept := c.Get("Accept")
+	if strings.Contains(accept, "application/json") && !strings.Contains(accept, "text/html") {
+		return c.JSON(fiber.Map{
+			"status": "not_supported",
+		})
+	}
+
+	c.Set(fiber.HeaderContentType, fiber.MIMETextHTMLCharsetUTF8)
+	return c.SendString(webviewHTML)
 }
 
 // WebviewWS handles the WebSocket connection for webview management by proxying to the sidecar.
