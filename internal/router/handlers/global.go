@@ -1,11 +1,15 @@
 package handlers
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"sync"
@@ -19,6 +23,7 @@ import (
 	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/extensions"
+	"tsuruyomi/internal/util"
 )
 
 // GetLogin serves the login HTML page.
@@ -215,155 +220,331 @@ const webviewHTML = `<!DOCTYPE html>
     <title>Tsuruyomi - WebView</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <style>
-        * { box-sizing: border-box; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            margin: 0;
-            padding: 0;
-            background: #121212;
-            color: #ffffff;
+            background: #0f111a;
+            color: #e2e8f0;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            height: 100vh;
+            overflow: hidden;
             display: flex;
             flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            text-align: center;
         }
-        .card {
-            background: #1e1e1e;
-            border: 1px solid #333333;
-            padding: 36px 28px;
-            border-radius: 16px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.6);
-            max-width: 520px;
-            width: 90%;
-        }
-        .logo {
-            width: 64px;
-            height: 64px;
-            margin-bottom: 16px;
-        }
-        h2 {
-            margin: 0 0 10px 0;
-            font-size: 1.4rem;
-            color: #ffffff;
-        }
-        p {
-            color: #a0a0a0;
-            font-size: 0.95rem;
-            margin: 0 0 20px 0;
-            line-height: 1.4;
-        }
-        .url-box {
-            background: #141414;
-            border: 1px solid #2a2a2a;
-            padding: 12px 14px;
-            border-radius: 8px;
-            word-break: break-all;
-            margin-bottom: 24px;
-            font-family: monospace;
-            font-size: 0.85rem;
-            color: #4caf50;
-        }
-        .btn-group {
+        /* Top Navigation Header */
+        .webview-header {
+            height: 50px;
+            background: #141726;
+            border-bottom: 1px solid #232738;
             display: flex;
-            gap: 12px;
-            justify-content: center;
-            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            gap: 14px;
+            flex-shrink: 0;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+            z-index: 100;
         }
-        .btn {
+        .brand-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+        .brand-logo {
+            width: 26px;
+            height: 26px;
+        }
+        .brand-title {
+            font-weight: 700;
+            font-size: 15px;
+            letter-spacing: -0.3px;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .brand-title span.tag {
+            font-size: 10px;
+            background: #e53935;
+            color: #ffffff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .badge-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            transition: all 0.25s ease;
+            white-space: nowrap;
+        }
+        .badge-connecting {
+            background: rgba(234, 179, 8, 0.15);
+            border: 1px solid #eab308;
+            color: #fef08a;
+        }
+        .badge-online {
+            background: rgba(34, 197, 94, 0.15);
+            border: 1px solid #22c55e;
+            color: #86efac;
+        }
+        .badge-error {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid #ef4444;
+            color: #fca5a5;
+        }
+        .badge-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .badge-connecting .badge-dot { background: #eab308; animation: pulse 1.2s infinite ease-in-out; }
+        .badge-online .badge-dot { background: #22c55e; }
+        .badge-error .badge-dot { background: #ef4444; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.85); }
+        }
+
+        .url-section {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-grow: 1;
+            max-width: 680px;
+        }
+        .url-input-wrapper {
+            position: relative;
+            width: 100%;
+            display: flex;
+            align-items: center;
+        }
+        .url-input {
+            width: 100%;
+            padding: 7px 12px;
+            background: #090a10;
+            border: 1px solid #2d334d;
+            border-radius: 6px;
+            color: #f1f5f9;
+            font-size: 13px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .url-input:focus { border-color: #6366f1; }
+        .btn-bar {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            padding: 10px 20px;
-            border-radius: 8px;
-            font-size: 0.95rem;
-            font-weight: 600;
-            text-decoration: none;
+            gap: 6px;
+            padding: 6px 12px;
+            background: #1e2235;
+            border: 1px solid #2d334d;
+            border-radius: 6px;
+            color: #cbd5e1;
+            font-size: 13px;
+            font-weight: 500;
             cursor: pointer;
-            transition: all 0.2s ease;
-            border: none;
+            text-decoration: none;
+            transition: all 0.2s;
+            white-space: nowrap;
         }
-        .btn-primary {
+        .btn-bar:hover {
+            background: #282e46;
+            color: #ffffff;
+            border-color: #3e4668;
+        }
+        .btn-bar-primary {
             background: #e53935;
             color: #ffffff;
+            border-color: #e53935;
         }
-        .btn-primary:hover {
+        .btn-bar-primary:hover {
             background: #d32f2f;
+            border-color: #d32f2f;
         }
-        .btn-secondary {
-            background: #2c2c2c;
-            color: #ffffff;
+        .actions-section {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
         }
-        .btn-secondary:hover {
-            background: #3d3d3d;
+        /* Viewport Container */
+        .viewport-container {
+            flex-grow: 1;
+            width: 100%;
+            position: relative;
+            background: #090a10;
         }
-        .spinner {
-            border: 3px solid rgba(255,255,255,0.1);
-            border-top: 3px solid #e53935;
-            border-radius: 50%;
-            width: 28px;
-            height: 28px;
-            animation: spin 0.8s linear infinite;
-            margin: 0 auto 16px auto;
+        #webview-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            display: block;
         }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
-    <div class="card">
-        <svg class="logo" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M256 32L64 224L256 480L448 224L256 32Z" stroke="#e53935" stroke-width="24" stroke-linejoin="round"/>
-            <path d="M256 32V480M64 224H448" stroke="#e53935" stroke-width="16"/>
-        </svg>
-        <div class="spinner" id="spinner"></div>
-        <h2 id="heading">Abriendo enlace externo...</h2>
-        <p id="subtext">Redirigiendo a la fuente original del manga.</p>
-        <div class="url-box" id="url-box">Detectando enlace...</div>
-        <div class="btn-group">
-            <a id="btn-open" class="btn btn-primary" href="#" target="_blank" rel="noreferrer">Abrir ahora</a>
-            <a class="btn btn-secondary" href="/library">Volver a la Biblioteca</a>
+    <header class="webview-header">
+        <div class="brand-section">
+            <svg class="brand-logo" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M256 32L64 224L256 480L448 224L256 32Z" stroke="#e53935" stroke-width="28" stroke-linejoin="round"/>
+                <path d="M256 32V480M64 224H448" stroke="#e53935" stroke-width="20"/>
+            </svg>
+            <div class="brand-title">Tsuruyomi <span class="tag">WebView</span></div>
+            <div id="status-badge" class="badge-status badge-connecting">
+                <span class="badge-dot"></span>
+                <span id="badge-text">Conectando Servidor (CT 108)...</span>
+            </div>
         </div>
-    </div>
+
+        <div class="url-section">
+            <div class="url-input-wrapper">
+                <input type="text" id="webview-url" class="url-input" placeholder="https://..." spellcheck="false" autocomplete="off">
+            </div>
+            <button id="btn-go" class="btn-bar btn-bar-primary" title="Navegar a la URL">Ir</button>
+            <button id="btn-reload" class="btn-bar" title="Recargar página">↻</button>
+        </div>
+
+        <div class="actions-section">
+            <a id="btn-open-external" href="#" target="_blank" rel="noreferrer" class="btn-bar" title="Abrir en pestaña directa local">🌐 Abrir local</a>
+            <button id="btn-close" class="btn-bar" title="Cerrar WebView y volver">✕ Salir</button>
+        </div>
+    </header>
+
+    <main class="viewport-container">
+        <iframe id="webview-iframe" src="about:blank" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"></iframe>
+    </main>
+
     <script>
         (function() {
-            let hash = window.location.hash;
-            let target = '';
-            if (hash && hash.length > 1) {
-                try {
-                    target = decodeURIComponent(hash.substring(1));
-                } catch(e) {
-                    target = hash.substring(1);
-                }
-            }
-            const urlBox = document.getElementById('url-box');
-            const btnOpen = document.getElementById('btn-open');
-            const heading = document.getElementById('heading');
-            const subtext = document.getElementById('subtext');
-            const spinner = document.getElementById('spinner');
+            const urlInput = document.getElementById('webview-url');
+            const badge = document.getElementById('status-badge');
+            const badgeText = document.getElementById('badge-text');
+            const iframe = document.getElementById('webview-iframe');
+            const btnOpenExternal = document.getElementById('btn-open-external');
+            const btnGo = document.getElementById('btn-go');
+            const btnReload = document.getElementById('btn-reload');
+            const btnClose = document.getElementById('btn-close');
 
-            if (target && (target.startsWith('http://') || target.startsWith('https://'))) {
-                urlBox.textContent = target;
-                btnOpen.href = target;
-                try {
-                    window.location.replace(target);
-                } catch(e) {
-                    spinner.style.display = 'none';
-                    heading.textContent = 'Haz clic para abrir';
-                }
-            } else {
-                spinner.style.display = 'none';
-                heading.textContent = 'Tsuruyomi WebView';
-                subtext.textContent = 'No se ha especificado ninguna URL en el fragmento (#URL).';
-                urlBox.textContent = 'Ejemplo: /api/v1/webview#https://manga-oni.com/manga/dandadan/';
-                btnOpen.style.display = 'none';
+            let currentTargetUrl = '';
+            let loadStartTime = 0;
+            let latencyReported = false;
+
+            function setBadge(type, text) {
+                badge.className = 'badge-status badge-' + type;
+                badgeText.textContent = text;
             }
+
+            function navigateTo(url) {
+                if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+                    setBadge('error', 'URL no válida');
+                    return;
+                }
+                currentTargetUrl = url;
+                urlInput.value = url;
+                btnOpenExternal.href = url;
+                latencyReported = false;
+                setBadge('connecting', 'Conectando vía Servidor (CT 108)...');
+                loadStartTime = performance.now();
+
+                if (window.location.hash.substring(1) !== url) {
+                    history.replaceState(null, '', '#' + url);
+                }
+
+                const proxyUrl = '/api/v1/webview/proxy?url=' + encodeURIComponent(url);
+                iframe.src = proxyUrl;
+            }
+
+            function initFromHash() {
+                let hash = window.location.hash;
+                if (hash && hash.length > 1) {
+                    let target = '';
+                    try { target = decodeURIComponent(hash.substring(1)); }
+                    catch(e) { target = hash.substring(1); }
+                    if (target) {
+                        navigateTo(target);
+                        return;
+                    }
+                }
+                setBadge('connecting', 'Esperando URL (#http...)');
+            }
+
+            window.addEventListener('message', function(ev) {
+                if (ev.data && ev.data.type === 'tsuruyomi_webview_load') {
+                    latencyReported = true;
+                    if (ev.data.error) {
+                        setBadge('error', 'Servidor CT 108: Error (' + (ev.data.status || '502') + ')');
+                    } else {
+                        setBadge('online', '🟢 Servidor CT 108: HTTP ' + ev.data.status + ' (' + ev.data.latency + 'ms)');
+                    }
+                    if (ev.data.url && ev.data.url !== currentTargetUrl) {
+                        currentTargetUrl = ev.data.url;
+                        urlInput.value = ev.data.url;
+                        btnOpenExternal.href = ev.data.url;
+                        history.replaceState(null, '', '#' + ev.data.url);
+                    }
+                }
+            });
+
+            iframe.addEventListener('load', function() {
+                if (!latencyReported && currentTargetUrl) {
+                    const elapsed = Math.round(performance.now() - loadStartTime);
+                    setBadge('online', '🟢 Servidor CT 108: Conectado (~' + elapsed + 'ms)');
+                }
+            });
+
+            btnGo.addEventListener('click', function() {
+                const val = urlInput.value.trim();
+                if (val) navigateTo(val);
+            });
+
+            urlInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    const val = urlInput.value.trim();
+                    if (val) navigateTo(val);
+                }
+            });
+
+            btnReload.addEventListener('click', function() {
+                if (currentTargetUrl) {
+                    latencyReported = false;
+                    setBadge('connecting', 'Recargando vía Servidor (CT 108)...');
+                    loadStartTime = performance.now();
+                    try {
+                        iframe.contentWindow.location.reload();
+                    } catch(e) {
+                        iframe.src = '/api/v1/webview/proxy?url=' + encodeURIComponent(currentTargetUrl);
+                    }
+                }
+            });
+
+            btnClose.addEventListener('click', function() {
+                if (window.opener) {
+                    window.close();
+                } else if (window.history.length > 1) {
+                    window.history.back();
+                } else {
+                    window.location.href = '/library';
+                }
+            });
+
+            window.addEventListener('hashchange', initFromHash);
+            initFromHash();
         })();
     </script>
 </body>
 </html>`
 
-// GetWebview retrieves the integrated webview status, forwards to sidecar, or renders the webview portal.
+// GetWebview retrieves the integrated webview status, forwards to sidecar, or renders the webview frame portal.
 func GetWebview(c *fiber.Ctx) error {
 	cfg, ok := c.Locals("config").(*config.Config)
 	if ok && cfg != nil && cfg.Sidecar.Enabled && cfg.Sidecar.BaseURL != "" {
@@ -379,6 +560,192 @@ func GetWebview(c *fiber.Ctx) error {
 
 	c.Set(fiber.HeaderContentType, fiber.MIMETextHTMLCharsetUTF8)
 	return c.SendString(webviewHTML)
+}
+
+// GetWebviewProxy acts as a server-side reverse proxy to display external sources
+// within the Tsuruyomi WebView frame, verifying connectivity directly from the server.
+func GetWebviewProxy(c *fiber.Ctx) error {
+	rawURL := c.Query("url")
+	if rawURL == "" {
+		return c.Status(fiber.StatusBadRequest).SendString("Error: No URL provided in query parameter 'url'")
+	}
+
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		return c.Status(fiber.StatusBadRequest).SendString("Error: Invalid or unsupported URL scheme")
+	}
+
+	ctx, cancel := context.WithTimeout(c.Context(), 25*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("Error creating request: %v", err))
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "es-ES,es;q=0.9,en;q=0.8")
+
+	client := &http.Client{
+		Timeout: 25 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			return nil
+		},
+	}
+
+	start := time.Now()
+	resp, err := client.Do(req)
+	latency := time.Since(start).Milliseconds()
+
+	if err != nil {
+		return renderProxyErrorPage(c, rawURL, err.Error(), 0, latency)
+	}
+	defer resp.Body.Close()
+
+	// If Cloudflare challenge (403/503) and FlareSolverr is enabled, attempt solve
+	cfg, _ := c.Locals("config").(*config.Config)
+	if (resp.StatusCode == 403 || resp.StatusCode == 503) && cfg != nil && cfg.FlareSolverr.Enabled {
+		fsStart := time.Now()
+		solvedHTML, fsErr := util.SolveAndFetchHTML(ctx, cfg, rawURL, "")
+		if fsErr == nil && solvedHTML != "" {
+			latency = time.Since(fsStart).Milliseconds()
+			return deliverProxiedHTML(c, rawURL, solvedHTML, fiber.StatusOK, latency)
+		}
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	isHTML := strings.Contains(strings.ToLower(contentType), "text/html") || contentType == ""
+
+	if isHTML {
+		bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 15*1024*1024))
+		if readErr != nil {
+			return renderProxyErrorPage(c, rawURL, fmt.Sprintf("Error leyendo respuesta: %v", readErr), resp.StatusCode, latency)
+		}
+		return deliverProxiedHTML(c, rawURL, string(bodyBytes), resp.StatusCode, latency)
+	}
+
+	// For non-HTML assets (images, stylesheets, scripts)
+	for k, vv := range resp.Header {
+		lower := strings.ToLower(k)
+		if lower == "x-frame-options" || lower == "content-security-policy" || lower == "x-content-security-policy" || lower == "strict-transport-security" {
+			continue
+		}
+		for _, v := range vv {
+			c.Response().Header.Add(k, v)
+		}
+	}
+	c.Response().Header.Del("X-Frame-Options")
+	c.Response().Header.Del("Content-Security-Policy")
+	c.Response().Header.Del("X-Content-Security-Policy")
+	c.Status(resp.StatusCode)
+	_, _ = io.Copy(c.Response().BodyWriter(), resp.Body)
+	return nil
+}
+
+func deliverProxiedHTML(c *fiber.Ctx, targetURL string, rawHTML string, statusCode int, latencyMs int64) error {
+	finalBase := targetURL
+	if u, err := url.Parse(targetURL); err == nil {
+		finalBase = u.String()
+	}
+
+	injectedScript := fmt.Sprintf(`
+<base href="%s">
+<script>
+(function() {
+    try {
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: 'tsuruyomi_webview_load',
+                status: %d,
+                latency: %d,
+                url: %q
+            }, '*');
+        }
+    } catch(e) {}
+
+    document.addEventListener('click', function(e) {
+        var a = e.target.closest('a');
+        if (a && a.href && !a.href.startsWith('javascript:') && !a.href.startsWith('#')) {
+            if (a.target !== '_blank') {
+                e.preventDefault();
+                window.location.href = '/api/v1/webview/proxy?url=' + encodeURIComponent(a.href);
+            }
+        }
+    }, true);
+})();
+</script>`, html.EscapeString(finalBase), statusCode, latencyMs, targetURL)
+
+	modifiedHTML := rawHTML
+	headIdx := strings.Index(strings.ToLower(rawHTML), "<head>")
+	if headIdx != -1 {
+		insertPos := headIdx + 6
+		modifiedHTML = rawHTML[:insertPos] + injectedScript + rawHTML[insertPos:]
+	} else {
+		modifiedHTML = injectedScript + rawHTML
+	}
+
+	c.Set(fiber.HeaderContentType, fiber.MIMETextHTMLCharsetUTF8)
+	c.Response().Header.Del("X-Frame-Options")
+	c.Response().Header.Del("Content-Security-Policy")
+	c.Response().Header.Del("X-Content-Security-Policy")
+	c.Response().Header.Set("X-Tsuruyomi-Proxy-Status", fmt.Sprintf("%d", statusCode))
+	c.Response().Header.Set("X-Tsuruyomi-Proxy-Latency", fmt.Sprintf("%dms", latencyMs))
+	return c.Status(statusCode).SendString(modifiedHTML)
+}
+
+func renderProxyErrorPage(c *fiber.Ctx, targetURL string, errMsg string, statusCode int, latencyMs int64) error {
+	errorHTML := fmt.Sprintf(`<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Error de Conexión en WebView - Tsuruyomi</title>
+    <style>
+        body { background: #0f111a; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+        .card { background: #1a1d2e; border: 1px solid #ef4444; border-radius: 12px; padding: 32px; max-width: 540px; width: 100%%; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; }
+        h2 { color: #f87171; margin-top: 0; font-size: 1.3rem; }
+        p { color: #94a3b8; font-size: 0.95rem; line-height: 1.5; }
+        .details { background: #0b0c13; border: 1px solid #334155; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 0.85rem; color: #fca5a5; text-align: left; word-break: break-all; margin: 16px 0; }
+        .btn-group { display: flex; gap: 12px; justify-content: center; margin-top: 24px; }
+        .btn { padding: 10px 18px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; text-decoration: none; cursor: pointer; border: none; }
+        .btn-retry { background: #6366f1; color: #fff; }
+        .btn-direct { background: #334155; color: #cbd5e1; }
+    </style>
+    <script>
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'tsuruyomi_webview_load',
+                    status: %d,
+                    latency: %d,
+                    error: true
+                }, '*');
+            }
+        } catch(e) {}
+    </script>
+</head>
+<body>
+    <div class="card">
+        <h2>⚠️ Error al conectar con el servidor origen</h2>
+        <p>El servidor Tsuruyomi (CT 108) no pudo establecer comunicación con la fuente remota.</p>
+        <div class="details">%s</div>
+        <p style="font-size: 0.85rem; color: #64748b;">URL solicitada: <code>%s</code></p>
+        <div class="btn-group">
+            <button class="btn btn-retry" onclick="location.reload()">Reintentar conexión</button>
+            <a class="btn btn-direct" href="%s" target="_blank" rel="noreferrer">Abrir directamente en navegador</a>
+        </div>
+    </div>
+</body>
+</html>`, statusCode, latencyMs, html.EscapeString(errMsg), html.EscapeString(targetURL), html.EscapeString(targetURL))
+
+	c.Set(fiber.HeaderContentType, fiber.MIMETextHTMLCharsetUTF8)
+	c.Response().Header.Del("X-Frame-Options")
+	c.Response().Header.Del("Content-Security-Policy")
+	return c.Status(fiber.StatusBadGateway).SendString(errorHTML)
 }
 
 // WebviewWS handles the WebSocket connection for webview management by proxying to the sidecar.

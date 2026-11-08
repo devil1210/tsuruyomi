@@ -128,14 +128,14 @@ func Setup(cfg *config.Config) *fiber.App {
 	api.Post("/settings/update-server", handlers.PostUpdateServer)
 
 	// Webview Routes
-	api.Use("/webview", func(c *fiber.Ctx) error {
+	api.Get("/webview/proxy", handlers.GetWebviewProxy)
+	api.Get("/webview/ws", websocket.New(handlers.WebviewWS))
+	api.Get("/webview", func(c *fiber.Ctx) error {
 		if websocket.IsWebSocketUpgrade(c) {
-			return c.Next()
+			return websocket.New(handlers.WebviewWS)(c)
 		}
 		return handlers.GetWebview(c)
 	})
-	api.Get("/webview", websocket.New(handlers.WebviewWS))
-	api.Get("/webview/ws", websocket.New(handlers.WebviewWS))
 
 	// Middleware to check and forward to sidecar if enabled
 	sidecarMiddleware := func(c *fiber.Ctx) error {
