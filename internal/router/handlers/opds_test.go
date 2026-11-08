@@ -81,3 +81,27 @@ func TestOpdsSearchDescription(t *testing.T) {
 		t.Errorf("expected ShortName 'Tsuruyomi', got %q", desc.ShortName)
 	}
 }
+
+func TestBuildOpdsChapterGlyph(t *testing.T) {
+	tests := []struct {
+		read         bool
+		lastPageRead int
+		downloaded   bool
+		expected     string
+	}{
+		{read: true, lastPageRead: 0, downloaded: true, expected: "[●↧]"},
+		{read: true, lastPageRead: 15, downloaded: false, expected: "[●]"},
+		{read: false, lastPageRead: 5, downloaded: true, expected: "[◐↧]"},
+		{read: false, lastPageRead: 5, downloaded: false, expected: "[◐]"},
+		{read: false, lastPageRead: 0, downloaded: true, expected: "[○↧]"},
+		{read: false, lastPageRead: 0, downloaded: false, expected: "[○]"},
+	}
+
+	for _, tt := range tests {
+		actual := BuildOpdsChapterGlyph(tt.read, tt.lastPageRead, tt.downloaded)
+		if actual != tt.expected {
+			t.Errorf("BuildOpdsChapterGlyph(%v, %d, %v) = %q, expected %q",
+				tt.read, tt.lastPageRead, tt.downloaded, actual, tt.expected)
+		}
+	}
+}

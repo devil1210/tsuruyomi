@@ -478,16 +478,8 @@ func GetOpds2SeriesChapters(c *fiber.Ctx) error {
 			chUpdated = formatRFC3339(time.Unix(ch.FetchedAt, 0))
 		}
 
-		statusLabel := "[Unread]"
-		if ch.Read {
-			statusLabel = "[Read]"
-		} else if ch.Downloaded {
-			statusLabel = "[Downloaded]"
-		} else if ch.LastPageRead > 0 {
-			statusLabel = "[In Progress]"
-		}
-
-		entryTitle := fmt.Sprintf("%s %s", statusLabel, ch.Name)
+		statusGlyph := BuildOpdsChapterGlyph(ch.Read, ch.LastPageRead, ch.Downloaded)
+		entryTitle := fmt.Sprintf("%s %s", statusGlyph, ch.Name)
 		scan := ""
 		if ch.Scanlator != nil && *ch.Scanlator != "" {
 			scan = "Scanlator: " + *ch.Scanlator + " | "
@@ -753,9 +745,10 @@ func GetOpds2LibraryUpdates(c *fiber.Ctx) error {
 			chUpdated = formatRFC3339(time.Unix(ch.FetchedAt, 0))
 		}
 
+		statusGlyph := BuildOpdsChapterGlyph(ch.Read, ch.LastPageRead, ch.Downloaded)
 		pubs = append(pubs, Opds2Publication{
 			Metadata: Opds2Metadata{
-				Title:       fmt.Sprintf("%s - %s", manga.Title, ch.Name),
+				Title:       fmt.Sprintf("%s %s - %s", statusGlyph, manga.Title, ch.Name),
 				Modified:    chUpdated,
 				Description: fmt.Sprintf("%s | Chapter %s", manga.Title, ch.Name),
 				Author: &Opds2Author{
@@ -849,9 +842,10 @@ func GetOpds2History(c *fiber.Ctx) error {
 		}
 
 		readDate := formatRFC3339(time.Unix(lastReadAt, 0))
+		statusGlyph := BuildOpdsChapterGlyph(isRead, lastPage, false)
 		pubs = append(pubs, Opds2Publication{
 			Metadata: Opds2Metadata{
-				Title:       fmt.Sprintf("%s: %s", mTitle, chName),
+				Title:       fmt.Sprintf("%s %s: %s", statusGlyph, mTitle, chName),
 				Modified:    readDate,
 				Description: fmt.Sprintf("Last read at %s (page %d/%d)", readDate, lastPage, pageCount),
 				Author: &Opds2Author{

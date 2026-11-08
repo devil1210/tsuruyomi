@@ -222,6 +222,28 @@ func sanitizeXMLAttributes(xmlStr string) string {
 	})
 }
 
+// BuildOpdsChapterGlyph constructs the KOReader/OPDS-compatible chapter status glyph prefix.
+// Upstream cf2f0a7 specification:
+// Read states: ● (read), ◐ (in progress), ○ (unread)
+// Download state: ↧ (downloaded)
+// Example output: "[●↧]", "[◐↧]", "[○↧]", "[●]", "[◐]", "[○]"
+func BuildOpdsChapterGlyph(read bool, lastPageRead int, downloaded bool) string {
+	var sb strings.Builder
+	sb.WriteByte('[')
+	if read {
+		sb.WriteRune('●')
+	} else if lastPageRead > 0 {
+		sb.WriteRune('◐')
+	} else {
+		sb.WriteRune('○')
+	}
+	if downloaded {
+		sb.WriteRune('↧')
+	}
+	sb.WriteByte(']')
+	return sb.String()
+}
+
 func renderOpdsXML(c *fiber.Ctx, feed *OpdsFeed, isAcquisition bool) error {
 	mime := OpdsMimeNavigation
 	if isAcquisition {
@@ -828,16 +850,8 @@ func GetOpdsSeriesChapters(c *fiber.Ctx) error {
 			chUpdated = formatRFC3339(time.Unix(ch.FetchedAt, 0))
 		}
 
-		statusLabel := "[Unread]"
-		if ch.Read {
-			statusLabel = "[Read]"
-		} else if ch.Downloaded {
-			statusLabel = "[Downloaded]"
-		} else if ch.LastPageRead > 0 {
-			statusLabel = "[In Progress]"
-		}
-
-		entryTitle := fmt.Sprintf("%s %s", statusLabel, ch.Name)
+		statusGlyph := BuildOpdsChapterGlyph(ch.Read, ch.LastPageRead, ch.Downloaded)
+		entryTitle := fmt.Sprintf("%s %s", statusGlyph, ch.Name)
 		summary := fmt.Sprintf("%s - %s", manga.Title, ch.Name)
 
 		scan := ""
@@ -1177,10 +1191,11 @@ func GetOpdsLibraryUpdates(c *fiber.Ctx) error {
 
 		pageCountInt := ch.PageCount
 		lastPageInt := ch.LastPageRead
+		statusGlyph := BuildOpdsChapterGlyph(ch.Read, ch.LastPageRead, ch.Downloaded)
 
 		feed.Entries = append(feed.Entries, OpdsEntry{
 			ID:      fmt.Sprintf("urn:tsuruyomi:chapter:%d", ch.ID),
-			Title:   fmt.Sprintf("%s - %s", manga.Title, ch.Name),
+			Title:   fmt.Sprintf("%s %s - %s", statusGlyph, manga.Title, ch.Name),
 			Updated: chUpdated,
 			Summary: &OpdsTextElem{Type: "text", Value: fmt.Sprintf("%s | Chapter %s", manga.Title, ch.Name)},
 			Links: []OpdsLink{
@@ -1278,9 +1293,10 @@ func GetOpdsHistory(c *fiber.Ctx) error {
 		}
 
 		readDate := formatRFC3339(time.Unix(lastReadAt, 0))
+		statusGlyph := BuildOpdsChapterGlyph(isRead, lastPage, false)
 		feed.Entries = append(feed.Entries, OpdsEntry{
 			ID:      fmt.Sprintf("urn:tsuruyomi:history:%d", chID),
-			Title:   fmt.Sprintf("%s: %s", mTitle, chName),
+			Title:   fmt.Sprintf("%s %s: %s", statusGlyph, mTitle, chName),
 			Updated: readDate,
 			Summary: &OpdsTextElem{Type: "text", Value: fmt.Sprintf("Last read at %s (page %d/%d)", readDate, lastPage, pageCount)},
 			Links: []OpdsLink{
