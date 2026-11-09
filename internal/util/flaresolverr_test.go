@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -288,4 +289,87 @@ func TestSolveAndFetchHTML_SemaphoreAndCache(t *testing.T) {
 		t.Errorf("FlareSolverr calls increased to %d, cache was not reused!", calls)
 	}
 }
+
+func TestSolveAndFetchHTML_ConcurrentSingleflight(t *testing.T) {
+	var fsCalls int64
+
+	fsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&fsCalls, 1)
+		time.Sleep(50 * time.Millisecond)
+
+		resp := flareSolverrResponse{
+			Status:  "ok",
+			Message: "Challenge solved",
+			Solution: flareSolverrSolution{
+				Status:   200,
+				Response: "<html><body><h1>Singleflight HTML</h1></body></html>",
+				Cookies: []FlareSolverrCookie{
+					{Name: "cf_clearance", Value: "sf_token", Domain: "127.0.0.1", Path: "/"},
+				},
+				UserAgent: "SF-UA/1.0",
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer fsServer.Close()
+
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("cf_clearance")
+		if err == nil && cookie.Value == "sf_token" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("<html><body><h1>Direct HTML for " + r.URL.Path + "</h1></body></html>"))
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("<html>Forbidden</html>"))
+	}))
+	defer targetServer.Close()
+
+	cfg := &config.Config{
+		FlareSolverr: config.FlareSolverrConfig{
+			Enabled: true,
+			URL:     fsServer.URL,
+			Timeout: 10,
+		},
+	}
+
+	targetDomain := ExtractDomain(targetServer.URL)
+	invalidateSession(targetDomain)
+
+	// Fire 5 concurrent requests with different URLs on the same domain
+	var wg sync.WaitGroup
+	concurrentCount := 5
+	errChan := make(chan error, concurrentCount)
+
+	for i := 0; i < concurrentCount; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			reqURL := fmt.Sprintf("%s/page_%d", targetServer.URL, idx)
+			html, err := SolveAndFetchHTML(context.Background(), cfg, reqURL, targetServer.URL)
+			if err != nil {
+				errChan <- err
+				return
+			}
+			if !strings.Contains(html, "HTML") {
+				errChan <- fmt.Errorf("unexpected HTML: %s", html)
+				return
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	for err := range errChan {
+		t.Fatalf("concurrent SolveAndFetchHTML failed: %v", err)
+	}
+
+	// Singleflight must have merged all 5 concurrent requests into exactly 1 FlareSolverr call!
+	calls := atomic.LoadInt64(&fsCalls)
+	if calls != 1 {
+		t.Errorf("expected 1 FlareSolverr call across 5 concurrent requests, got %d", calls)
+	}
+}
+
 

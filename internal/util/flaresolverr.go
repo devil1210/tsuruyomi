@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -23,17 +24,20 @@ type flareSolverrRequest struct {
 	UUID string `json:"uuid,omitempty"`
 }
 
-type flareSolverrCookie struct {
+// FlareSolverrCookie represents a cookie returned by FlareSolverr/Byparr.
+type FlareSolverrCookie struct {
 	Name   string `json:"name"`
 	Value  string `json:"value"`
 	Domain string `json:"domain"`
 	Path   string `json:"path"`
 }
 
+type flareSolverrCookie = FlareSolverrCookie
+
 type flareSolverrSolution struct {
 	URL       string               `json:"url"`
 	Status    int                  `json:"status"`
-	Cookies   []flareSolverrCookie `json:"cookies"`
+	Cookies   []FlareSolverrCookie `json:"cookies"`
 	UserAgent string               `json:"userAgent"`
 	Response  string               `json:"response"`
 }
@@ -45,14 +49,16 @@ type flareSolverrResponse struct {
 }
 
 type domainSession struct {
-	Cookies   []flareSolverrCookie
+	Cookies   []FlareSolverrCookie
 	UserAgent string
 	ExpiresAt time.Time
 }
 
 type challengeResult struct {
-	Cookies   []flareSolverrCookie
+	Cookies   []FlareSolverrCookie
 	UserAgent string
+	URL       string
+	HTML      string
 }
 
 const defaultSessionTTL = 1 * time.Hour
@@ -75,6 +81,20 @@ func extractDomain(rawURL string) string {
 // ExtractDomain returns the lowercase hostname from a raw URL.
 func ExtractDomain(rawURL string) string {
 	return extractDomain(rawURL)
+}
+
+func extractRootDomain(domain string) string {
+	if domain == "" {
+		return ""
+	}
+	if net.ParseIP(domain) != nil {
+		return domain
+	}
+	parts := strings.Split(domain, ".")
+	if len(parts) > 2 {
+		return strings.Join(parts[len(parts)-2:], ".")
+	}
+	return domain
 }
 
 // isStaticAssetURL returns true if the URL appears to point to a static asset
@@ -100,13 +120,13 @@ func isStaticAssetURL(rawURL string) bool {
 	return false
 }
 
-func getSession(domain string) ([]flareSolverrCookie, string, bool) {
+func getSession(domain string) ([]FlareSolverrCookie, string, bool) {
 	if domain == "" {
 		return nil, "", false
 	}
 	sessionCacheMu.RLock()
 	sess, ok := sessionCache[domain]
-	if !ok {
+	if !ok && net.ParseIP(domain) == nil {
 		parts := strings.Split(domain, ".")
 		if len(parts) > 2 {
 			parent := strings.Join(parts[len(parts)-2:], ".")
@@ -124,19 +144,19 @@ func getSession(domain string) ([]flareSolverrCookie, string, bool) {
 		return nil, "", false
 	}
 
-	cookies := make([]flareSolverrCookie, len(sess.Cookies))
+	cookies := make([]FlareSolverrCookie, len(sess.Cookies))
 	copy(cookies, sess.Cookies)
 	return cookies, sess.UserAgent, true
 }
 
-func setSession(domain string, cookies []flareSolverrCookie, userAgent string, ttl time.Duration) {
+func setSession(domain string, cookies []FlareSolverrCookie, userAgent string, ttl time.Duration) {
 	if domain == "" {
 		return
 	}
 	if ttl <= 0 {
 		ttl = defaultSessionTTL
 	}
-	copied := make([]flareSolverrCookie, len(cookies))
+	copied := make([]FlareSolverrCookie, len(cookies))
 	copy(copied, cookies)
 
 	sessionCacheMu.Lock()
@@ -149,10 +169,12 @@ func setSession(domain string, cookies []flareSolverrCookie, userAgent string, t
 	sessionCache[domain] = entry
 
 	// Also store under parent domain if subdomain (e.g. uploads.bokugents.com -> bokugents.com)
-	parts := strings.Split(domain, ".")
-	if len(parts) > 2 {
-		parent := strings.Join(parts[len(parts)-2:], ".")
-		sessionCache[parent] = entry
+	if net.ParseIP(domain) == nil {
+		parts := strings.Split(domain, ".")
+		if len(parts) > 2 {
+			parent := strings.Join(parts[len(parts)-2:], ".")
+			sessionCache[parent] = entry
+		}
 	}
 
 	// Also index under cookie domains returned by Cloudflare (e.g. .bokugents.com)
@@ -171,15 +193,22 @@ func invalidateSession(domain string) {
 	sessionCacheMu.Lock()
 	defer sessionCacheMu.Unlock()
 	delete(sessionCache, domain)
+	if net.ParseIP(domain) == nil {
+		parts := strings.Split(domain, ".")
+		if len(parts) > 2 {
+			parent := strings.Join(parts[len(parts)-2:], ".")
+			delete(sessionCache, parent)
+		}
+	}
 }
 
 // GetSession returns a cached FlareSolverr session for domain, if present and not expired.
-func GetSession(domain string) ([]flareSolverrCookie, string, bool) {
+func GetSession(domain string) ([]FlareSolverrCookie, string, bool) {
 	return getSession(domain)
 }
 
 // SetSession stores a FlareSolverr session for domain.
-func SetSession(domain string, cookies []flareSolverrCookie, userAgent string, ttl time.Duration) {
+func SetSession(domain string, cookies []FlareSolverrCookie, userAgent string, ttl time.Duration) {
 	setSession(domain, cookies, userAgent, ttl)
 }
 
@@ -326,55 +355,13 @@ func DownloadWithFlareSolverrAndReferer(ctx context.Context, cfg *config.Config,
 		return nil, "", fmt.Errorf("Cloudflare challenge encountered for %s but FlareSolverr is disabled", domain)
 	}
 
-	// Resolve Cloudflare challenge via singleflight deduplication
-	sfKey := domain
-	if parts := strings.Split(domain, "."); len(parts) > 2 {
-		sfKey = strings.Join(parts[len(parts)-2:], ".")
-	}
-	if sfKey == "" {
-		sfKey = targetURL
-	}
-
-	v, err, _ := sfGroup.Do(sfKey, func() (any, error) {
-		// Double-check session in case another concurrent goroutine just finished solving it
-		if sfKey != "" {
-			if cookies, ua, ok := getSession(sfKey); ok && len(cookies) > 0 {
-				return &challengeResult{Cookies: cookies, UserAgent: ua}, nil
-			}
-		}
-
-		// For static asset URLs (images, etc.), solve the challenge on the domain root.
-		// byparr/FlareSolverr cannot render image URLs — they need an HTML page.
-		challengeTarget := targetURL
-		if isStaticAssetURL(targetURL) && domain != "" {
-			challengeTarget = "https://" + domain + "/"
-			log.Printf("[FLARESOLVERR] Static asset detected — solving challenge on domain root: %s", challengeTarget)
-		} else {
-			log.Printf("[FLARESOLVERR] Solving challenge for %s (%s)", sfKey, targetURL)
-		}
-		cookies, ua, solveErr := solveCloudflareChallenge(ctx, cfg, challengeTarget)
-		if solveErr != nil {
-			return nil, solveErr
-		}
-
-		if sfKey != "" {
-			setSession(sfKey, cookies, ua, defaultSessionTTL)
-			log.Printf("[FLARESOLVERR] Solved and cached session for %s (%d cookies)", sfKey, len(cookies))
-		}
-
-		return &challengeResult{Cookies: cookies, UserAgent: ua}, nil
-	})
+	cookies, ua, err := EnsureSession(ctx, cfg, targetURL)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to solve challenge for %s: %w", sfKey, err)
-	}
-
-	res, ok := v.(*challengeResult)
-	if !ok || len(res.Cookies) == 0 {
-		return nil, "", fmt.Errorf("no cookies returned from FlareSolverr for %s", sfKey)
+		return nil, "", fmt.Errorf("failed to ensure session for %s: %w", targetURL, err)
 	}
 
 	// Retry download with resolved cookies and User-Agent
-	retryData, retryMime, retryErr := doDownloadWithCookies(ctx, targetURL, referer, res.Cookies, res.UserAgent)
+	retryData, retryMime, retryErr := doDownloadWithCookies(ctx, targetURL, referer, cookies, ua)
 	if retryErr != nil {
 		return nil, "", fmt.Errorf("retry after solving challenge failed: %w", retryErr)
 	}
@@ -416,16 +403,9 @@ func getFlareSolverrTimeout(t int) time.Duration {
 	return time.Duration(t) * time.Second
 }
 
-func solveCloudflareChallenge(ctx context.Context, cfg *config.Config, targetURL string) ([]flareSolverrCookie, string, error) {
+func solveCloudflareChallengeWithHTML(ctx context.Context, cfg *config.Config, targetURL string) ([]FlareSolverrCookie, string, string, error) {
 	if cfg == nil || !cfg.FlareSolverr.Enabled {
-		return nil, "", fmt.Errorf("FlareSolverr is not enabled")
-	}
-
-	select {
-	case flareSolverrSem <- struct{}{}:
-		defer func() { <-flareSolverrSem }()
-	case <-ctx.Done():
-		return nil, "", ctx.Err()
+		return nil, "", "", fmt.Errorf("FlareSolverr is not enabled")
 	}
 
 	fsClient := &http.Client{
@@ -440,38 +420,136 @@ func solveCloudflareChallenge(ctx context.Context, cfg *config.Config, targetURL
 
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonBytes))
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := fsClient.Do(req)
 	if err != nil {
-		return nil, "", fmt.Errorf("calling FlareSolverr failed: %w", err)
+		return nil, "", "", fmt.Errorf("calling FlareSolverr failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("FlareSolverr returned status: %d", resp.StatusCode)
+		return nil, "", "", fmt.Errorf("FlareSolverr returned status: %d", resp.StatusCode)
 	}
 
 	var result flareSolverrResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, "", err
+		return nil, "", "", fmt.Errorf("decoding FlareSolverr response: %w", err)
 	}
 
 	if result.Status != "ok" {
-		return nil, "", fmt.Errorf("FlareSolverr error: %s", result.Message)
+		return nil, "", "", fmt.Errorf("FlareSolverr error: %s", result.Message)
 	}
 
-	return result.Solution.Cookies, result.Solution.UserAgent, nil
+	return result.Solution.Cookies, result.Solution.UserAgent, result.Solution.Response, nil
 }
 
-func fetchHTMLWithSession(ctx context.Context, targetURL, referer string, cookies []flareSolverrCookie, userAgent string) (string, error) {
+func solveCloudflareChallenge(ctx context.Context, cfg *config.Config, targetURL string) ([]FlareSolverrCookie, string, error) {
+	cookies, ua, _, err := solveCloudflareChallengeWithHTML(ctx, cfg, targetURL)
+	return cookies, ua, err
+}
+
+func resolveChallengeSingleflight(ctx context.Context, cfg *config.Config, targetURL, domain string) (*challengeResult, error) {
+	sfKey := extractRootDomain(domain)
+	if sfKey == "" {
+		sfKey = domain
+	}
+	if sfKey == "" {
+		sfKey = targetURL
+	}
+
+	v, err, _ := sfGroup.Do("cf:"+sfKey, func() (any, error) {
+		// Double-check session in case another concurrent goroutine just finished solving it
+		if cookies, ua, ok := getSession(sfKey); ok && len(cookies) > 0 {
+			return &challengeResult{Cookies: cookies, UserAgent: ua}, nil
+		}
+
+		select {
+		case flareSolverrSem <- struct{}{}:
+			defer func() { <-flareSolverrSem }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+
+		// Re-check session again after acquiring semaphore
+		if cookies, ua, ok := getSession(sfKey); ok && len(cookies) > 0 {
+			return &challengeResult{Cookies: cookies, UserAgent: ua}, nil
+		}
+
+		challengeTarget := targetURL
+		if (isStaticAssetURL(targetURL) || !strings.HasPrefix(targetURL, "http")) && domain != "" {
+			challengeTarget = "https://" + domain + "/"
+			log.Printf("[FLARESOLVERR] Non-HTML target detected — solving challenge on domain root: %s", challengeTarget)
+		} else {
+			log.Printf("[FLARESOLVERR] Solving challenge for %s (%s)", sfKey, targetURL)
+		}
+
+		cookies, ua, html, solveErr := solveCloudflareChallengeWithHTML(ctx, cfg, challengeTarget)
+		if solveErr != nil {
+			return nil, solveErr
+		}
+
+		if len(cookies) > 0 {
+			setSession(sfKey, cookies, ua, defaultSessionTTL)
+			if domain != "" && domain != sfKey {
+				setSession(domain, cookies, ua, defaultSessionTTL)
+			}
+			log.Printf("[FLARESOLVERR] Solved and cached session for %s (%d cookies)", sfKey, len(cookies))
+		}
+
+		return &challengeResult{
+			Cookies:   cookies,
+			UserAgent: ua,
+			URL:       challengeTarget,
+			HTML:      html,
+		}, nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to solve challenge for %s: %w", sfKey, err)
+	}
+
+	res, ok := v.(*challengeResult)
+	if !ok || len(res.Cookies) == 0 {
+		return nil, fmt.Errorf("no cookies returned from FlareSolverr for %s", sfKey)
+	}
+
+	return res, nil
+}
+
+// EnsureSession ensures that a valid Cloudflare session exists for targetURL or its domain.
+// It deduplicates concurrent solves via singleflight and limits FlareSolverr concurrency via semaphore.
+func EnsureSession(ctx context.Context, cfg *config.Config, targetURL string) ([]FlareSolverrCookie, string, error) {
+	if cfg == nil || !cfg.FlareSolverr.Enabled {
+		return nil, "", fmt.Errorf("FlareSolverr is not enabled")
+	}
+
+	domain := extractDomain(targetURL)
+	if domain == "" {
+		domain = strings.TrimSpace(strings.ToLower(targetURL))
+	}
+
+	// 1. Fast path: check cached session
+	if cookies, ua, ok := getSession(domain); ok && len(cookies) > 0 {
+		return cookies, ua, nil
+	}
+
+	// 2. Slow path: singleflight challenge resolution
+	res, err := resolveChallengeSingleflight(ctx, cfg, targetURL, domain)
+	if err != nil {
+		return nil, "", err
+	}
+	return res.Cookies, res.UserAgent, nil
+}
+
+func fetchHTMLWithSession(ctx context.Context, targetURL, referer string, cookies []FlareSolverrCookie, userAgent string) (string, error) {
 	client := &http.Client{
 		Timeout: 35 * time.Second,
 	}
@@ -532,6 +610,8 @@ func fetchHTMLWithSession(ctx context.Context, targetURL, referer string, cookie
 }
 
 // SolveAndFetchHTML queries FlareSolverr / Byparr to bypass Cloudflare and return the page HTML directly.
+// It deduplicates concurrent solves via singleflight, limits concurrency via semaphore,
+// and reuses cached domain sessions.
 func SolveAndFetchHTML(ctx context.Context, cfg *config.Config, targetURL string, referer string) (string, error) {
 	if cfg == nil || !cfg.FlareSolverr.Enabled {
 		return "", fmt.Errorf("FlareSolverr is not enabled")
@@ -550,69 +630,32 @@ func SolveAndFetchHTML(ctx context.Context, cfg *config.Config, targetURL string
 		}
 	}
 
-	select {
-	case flareSolverrSem <- struct{}{}:
-		defer func() { <-flareSolverrSem }()
-	case <-ctx.Done():
-		return "", ctx.Err()
-	}
-
-	fsClient := &http.Client{
-		Timeout: getFlareSolverrTimeout(cfg.FlareSolverr.Timeout),
-	}
-
-	apiURL := getFlareSolverrAPIURL(cfg.FlareSolverr.URL)
-	payload := flareSolverrRequest{
-		Cmd: "request.get",
-		URL: targetURL,
-	}
-
-	jsonBytes, err := json.Marshal(payload)
+	res, err := resolveChallengeSingleflight(ctx, cfg, targetURL, domain)
 	if err != nil {
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonBytes))
+	cleanTarget := strings.TrimRight(targetURL, "/")
+	cleanResURL := strings.TrimRight(res.URL, "/")
+
+	// If FlareSolverr directly solved this target URL and returned its HTML, reuse it directly
+	if (cleanResURL == cleanTarget || res.URL == targetURL) && len(res.HTML) > 0 {
+		return res.HTML, nil
+	}
+
+	// Otherwise (e.g. concurrent request with different URL or challenge solved on root),
+	// fetch using the freshly solved session cookies
+	html, err := fetchHTMLWithSession(ctx, targetURL, referer, res.Cookies, res.UserAgent)
+	if err == nil && len(html) > 0 {
+		return html, nil
+	}
+
+	if len(res.HTML) > 0 {
+		return res.HTML, nil
+	}
+
 	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := fsClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("calling FlareSolverr failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("FlareSolverr returned status: %d", resp.StatusCode)
-	}
-
-	var result flareSolverrResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decoding FlareSolverr response: %w", err)
-	}
-
-	if result.Status != "ok" {
-		return "", fmt.Errorf("FlareSolverr error: %s", result.Message)
-	}
-
-	// Cache session from successful solution
-	if domain != "" && len(result.Solution.Cookies) > 0 {
-		setSession(domain, result.Solution.Cookies, result.Solution.UserAgent, defaultSessionTTL)
-		log.Printf("[FLARESOLVERR] Cached session for %s from SolveAndFetchHTML (%d cookies)", domain, len(result.Solution.Cookies))
-	}
-
-	if result.Solution.Response != "" {
-		return result.Solution.Response, nil
-	}
-
-	// Fallback: If response HTML was omitted, retry with resolved cookies and User-Agent
-	if len(result.Solution.Cookies) > 0 {
-		html, err := fetchHTMLWithSession(ctx, targetURL, referer, result.Solution.Cookies, result.Solution.UserAgent)
-		if err == nil && len(html) > 0 {
-			return html, nil
-		}
+		return "", fmt.Errorf("fetching HTML with resolved session failed: %w", err)
 	}
 
 	return "", fmt.Errorf("no HTML content returned by FlareSolverr")

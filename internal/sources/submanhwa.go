@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
-	"tsuruyomi/internal/database"
 )
 
 func init() {
@@ -294,45 +293,6 @@ func (h *SubmanhwaHandler) GetChapterList(ctx context.Context, mangaURL string) 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return nil, fmt.Errorf("parsing HTML: %w", err)
-	}
-
-	// Update manga metadata in DB if available
-	if database.DB != nil {
-		title := strings.TrimSpace(doc.Find(".sr-info > h1").Text())
-		desc := strings.TrimSpace(doc.Find(".sr-summary > p").Text())
-		thumb, _ := doc.Find("img.sr-cover").Attr("src")
-		if thumb == "" {
-			thumb, _ = doc.Find("img.sr-cover").Attr("data-src")
-		}
-
-		status := 1 // ongoing
-		if doc.Find(".ended").Length() > 0 || strings.Contains(strings.ToLower(doc.Find(".sr-status, .status, .sr-info").Text()), "completado") {
-			status = 2 // completed
-		}
-
-		var genres []string
-		doc.Find(".sr-badge.type, .sr-cat, .sr-tag").Each(func(i int, s *goquery.Selection) {
-			g := strings.TrimSpace(s.Text())
-			if g != "" {
-				genres = append(genres, g)
-			}
-		})
-		genreStr := strings.Join(genres, ", ")
-
-		cleanRelURL := mangaURL
-		if strings.HasPrefix(cleanRelURL, h.baseURL) {
-			cleanRelURL = strings.TrimPrefix(cleanRelURL, h.baseURL)
-		}
-
-		_, _ = database.DB.Exec(ctx, `
-			UPDATE suwayomi.manga SET
-				title = COALESCE(NULLIF($1, ''), title),
-				thumbnail_url = COALESCE(NULLIF($2, ''), thumbnail_url),
-				description = COALESCE(NULLIF($3, ''), description),
-				status = $4,
-				genre = COALESCE(NULLIF($5, ''), genre)
-			WHERE source = 1136717301008230074 AND (url = $6 OR url = $7)
-		`, title, thumb, desc, status, genreStr, cleanRelURL, fullURL)
 	}
 
 	chaptersDoc := doc

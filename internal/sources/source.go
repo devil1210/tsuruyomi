@@ -1,6 +1,7 @@
 package sources
 
 import (
+	"bytes"
 	"context"
 	"regexp"
 	"strconv"
@@ -218,8 +219,10 @@ func FetchHTML(ctx context.Context, targetURL string, referer string) (string, e
 	}
 
 	domain := util.ExtractDomain(targetURL)
+	usedSession := false
 	if domain != "" && AppConfig != nil && AppConfig.FlareSolverr.Enabled {
 		if cookies, ua, ok := util.GetSession(domain); ok && len(cookies) > 0 {
+			usedSession = true
 			for _, c := range cookies {
 				req.AddCookie(&http.Cookie{
 					Name:   c.Name,
@@ -257,7 +260,7 @@ func FetchHTML(ctx context.Context, targetURL string, referer string) (string, e
 
 	if isChallenge && AppConfig != nil && AppConfig.FlareSolverr.Enabled {
 		log.Printf("[SOURCES] Cloudflare challenge encountered for %s (HTTP %d). Requesting FlareSolverr bypass...", targetURL, resp.StatusCode)
-		if domain != "" {
+		if domain != "" && usedSession {
 			util.InvalidateSession(domain)
 		}
 		html, solveErr := util.SolveAndFetchHTML(ctx, AppConfig, targetURL, referer)
@@ -276,55 +279,115 @@ func FetchHTML(ctx context.Context, targetURL string, referer string) (string, e
 
 // FetchHTMLPost performs an HTTP POST request with desktop browser headers and active Cloudflare session cookies.
 func FetchHTMLPost(ctx context.Context, targetURL string, referer string, contentType string, body io.Reader) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, body)
-	if err != nil {
-		return "", err
-	}
-
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "es-419,es;q=0.9,en;q=0.8")
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	if referer != "" {
-		req.Header.Set("Referer", referer)
-	}
-
-	domain := util.ExtractDomain(targetURL)
-	if domain != "" && AppConfig != nil && AppConfig.FlareSolverr.Enabled {
-		if cookies, ua, ok := util.GetSession(domain); ok && len(cookies) > 0 {
-			for _, c := range cookies {
-				req.AddCookie(&http.Cookie{
-					Name:   c.Name,
-					Value:  c.Value,
-					Domain: c.Domain,
-					Path:   c.Path,
-				})
-			}
-			if ua != "" {
-				req.Header.Set("User-Agent", ua)
-			}
+	var bodyBytes []byte
+	if body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(body)
+		if err != nil {
+			return "", err
 		}
 	}
 
-	resp, err := DefaultClient.Do(req)
+	domain := util.ExtractDomain(targetURL)
+
+	doPost := func(cookies []util.FlareSolverrCookie, ua string) (*http.Response, string, error) {
+		var r io.Reader
+		if bodyBytes != nil {
+			r = bytes.NewReader(bodyBytes)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, r)
+		if err != nil {
+			return nil, "", err
+		}
+
+		if ua != "" {
+			req.Header.Set("User-Agent", ua)
+		} else {
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
+		}
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+		req.Header.Set("Accept-Language", "es-419,es;q=0.9,en;q=0.8")
+		req.Header.Set("X-Requested-With", "XMLHttpRequest")
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		if referer != "" {
+			req.Header.Set("Referer", referer)
+		}
+
+		for _, c := range cookies {
+			if c.Name == "" {
+				continue
+			}
+			req.AddCookie(&http.Cookie{
+				Name:   c.Name,
+				Value:  c.Value,
+				Domain: c.Domain,
+				Path:   c.Path,
+			})
+		}
+
+		resp, err := DefaultClient.Do(req)
+		if err != nil {
+			return nil, "", err
+		}
+		defer resp.Body.Close()
+
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, "", err
+		}
+		return resp, string(data), nil
+	}
+
+	var currentCookies []util.FlareSolverrCookie
+	var currentUA string
+	usedSession := false
+	if domain != "" && AppConfig != nil && AppConfig.FlareSolverr.Enabled {
+		if c, ua, ok := util.GetSession(domain); ok && len(c) > 0 {
+			currentCookies = c
+			currentUA = ua
+			usedSession = true
+		}
+	}
+
+	resp, respBody, err := doPost(currentCookies, currentUA)
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
 
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
+	isChallenge := resp.StatusCode == http.StatusForbidden ||
+		resp.StatusCode == http.StatusServiceUnavailable ||
+		(resp.StatusCode == http.StatusOK && (
+			strings.Contains(respBody, "Just a moment...") ||
+			strings.Contains(respBody, "challenges.cloudflare.com") ||
+			strings.Contains(respBody, "_cf_chl_opt") ||
+			strings.Contains(respBody, "cf-browser-verification") ||
+			strings.Contains(respBody, "challenge-running")))
+
+	if isChallenge && AppConfig != nil && AppConfig.FlareSolverr.Enabled {
+		log.Printf("[SOURCES] Cloudflare challenge encountered on POST for %s (HTTP %d). Ensuring session...", targetURL, resp.StatusCode)
+		if domain != "" && usedSession {
+			util.InvalidateSession(domain)
+		}
+		ref := referer
+		if ref == "" && domain != "" {
+			ref = "https://" + domain + "/"
+		}
+		newCookies, newUA, solveErr := util.EnsureSession(ctx, AppConfig, ref)
+		if solveErr == nil && len(newCookies) > 0 {
+			retryResp, retryBody, retryErr := doPost(newCookies, newUA)
+			if retryErr == nil && retryResp.StatusCode < 400 && !strings.Contains(retryBody, "Just a moment...") {
+				return retryBody, nil
+			}
+		}
 	}
 
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("HTTP error %d fetching %s", resp.StatusCode, targetURL)
 	}
 
-	return string(bodyBytes), nil
+	return respBody, nil
 }
 
 // FetchAndSaveChapterPages extracts pages natively in Go and persists them to the PostgreSQL database.
