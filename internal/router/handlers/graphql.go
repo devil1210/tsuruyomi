@@ -4354,6 +4354,22 @@ func HandleGraphQL(c *fiber.Ctx) error {
 				if chapterUrl == "" {
 					chapterUrl = realUrl
 				}
+				if dateUpload <= 0 {
+					if fetchedAt > 0 {
+						dateUpload = fetchedAt * 1000
+					} else {
+						dateUpload = time.Now().UnixMilli()
+					}
+				}
+				if strings.TrimSpace(name) == "" {
+					if chapterNumber > 0 {
+						name = fmt.Sprintf("Capítulo %g", chapterNumber)
+					} else if sourceOrder > 0 {
+						name = fmt.Sprintf("Capítulo %d", sourceOrder)
+					} else {
+						name = "Capítulo"
+					}
+				}
 				chNode = map[string]interface{}{
 					"id":            chapterID,
 					"name":          name,
@@ -6717,6 +6733,22 @@ func fetchChaptersForMangaIDs(ctx context.Context, mangaIDs []int64, orderBy str
 			}
 			if chapterUrl == "" {
 				chapterUrl = realUrl
+			}
+			if dateUpload <= 0 {
+				if fetchedAt > 0 {
+					dateUpload = fetchedAt * 1000
+				} else {
+					dateUpload = time.Now().UnixMilli()
+				}
+			}
+			if strings.TrimSpace(name) == "" {
+				if chapterNumber > 0 {
+					name = fmt.Sprintf("Capítulo %g", chapterNumber)
+				} else if sourceOrder > 0 {
+					name = fmt.Sprintf("Capítulo %d", sourceOrder)
+				} else {
+					name = "Capítulo"
+				}
 			}
 			nodes = append(nodes, map[string]interface{}{
 				"id":            id,

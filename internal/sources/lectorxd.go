@@ -202,7 +202,9 @@ func (h *LectorXDHandler) GetChapterList(ctx context.Context, mangaURL string) (
 				if txt == "" || txt == "schedule" || strings.HasPrefix(txt, "Cap") {
 					return
 				}
-				if d := parseLectorXDRelativeDate(txt); d > 0 {
+				if d := ParseSpanishOrEnglishDate(txt); d > 0 {
+					chapterDates[chPart] = d
+				} else if d := parseLectorXDRelativeDate(txt); d > 0 {
 					chapterDates[chPart] = d
 				}
 			})
@@ -307,6 +309,15 @@ func (h *LectorXDHandler) GetChapterList(ctx context.Context, mangaURL string) (
 		chName := fmt.Sprintf("Capítulo %s", entry.Chapter)
 
 		dateUp := chapterDates[entry.Chapter]
+		if dateUp == 0 {
+			cleanNum := strings.TrimLeft(entry.Chapter, "0")
+			for k, v := range chapterDates {
+				if strings.TrimLeft(k, "0") == cleanNum {
+					dateUp = v
+					break
+				}
+			}
+		}
 
 		chapters = append(chapters, ChapterItem{
 			Name:          chName,

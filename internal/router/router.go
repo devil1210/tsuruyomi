@@ -251,6 +251,11 @@ func Setup(cfg *config.Config) *fiber.App {
 	api.Post("/track/update", handlers.TrackerUpdateProgress)
 	api.Get("/track/:trackerId/thumbnail", handlers.GetTrackerThumbnail)
 
+	// System Integrity & Auto-Healing Routes
+	api.Get("/system/audit", handlers.SystemAuditHandler)
+	api.Post("/system/heal", handlers.SystemHealHandler)
+	api.Get("/system/heal", handlers.SystemHealHandler)
+
 	// OPDS v1.2 Endpoints (and aliases /opds, /opds/v1.2)
 	registerOpdsRoutes := func(r fiber.Router) {
 		r.Get("/", handlers.GetOpdsRoot)

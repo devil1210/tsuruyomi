@@ -526,6 +526,20 @@ func FetchAndSaveMangaChapters(ctx context.Context, sourceID int64, mangaID int6
 				if realURL == "" {
 					realURL = ch.URL
 				}
+				chDate := ch.DateUpload
+				if chDate <= 0 {
+					chDate = nowSec * 1000
+				}
+				chName := strings.TrimSpace(ch.Name)
+				if chName == "" {
+					if ch.ChapterNumber > 0 {
+						chName = fmt.Sprintf("Capítulo %g", ch.ChapterNumber)
+					} else if ch.SourceOrder > 0 {
+						chName = fmt.Sprintf("Capítulo %d", ch.SourceOrder)
+					} else {
+						chName = "Capítulo"
+					}
+				}
 				var chapterID int64
 				err := tx.QueryRow(ctx, `
 					INSERT INTO suwayomi.chapter (url, name, date_upload, chapter_number, scanlator, source_order, manga, is_downloaded, page_count, fetched_at, real_url)
@@ -535,10 +549,15 @@ func FetchAndSaveMangaChapters(ctx context.Context, sourceID int64, mangaID int6
 						chapter_number = EXCLUDED.chapter_number,
 						scanlator = EXCLUDED.scanlator,
 						source_order = EXCLUDED.source_order,
-						date_upload = CASE WHEN EXCLUDED.date_upload > 0 THEN EXCLUDED.date_upload ELSE suwayomi.chapter.date_upload END,
+						date_upload = CASE 
+							WHEN EXCLUDED.date_upload > 0 THEN EXCLUDED.date_upload 
+							WHEN suwayomi.chapter.date_upload > 0 THEN suwayomi.chapter.date_upload 
+							WHEN suwayomi.chapter.fetched_at > 0 THEN suwayomi.chapter.fetched_at * 1000
+							ELSE EXCLUDED.fetched_at * 1000 
+						END,
 						real_url = EXCLUDED.real_url
 					RETURNING id
-				`, ch.URL, ch.Name, ch.DateUpload, ch.ChapterNumber, ch.Scanlator, ch.SourceOrder, mangaID, nowSec, realURL).Scan(&chapterID)
+				`, ch.URL, chName, chDate, ch.ChapterNumber, ch.Scanlator, ch.SourceOrder, mangaID, nowSec, realURL).Scan(&chapterID)
 
 				if err == nil {
 					_, _ = tx.Exec(ctx, `

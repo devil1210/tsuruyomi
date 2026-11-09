@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"tsuruyomi/internal/models"
@@ -46,6 +48,22 @@ func GetChaptersByMangaID(ctx context.Context, mangaId int) ([]models.ChapterDat
 		}
 		if c.ChapterNumber <= 0 && c.Index > 0 {
 			c.ChapterNumber = float32(c.Index)
+		}
+		if c.UploadDate <= 0 {
+			if c.FetchedAt > 0 {
+				c.UploadDate = c.FetchedAt * 1000
+			} else {
+				c.UploadDate = time.Now().UnixMilli()
+			}
+		}
+		if strings.TrimSpace(c.Name) == "" {
+			if c.ChapterNumber > 0 {
+				c.Name = fmt.Sprintf("Capítulo %g", c.ChapterNumber)
+			} else if c.Index > 0 {
+				c.Name = fmt.Sprintf("Capítulo %d", c.Index)
+			} else {
+				c.Name = "Capítulo"
+			}
 		}
 		c.MangaID = mangaId
 		c.Meta = map[string]string{}

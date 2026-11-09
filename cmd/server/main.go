@@ -83,6 +83,9 @@ func main() {
 	// Start background automated backup scheduler
 	service.StartBackupScheduler(context.Background(), cfg)
 
+	// Start background automated integrity audit and self-healing scheduler
+	service.StartHealerScheduler(context.Background())
+
 	// Run background download storage reconciliation
 	go func() {
 		time.Sleep(2 * time.Second)
