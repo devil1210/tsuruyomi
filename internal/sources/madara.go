@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -194,7 +195,10 @@ func (h *MadaraHandler) fetchMangaList(ctx context.Context, targetURL string) ([
 
 
 
-var spanishMonths = map[string]string{
+var monthWordRegex = regexp.MustCompile(`(?i)\b[a-zA-ZáéíóúÁÉÍÓÚ]{3,10}\b`)
+
+var spanishAndEnglishMonths = map[string]string{
+	// Spanish full
 	"enero":      "January",
 	"febrero":    "February",
 	"marzo":      "March",
@@ -208,6 +212,37 @@ var spanishMonths = map[string]string{
 	"octubre":    "October",
 	"noviembre":  "November",
 	"diciembre":  "December",
+	// Spanish short
+	"ene": "Jan",
+	"feb": "Feb",
+	"mar": "Mar",
+	"abr": "Apr",
+	"may": "May",
+	"jun": "Jun",
+	"jul": "Jul",
+	"ago": "Aug",
+	"sep": "Sep",
+	"set": "Sep",
+	"oct": "Oct",
+	"nov": "Nov",
+	"dic": "Dec",
+	// English full
+	"january":   "January",
+	"february":  "February",
+	"march":     "March",
+	"april":     "April",
+	"june":      "June",
+	"july":      "July",
+	"august":    "August",
+	"september": "September",
+	"october":   "October",
+	"november":  "November",
+	"december":  "December",
+	// English short
+	"jan": "Jan",
+	"apr": "Apr",
+	"aug": "Aug",
+	"dec": "Dec",
 }
 
 // ParseSpanishOrEnglishDate parses Spanish relative and calendar dates as well as standard English layouts.
@@ -218,10 +253,17 @@ func ParseSpanishOrEnglishDate(dateStr string) int64 {
 	}
 
 	lower := strings.ToLower(dateStr)
+	now := time.Now()
+
+	if lower == "hoy" || lower == "today" || lower == "new" {
+		return now.UnixMilli()
+	}
+	if lower == "ayer" || lower == "yesterday" {
+		return now.AddDate(0, 0, -1).UnixMilli()
+	}
 
 	// Check relative dates in Spanish: "hace 2 días", "hace 3 semanas", "hace 5 horas"
 	// Also English: "2 days ago", "3 weeks ago"
-	now := time.Now()
 	if strings.HasPrefix(lower, "hace") || strings.Contains(lower, "ago") {
 		var num int
 		var unit string
@@ -258,30 +300,50 @@ func ParseSpanishOrEnglishDate(dateStr string) int64 {
 		}
 	}
 
-	// Replace Spanish words: " de " -> " ", strip dots
-	normalized := lower
-	normalized = strings.ReplaceAll(normalized, ".", "")
-	normalized = strings.ReplaceAll(normalized, " de ", " ")
-	for es, en := range spanishMonths {
-		if strings.Contains(normalized, es) {
-			normalized = strings.ReplaceAll(normalized, es, en)
-			break
+	// Clean separators
+	cleaned := dateStr
+	cleaned = strings.ReplaceAll(cleaned, " de ", " ")
+	cleaned = strings.ReplaceAll(cleaned, " De ", " ")
+	// Strip dot after abbreviated month (e.g. "Nov." -> "Nov")
+	cleaned = regexp.MustCompile(`([a-zA-Z]{3,})\.`).ReplaceAllString(cleaned, "$1")
+
+	// Replace month words with English Title-cased equivalents
+	normalized := monthWordRegex.ReplaceAllStringFunc(cleaned, func(word string) string {
+		if repl, ok := spanishAndEnglishMonths[strings.ToLower(word)]; ok {
+			return repl
 		}
-	}
+		return word
+	})
 
 	layouts := []string{
 		"January 2, 2006",
 		"January 2 2006",
+		"January 02, 2006",
+		"January 02 2006",
 		"2 January, 2006",
 		"2 January 2006",
+		"02 January, 2006",
+		"02 January 2006",
+		"Jan 2, 2006",
+		"Jan 2 2006",
+		"Jan 02, 2006",
+		"Jan 02 2006",
+		"2 Jan 2006",
+		"02 Jan 2006",
+		"2 Jan, 2006",
+		"02 Jan, 2006",
 		"02/01/2006",
+		"2/1/2006",
 		"02-01-2006",
+		"2-1-2006",
 		"2006-01-02",
 		"2006-01-02 15:04:05",
-		"02 Jan 2006",
-		"2 Jan 2006",
-		"Jan 02, 2006",
-		"Jan 2, 2006",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02T15:04:05Z07:00",
+		"02 Jan 2006 15:04",
+		"Jan 02, 2006 15:04",
+		"02 Jan 06",
+		"Jan 02 06",
 	}
 
 	for _, layout := range layouts {
@@ -442,7 +504,9 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 		chURL, _ := a.Attr("href")
 		chName := strings.TrimSpace(a.Find("span.chapter-name").Text())
 		if chName == "" {
-			chName = strings.TrimSpace(a.Text())
+			aClone := a.Clone()
+			aClone.Find("span.chapter-release-date, .chapter-release-date, span.ct-update, .ct-update, span.c-new-tag, .c-new-tag, i.chapter-release-date, .post-on, span.date, img").Remove()
+			chName = strings.TrimSpace(aClone.Text())
 		}
 		if chURL != "" && chName != "" {
 			cleanURL := chURL
@@ -456,10 +520,34 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 					chNum = ParseChapterNumber(cleanURL)
 				}
 				var dateUpload int64
-				if s != nil {
-					dateStr := strings.TrimSpace(s.Find("span.chapter-release-date, .chapter-release-date").Text())
-					dateUpload = ParseSpanishOrEnglishDate(dateStr)
+
+				// Check if flagged as NEW (badge or gif)
+				isNew := false
+				if s != nil && s.Find("img[alt='NEW'], img[src*='new.gif'], .c-new-tag, span.c-new-tag").Length() > 0 {
+					isNew = true
 				}
+				if !isNew && a != nil && a.Find("img[alt='NEW'], img[src*='new.gif'], .c-new-tag, span.c-new-tag").Length() > 0 {
+					isNew = true
+				}
+
+				if isNew {
+					dateUpload = time.Now().UnixMilli()
+				} else {
+					var dateStr string
+					dateSelectors := "span.chapter-release-date, .chapter-release-date, span.ct-update, .ct-update, span.c-new-tag, .c-new-tag, i.chapter-release-date, .post-on, span.date"
+					if s != nil {
+						dateStr = strings.TrimSpace(s.Find(dateSelectors).Text())
+					}
+					if dateStr == "" && a != nil {
+						dateStr = strings.TrimSpace(a.Find(dateSelectors).Text())
+					}
+					if strings.EqualFold(dateStr, "new") {
+						dateUpload = time.Now().UnixMilli()
+					} else if dateStr != "" {
+						dateUpload = ParseSpanishOrEnglishDate(dateStr)
+					}
+				}
+
 				chapters = append(chapters, ChapterItem{
 					Name:          chName,
 					URL:           cleanURL,
@@ -471,7 +559,7 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 		}
 	}
 
-	doc.Find("li.wp-manga-chapter, a.leermos").Each(func(i int, s *goquery.Selection) {
+	doc.Find("li.wp-manga-chapter, a.leermos, li.myfut, ul.chapter-list li").Each(func(i int, s *goquery.Selection) {
 		a := s
 		if !s.Is("a") {
 			a = s.Find("a").First()
@@ -484,7 +572,7 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 		ajaxChaptersURL := strings.TrimRight(fullURL, "/") + "/ajax/chapters/"
 		if ajaxHTML, errPost := FetchHTMLPost(ctx, ajaxChaptersURL, fullURL, "", nil); errPost == nil && len(ajaxHTML) > 0 {
 			if ajaxDoc, errDoc := goquery.NewDocumentFromReader(strings.NewReader(ajaxHTML)); errDoc == nil {
-				ajaxDoc.Find("li.wp-manga-chapter, a.leermos").Each(func(i int, s *goquery.Selection) {
+				ajaxDoc.Find("li.wp-manga-chapter, a.leermos, li.myfut, ul.chapter-list li").Each(func(i int, s *goquery.Selection) {
 					a := s
 					if !s.Is("a") {
 						a = s.Find("a").First()
@@ -501,12 +589,13 @@ func (h *MadaraHandler) GetChapterList(ctx context.Context, mangaURL string) ([]
 			ajaxURL := h.baseURL + "/wp-admin/admin-ajax.php"
 			if ajaxHTML, errPost := FetchHTMLPost(ctx, ajaxURL, fullURL, "application/x-www-form-urlencoded", strings.NewReader("action=manga_get_chapters&manga="+postID)); errPost == nil && len(ajaxHTML) > 0 {
 				if ajaxDoc, errDoc := goquery.NewDocumentFromReader(strings.NewReader(ajaxHTML)); errDoc == nil {
-					ajaxDoc.Find("li.wp-manga-chapter a").Each(func(i int, a *goquery.Selection) {
-						addChapter(nil, a)
+					ajaxDoc.Find("li.wp-manga-chapter").Each(func(i int, s *goquery.Selection) {
+						a := s.Find("a").First()
+						addChapter(s, a)
 					})
 				}
 			}
-	}
+		}
 	}
 
 	total := len(chapters)

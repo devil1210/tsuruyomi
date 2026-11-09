@@ -535,7 +535,7 @@ func FetchAndSaveMangaChapters(ctx context.Context, sourceID int64, mangaID int6
 						chapter_number = EXCLUDED.chapter_number,
 						scanlator = EXCLUDED.scanlator,
 						source_order = EXCLUDED.source_order,
-						date_upload = EXCLUDED.date_upload,
+						date_upload = CASE WHEN EXCLUDED.date_upload > 0 THEN EXCLUDED.date_upload ELSE suwayomi.chapter.date_upload END,
 						real_url = EXCLUDED.real_url
 					RETURNING id
 				`, ch.URL, ch.Name, ch.DateUpload, ch.ChapterNumber, ch.Scanlator, ch.SourceOrder, mangaID, nowSec, realURL).Scan(&chapterID)

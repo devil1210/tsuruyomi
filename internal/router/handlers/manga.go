@@ -725,7 +725,7 @@ func GetChaptersList(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
 	}
 
-	if len(list) == 0 && database.DB != nil {
+	if (len(list) == 0 || c.Query("refresh") == "true" || c.Query("fetch") == "true") && database.DB != nil {
 		var sourceID int64
 		var mangaURL string
 		if err := database.DB.QueryRow(c.Context(), "SELECT source, url FROM suwayomi.manga WHERE id = $1", mangaId).Scan(&sourceID, &mangaURL); err == nil {
