@@ -643,6 +643,7 @@ func buildServerSettingsMap(ctx context.Context, cfg *config.Config) map[string]
 		"databaseUsername":                dbUsername,
 		"databasePassword":                "",
 		"useHikariConnectionPool":         true,
+		"hikariMaxPoolSize":               getInt("hikariMaxPoolSize", 20),
 		"kcefEnabled":                     getBool("kcefEnabled", true),
 		"syncInterval":                    getStr("syncInterval", "PT0S"),
 		"syncYomiEnabled":                 getBool("syncYomiEnabled", false),

@@ -43,7 +43,7 @@
       // Tsumiru #742: Webtoon continuous reader smooth scrolling distance & controls
       window.addEventListener('keydown', function(e) {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.ctrlKey || e.metaKey || e.altKey) return;
-        if (window.location.href.includes('/read/')) {
+        if (window.location.href.includes('/chapter/')) {
           var dist = Math.max(140, Math.floor(window.innerHeight * 0.28));
           if (e.key === 'ArrowDown' || e.key === 'j') {
             window.scrollBy({ top: dist, behavior: 'smooth' });
@@ -81,6 +81,9 @@
         }
 
         function isLandscape() {
+          if (window.matchMedia && window.matchMedia('(orientation: landscape)').matches) {
+            return true;
+          }
           if (window.screen && window.screen.orientation && window.screen.orientation.type) {
             return window.screen.orientation.type.startsWith('landscape');
           }
@@ -88,7 +91,9 @@
         }
 
         function isReaderOpen() {
-          return window.location.pathname.includes('/read/');
+          return window.location.pathname.includes('/chapter/') ||
+                 /\/manga\/\d+\/chapter\//.test(window.location.pathname) ||
+                 !!(window.__tsuruyomiReaderStore && window.__tsuruyomiReaderStore.getState().chapters && window.__tsuruyomiReaderStore.getState().chapters.currentChapter);
         }
 
         function isWebtoonOrManhwa() {
@@ -187,10 +192,14 @@
 
         function triggerDebouncedOrientation() {
           clearTimeout(debounceTimer);
-          debounceTimer = setTimeout(handleOrientationChange, 180);
+          debounceTimer = setTimeout(handleOrientationChange, 150);
         }
 
         window.addEventListener('resize', triggerDebouncedOrientation);
+        window.addEventListener('orientationchange', triggerDebouncedOrientation);
+        if (window.matchMedia) {
+          window.matchMedia('(orientation: landscape)').addEventListener('change', triggerDebouncedOrientation);
+        }
         if (window.screen && window.screen.orientation) {
           window.screen.orientation.addEventListener('change', triggerDebouncedOrientation);
         }
