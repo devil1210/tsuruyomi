@@ -37,6 +37,7 @@ type Opds2Metadata struct {
 	ItemsPerPage  *int        `json:"itemsPerPage,omitempty"`
 	CurrentPage   *int        `json:"currentPage,omitempty"`
 	Modified      string      `json:"modified,omitempty"`
+	Published     string      `json:"published,omitempty"`
 	Description   string      `json:"description,omitempty"`
 	Author        interface{} `json:"author,omitempty"`
 }
@@ -486,10 +487,38 @@ func GetOpds2SeriesChapters(c *fiber.Ctx) error {
 		}
 		desc := fmt.Sprintf("%sPage: %d/%d", scan, ch.LastPageRead, ch.PageCount)
 
+		var issuedDate string
+		if ch.UploadDate > 0 {
+			issuedDate = time.UnixMilli(ch.UploadDate).UTC().Format("2006-01-02")
+		}
+
+		links := []Opds2Link{
+			{
+				Rel:   "http://opds-spec.org/acquisition/open-access",
+				Href:  fmt.Sprintf("/api/v1/chapter/%d/download?markAsRead=%s", ch.ID, markAsRead),
+				Type:  OpdsMimeCbz,
+				Title: "Download CBZ",
+			},
+		}
+
+		chWebHref := ch.URL
+		if ch.RealURL != nil && *ch.RealURL != "" {
+			chWebHref = *ch.RealURL
+		}
+		if chWebHref != "" {
+			links = append(links, Opds2Link{
+				Rel:   "alternate",
+				Href:  chWebHref,
+				Type:  "text/html",
+				Title: "Read on Web",
+			})
+		}
+
 		pub := Opds2Publication{
 			Metadata: Opds2Metadata{
 				Title:       entryTitle,
 				Modified:    chUpdated,
+				Published:   issuedDate,
 				Description: desc,
 				Author: &Opds2Author{
 					Name: manga.Title,
@@ -501,14 +530,7 @@ func GetOpds2SeriesChapters(c *fiber.Ctx) error {
 					Type: OpdsMimeJpeg,
 				},
 			},
-			Links: []Opds2Link{
-				{
-					Rel:   "http://opds-spec.org/acquisition/open-access",
-					Href:  fmt.Sprintf("/api/v1/chapter/%d/download?markAsRead=%s", ch.ID, markAsRead),
-					Type:  OpdsMimeCbz,
-					Title: "Download CBZ",
-				},
-			},
+			Links: links,
 		}
 
 		feed.Publications = append(feed.Publications, pub)

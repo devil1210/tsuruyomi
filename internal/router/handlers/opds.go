@@ -899,6 +899,24 @@ func GetOpdsSeriesChapters(c *fiber.Ctx) error {
 			},
 		}
 
+		chWebHref := ch.URL
+		if ch.RealURL != nil && *ch.RealURL != "" {
+			chWebHref = *ch.RealURL
+		}
+		if chWebHref != "" {
+			links = append(links, OpdsLink{
+				Rel:   OpdsRelAlternate,
+				Href:  chWebHref,
+				Type:  "text/html",
+				Title: "Read on Web",
+			})
+		}
+
+		var issuedDate string
+		if ch.UploadDate > 0 {
+			issuedDate = time.UnixMilli(ch.UploadDate).UTC().Format("2006-01-02")
+		}
+
 		feed.Entries = append(feed.Entries, OpdsEntry{
 			ID:        fmt.Sprintf("urn:tsuruyomi:chapter:%d", ch.ID),
 			Title:     entryTitle,
@@ -907,6 +925,7 @@ func GetOpdsSeriesChapters(c *fiber.Ctx) error {
 			Content:   &OpdsTextElem{Type: "text", Value: content},
 			Links:     links,
 			Publisher: manga.Title,
+			Issued:    issuedDate,
 		})
 	}
 
