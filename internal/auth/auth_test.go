@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestCheckBasicAuth(t *testing.T) {
@@ -109,5 +110,53 @@ func TestIsPublicAsset(t *testing.T) {
 		if IsPublicAsset(p) {
 			t.Errorf("Expected %s to be protected (not public)", p)
 		}
+	}
+}
+
+func TestJWT(t *testing.T) {
+	user := "devil"
+	pass := "secretPassword123"
+
+	token, err := CreateJWT(user, "access", 30*24*time.Hour, pass)
+	if err != nil {
+		t.Fatalf("Failed to create JWT: %v", err)
+	}
+	if token == "" {
+		t.Fatalf("Expected non-empty JWT")
+	}
+
+	// Valid JWT validation
+	if !ValidateJWT(token, user, pass) {
+		t.Errorf("Expected valid JWT to pass validation")
+	}
+
+	// ValidateSessionToken should also accept valid JWT
+	if !ValidateSessionToken(token, user, pass) {
+		t.Errorf("Expected ValidateSessionToken to accept JWT")
+	}
+
+	// Wrong password
+	if ValidateJWT(token, user, "wrongPass") {
+		t.Errorf("Expected wrong password to fail")
+	}
+
+	// Wrong user
+	if ValidateJWT(token, "wrongUser", pass) {
+		t.Errorf("Expected wrong user to fail")
+	}
+
+	// Tampered signature
+	tampered := token[:len(token)-5] + "XXXXX"
+	if ValidateJWT(tampered, user, pass) {
+		t.Errorf("Expected tampered signature to fail")
+	}
+
+	// Expired token
+	expiredToken, err := CreateJWT(user, "access", -1*time.Hour, pass)
+	if err != nil {
+		t.Fatalf("Failed to create expired JWT: %v", err)
+	}
+	if ValidateJWT(expiredToken, user, pass) {
+		t.Errorf("Expected expired token to fail validation")
 	}
 }

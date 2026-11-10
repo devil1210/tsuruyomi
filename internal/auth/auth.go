@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -52,10 +53,99 @@ func CreateSessionToken(username, password string) string {
 	return base64.URLEncoding.EncodeToString([]byte(fullToken))
 }
 
-// ValidateSessionToken verifies the authenticity, timestamp, and signature of a session token.
+// CreateJWT creates a standard HMAC-SHA256 signed JWT (header.payload.signature)
+// with standard claims: sub (username), iat (issued at), exp (expiration timestamp in seconds), and type.
+func CreateJWT(username, tokenType string, duration time.Duration, secret string) (string, error) {
+	headerJSON := `{"alg":"HS256","typ":"JWT"}`
+	headerB64 := base64.RawURLEncoding.EncodeToString([]byte(headerJSON))
+
+	now := time.Now().Unix()
+	exp := now + int64(duration.Seconds())
+
+	claims := map[string]interface{}{
+		"sub":  username,
+		"iat":  now,
+		"exp":  exp,
+		"type": tokenType,
+	}
+	payloadBytes, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadBytes)
+
+	message := headerB64 + "." + payloadB64
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write([]byte(message))
+	sigB64 := base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+
+	return message + "." + sigB64, nil
+}
+
+// ValidateJWT verifies the JWT signature, subject, and expiration timestamp.
+func ValidateJWT(tokenStr, expectedUsername, secret string) bool {
+	if tokenStr == "" || expectedUsername == "" || secret == "" {
+		return false
+	}
+	parts := strings.Split(tokenStr, ".")
+	if len(parts) != 3 {
+		return false
+	}
+
+	// Verify signature in constant time
+	message := parts[0] + "." + parts[1]
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write([]byte(message))
+	expectedSig := base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+
+	sigMatch := subtle.ConstantTimeCompare([]byte(parts[2]), []byte(expectedSig)) == 1
+	if !sigMatch {
+		expectedSigPadded := base64.URLEncoding.EncodeToString(h.Sum(nil))
+		if subtle.ConstantTimeCompare([]byte(parts[2]), []byte(expectedSigPadded)) != 1 {
+			return false
+		}
+	}
+
+	// Decode payload
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		payloadBytes, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return false
+		}
+	}
+
+	var claims struct {
+		Sub string `json:"sub"`
+		Iat int64  `json:"iat"`
+		Exp int64  `json:"exp"`
+	}
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+		return false
+	}
+
+	// Verify subject
+	if subtle.ConstantTimeCompare([]byte(claims.Sub), []byte(expectedUsername)) != 1 {
+		return false
+	}
+
+	// Verify expiration
+	if claims.Exp <= time.Now().Unix() {
+		return false
+	}
+
+	return true
+}
+
+// ValidateSessionToken verifies the authenticity, timestamp, and signature of a session token or JWT.
 func ValidateSessionToken(token, expectedUsername, expectedPassword string) bool {
 	if token == "" || expectedUsername == "" || expectedPassword == "" {
 		return false
+	}
+
+	// Support standard JWTs seamlessly
+	if strings.Count(token, ".") == 2 && ValidateJWT(token, expectedUsername, expectedPassword) {
+		return true
 	}
 
 	raw, err := base64.URLEncoding.DecodeString(token)

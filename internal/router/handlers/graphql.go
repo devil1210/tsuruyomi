@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"tsuruyomi/internal/auth"
 	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/models"
@@ -930,6 +932,10 @@ func HandleGraphQL(c *fiber.Ctx) error {
 						req.OperationName = "GetTrackers"
 					case "metas":
 						req.OperationName = "GET_GLOBAL_METADATAS"
+					case "login":
+						req.OperationName = "USER_LOGIN"
+					case "refreshToken":
+						req.OperationName = "REFRESH_ACCESS_TOKEN"
 					default:
 						req.OperationName = rootField
 					}
@@ -969,6 +975,62 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			return m[1]
 		}
 		return nil
+	}
+
+	// Validate Authentication for GraphQL requests
+	isAuth := false
+	if cfg == nil || cfg.Auth.Mode == "none" || cfg.Auth.Mode == "" {
+		isAuth = true
+	} else if c.Locals("user") != nil {
+		isAuth = true
+	} else {
+		authHeader := c.Get(fiber.HeaderAuthorization)
+		if authHeader != "" {
+			if strings.HasPrefix(authHeader, "Bearer ") {
+				token := strings.TrimSpace(authHeader[7:])
+				if auth.ValidateJWT(token, cfg.Auth.Username, cfg.Auth.Password) ||
+					auth.ValidateSessionToken(token, cfg.Auth.Username, cfg.Auth.Password) {
+					isAuth = true
+				}
+			} else if auth.CheckBasicAuth(authHeader, cfg.Auth.Username, cfg.Auth.Password) {
+				isAuth = true
+			}
+		}
+		if !isAuth {
+			sessionCookie := c.Cookies(auth.SessionCookieName)
+			if sessionCookie != "" {
+				if auth.ValidateJWT(sessionCookie, cfg.Auth.Username, cfg.Auth.Password) ||
+					auth.ValidateSessionToken(sessionCookie, cfg.Auth.Username, cfg.Auth.Password) {
+					isAuth = true
+				}
+			}
+		}
+	}
+
+	isLoginOp := req.OperationName == "USER_LOGIN" || req.OperationName == "userLogin" ||
+		req.OperationName == "login" || req.OperationName == "Login" ||
+		strings.Contains(req.Query, "login(") || strings.Contains(req.Query, "USER_LOGIN")
+
+	isRefreshOp := req.OperationName == "REFRESH_ACCESS_TOKEN" || req.OperationName == "refreshAccessToken" ||
+		req.OperationName == "refreshToken" || req.OperationName == "RefreshToken" ||
+		req.OperationName == "USER_REFRESH" || req.OperationName == "userRefresh" ||
+		strings.Contains(req.Query, "refreshToken(") || strings.Contains(req.Query, "REFRESH_ACCESS_TOKEN")
+
+	isIntrospection := req.OperationName == "__schema" || req.OperationName == "__type" ||
+		req.OperationName == "IntrospectionQuery" || req.OperationName == "IntrospectionType"
+
+	if !isAuth && !isLoginOp && !isRefreshOp && !isIntrospection {
+		return c.JSON(fiber.Map{
+			"errors": []fiber.Map{
+				{
+					"message": "suwayomi.tachidesk.server.user.UnauthorizedException: Unauthorized",
+					"extensions": fiber.Map{
+						"classification": "DataFetchingException",
+					},
+				},
+			},
+			"data": nil,
+		})
 	}
 
 	var data interface{}
@@ -3840,7 +3902,167 @@ func HandleGraphQL(c *fiber.Ctx) error {
 			},
 		}
 
-	case "START_SYNC", "startSync", "KO_SYNC_LOGIN", "koSyncLogin", "KO_SYNC_LOGOUT", "koSyncLogout", "REFRESH_ACCESS_TOKEN", "refreshAccessToken", "USER_LOGIN", "userLogin", "USER_REFRESH", "userRefresh":
+	case "USER_LOGIN", "userLogin", "login", "Login":
+		var user, pass string
+		if u, ok := req.Variables["username"].(string); ok {
+			user = u
+		}
+		if p, ok := req.Variables["password"].(string); ok {
+			pass = p
+		}
+		if inp, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if u, ok := inp["username"].(string); ok && user == "" {
+				user = u
+			}
+			if p, ok := inp["password"].(string); ok && pass == "" {
+				pass = p
+			}
+		}
+		if user == "" {
+			re := regexp.MustCompile(`username\s*:\s*"([^"]+)"`)
+			if m := re.FindStringSubmatch(req.Query); len(m) > 1 {
+				user = m[1]
+			}
+		}
+		if pass == "" {
+			re := regexp.MustCompile(`password\s*:\s*"([^"]+)"`)
+			if m := re.FindStringSubmatch(req.Query); len(m) > 1 {
+				pass = m[1]
+			}
+		}
+
+		expectedUser := ""
+		expectedPass := ""
+		if cfg != nil {
+			expectedUser = cfg.Auth.Username
+			expectedPass = cfg.Auth.Password
+		}
+
+		userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(expectedUser)) == 1
+		passMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(expectedPass)) == 1
+
+		if !userMatch || !passMatch || expectedUser == "" {
+			return c.JSON(fiber.Map{
+				"errors": []fiber.Map{
+					{
+						"message": "Invalid username or password",
+						"extensions": fiber.Map{
+							"classification": "DataFetchingException",
+						},
+					},
+				},
+				"data": fiber.Map{
+					"login": nil,
+				},
+			})
+		}
+
+		accessToken, err := auth.CreateJWT(expectedUser, "access", 30*24*time.Hour, expectedPass)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"errors": []fiber.Map{{"message": "Failed to generate access token"}},
+			})
+		}
+		refreshToken, err := auth.CreateJWT(expectedUser, "refresh", 90*24*time.Hour, expectedPass)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"errors": []fiber.Map{{"message": "Failed to generate refresh token"}},
+			})
+		}
+
+		// Set signed session cookie for browser compatibility
+		c.Cookie(&fiber.Cookie{
+			Name:     auth.SessionCookieName,
+			Value:    accessToken,
+			Path:     "/",
+			MaxAge:   int(30 * 24 * 3600),
+			HTTPOnly: true,
+			SameSite: "Lax",
+		})
+
+		loginPayload := map[string]interface{}{
+			"accessToken":  accessToken,
+			"refreshToken": refreshToken,
+			"__typename":   "LoginPayload",
+		}
+		if cid := getClientMutationID(); cid != nil {
+			loginPayload["clientMutationId"] = cid
+		}
+
+		data = map[string]interface{}{
+			"login": loginPayload,
+		}
+
+	case "REFRESH_ACCESS_TOKEN", "refreshAccessToken", "refreshToken", "RefreshToken", "USER_REFRESH", "userRefresh":
+		var tokenStr string
+		if t, ok := req.Variables["refreshToken"].(string); ok {
+			tokenStr = t
+		}
+		if inp, ok := req.Variables["input"].(map[string]interface{}); ok {
+			if t, ok := inp["refreshToken"].(string); ok && tokenStr == "" {
+				tokenStr = t
+			}
+		}
+		if tokenStr == "" {
+			re := regexp.MustCompile(`refreshToken\s*:\s*"([^"]+)"`)
+			if m := re.FindStringSubmatch(req.Query); len(m) > 1 {
+				tokenStr = m[1]
+			}
+		}
+
+		expectedUser := ""
+		expectedPass := ""
+		if cfg != nil {
+			expectedUser = cfg.Auth.Username
+			expectedPass = cfg.Auth.Password
+		}
+
+		if !auth.ValidateJWT(tokenStr, expectedUser, expectedPass) &&
+			!auth.ValidateSessionToken(tokenStr, expectedUser, expectedPass) {
+			return c.JSON(fiber.Map{
+				"errors": []fiber.Map{
+					{
+						"message": "suwayomi.tachidesk.server.user.UnauthorizedException: Invalid or expired refresh token",
+						"extensions": fiber.Map{
+							"classification": "DataFetchingException",
+						},
+					},
+				},
+				"data": fiber.Map{
+					"refreshToken": nil,
+				},
+			})
+		}
+
+		newAccessToken, err := auth.CreateJWT(expectedUser, "access", 30*24*time.Hour, expectedPass)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"errors": []fiber.Map{{"message": "Failed to generate access token"}},
+			})
+		}
+
+		c.Cookie(&fiber.Cookie{
+			Name:     auth.SessionCookieName,
+			Value:    newAccessToken,
+			Path:     "/",
+			MaxAge:   int(30 * 24 * 3600),
+			HTTPOnly: true,
+			SameSite: "Lax",
+		})
+
+		refreshPayload := map[string]interface{}{
+			"accessToken": newAccessToken,
+			"__typename":  "RefreshTokenPayload",
+		}
+		if cid := getClientMutationID(); cid != nil {
+			refreshPayload["clientMutationId"] = cid
+		}
+
+		data = map[string]interface{}{
+			"refreshToken": refreshPayload,
+		}
+
+	case "START_SYNC", "startSync", "KO_SYNC_LOGIN", "koSyncLogin", "KO_SYNC_LOGOUT", "koSyncLogout":
 		data = map[string]interface{}{
 			"success":    true,
 			"__typename": "SyncPayload",

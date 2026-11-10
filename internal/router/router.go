@@ -77,19 +77,52 @@ func Setup(cfg *config.Config) *fiber.App {
 			return c.Next()
 		}
 
-		// 1. Validate HTTP Basic Auth (Mihon, Tachiyomi, Kotatsu, API scripts)
+		// 1. Validate Bearer Token or HTTP Basic Auth (WebUI, Mihon, Tachiyomi, Kotatsu, API scripts)
 		authHeader := c.Get(fiber.HeaderAuthorization)
-		if authHeader != "" && auth.CheckBasicAuth(authHeader, cfg.Auth.Username, cfg.Auth.Password) {
-			return c.Next()
+		if authHeader != "" {
+			if strings.HasPrefix(authHeader, "Bearer ") {
+				token := strings.TrimSpace(authHeader[7:])
+				if auth.ValidateJWT(token, cfg.Auth.Username, cfg.Auth.Password) ||
+					auth.ValidateSessionToken(token, cfg.Auth.Username, cfg.Auth.Password) {
+					c.Locals("user", cfg.Auth.Username)
+					return c.Next()
+				}
+			} else if auth.CheckBasicAuth(authHeader, cfg.Auth.Username, cfg.Auth.Password) {
+				c.Locals("user", cfg.Auth.Username)
+				return c.Next()
+			}
 		}
 
-		// 2. Validate signed HMAC session cookie (WebUI browser sessions)
+		// 2. Validate signed session cookie (WebUI browser sessions)
 		sessionCookie := c.Cookies(auth.SessionCookieName)
-		if sessionCookie != "" && auth.ValidateSessionToken(sessionCookie, cfg.Auth.Username, cfg.Auth.Password) {
-			return c.Next()
+		if sessionCookie != "" {
+			if auth.ValidateJWT(sessionCookie, cfg.Auth.Username, cfg.Auth.Password) ||
+				auth.ValidateSessionToken(sessionCookie, cfg.Auth.Username, cfg.Auth.Password) {
+				c.Locals("user", cfg.Auth.Username)
+				return c.Next()
+			}
 		}
 
 		// 3. Not authenticated
+		// In simple_login mode: allow GraphQL requests to pass through to HandleGraphQL
+		// so USER_LOGIN and REFRESH_ACCESS_TOKEN can execute, and unauthorized queries return
+		// the GraphQL UnauthorizedException without showing the native browser dialog.
+		if strings.EqualFold(cfg.Auth.Mode, "simple_login") {
+			if path == "/api/graphql" || path == "/graphql" {
+				return c.Next()
+			}
+			// For REST API or feeds, return 401 JSON without WWW-Authenticate header
+			if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/opds") {
+				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+					"error":   "Unauthorized",
+					"message": "Authentication required. Provide valid Bearer token or credentials.",
+				})
+			}
+			// For browser page requests, let it serve index.html (SPA handles login UI)
+			return c.Next()
+		}
+
+		// In basic auth mode (deprecated): challenge via WWW-Authenticate
 		isAPIOrFeed := strings.HasPrefix(path, "/api/") ||
 			strings.HasPrefix(path, "/opds") ||
 			strings.HasPrefix(path, "/graphql")
@@ -102,7 +135,7 @@ func Setup(cfg *config.Config) *fiber.App {
 			})
 		}
 
-		// Browser request: if basic mode, challenge via WWW-Authenticate; if simple_login, redirect to login.html
+		// Browser request: if basic mode, challenge via WWW-Authenticate; otherwise redirect to login.html
 		if cfg.Auth.Mode == "basic" || cfg.Auth.Mode == "basic_auth" {
 			c.Set(fiber.HeaderWWWAuthenticate, `Basic realm="Suwayomi"`)
 			return c.Status(fiber.StatusUnauthorized).SendString("Unauthorized")

@@ -2,7 +2,9 @@ package router
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -213,5 +215,147 @@ func TestTsumiruGraphQLCompatibility(t *testing.T) {
 	respStr = string(bodySettings[:n])
 	if !strings.Contains(respStr, `"databaseUsername":"customuser"`) || !strings.Contains(respStr, `"databaseUrl":"postgresql://192.168.1.109:5432/tsuruyomi"`) {
 		t.Errorf("Expected dynamic database settings in response, got: %s", respStr)
+	}
+}
+
+func TestSimpleLoginAuthIntegration(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Subpath: "",
+		},
+		Data: config.DataConfig{
+			RootDir: "./data",
+		},
+		Auth: config.AuthConfig{
+			Mode:     "simple_login",
+			Username: "devil",
+			Password: "mypassword123",
+		},
+	}
+
+	app := Setup(cfg)
+
+	// 1. Unauthenticated request to REST endpoint in simple_login mode should return 401 WITHOUT WWW-Authenticate
+	reqAPI := httptest.NewRequest("GET", "/api/v1/meta", nil)
+	respAPI, err := app.Test(reqAPI)
+	if err != nil {
+		t.Fatalf("Failed to execute REST request: %v", err)
+	}
+	if respAPI.StatusCode != fiber.StatusUnauthorized {
+		t.Errorf("Expected 401 Unauthorized for /api/v1/meta without auth, got %d", respAPI.StatusCode)
+	}
+	wwwAuth := respAPI.Header.Get("WWW-Authenticate")
+	if wwwAuth != "" {
+		t.Errorf("Expected NO WWW-Authenticate header in simple_login mode, got: %s", wwwAuth)
+	}
+
+	// 2. Unauthenticated GraphQL query in simple_login mode should return 200 OK with UnauthorizedException
+	reqGQL := httptest.NewRequest("POST", "/api/graphql", strings.NewReader(`{"query":"query GET_ABOUT { aboutServer { name } }"}`))
+	reqGQL.Header.Set("Content-Type", "application/json")
+	respGQL, err := app.Test(reqGQL)
+	if err != nil {
+		t.Fatalf("Failed to execute GQL query: %v", err)
+	}
+	if respGQL.StatusCode != fiber.StatusOK {
+		t.Errorf("Expected 200 OK for GQL query with auth error, got %d", respGQL.StatusCode)
+	}
+	bodyBytes, _ := io.ReadAll(respGQL.Body)
+	if !strings.Contains(string(bodyBytes), "suwayomi.tachidesk.server.user.UnauthorizedException") {
+		t.Errorf("Expected UnauthorizedException in GQL response, got: %s", string(bodyBytes))
+	}
+
+	// 3. Invalid credentials in USER_LOGIN mutation should fail
+	invalidLoginJSON := `{"query":"mutation USER_LOGIN($username: String!, $password: String!) { login(input: { username: $username, password: $password }) { accessToken refreshToken } }","variables":{"username":"devil","password":"wrongpassword"}}`
+	reqInvalidLogin := httptest.NewRequest("POST", "/api/graphql", strings.NewReader(invalidLoginJSON))
+	reqInvalidLogin.Header.Set("Content-Type", "application/json")
+	respInvalidLogin, err := app.Test(reqInvalidLogin)
+	if err != nil {
+		t.Fatalf("Failed to execute invalid login: %v", err)
+	}
+	bodyInvalidBytes, _ := io.ReadAll(respInvalidLogin.Body)
+	if !strings.Contains(string(bodyInvalidBytes), "Invalid username or password") {
+		t.Errorf("Expected 'Invalid username or password' error, got: %s", string(bodyInvalidBytes))
+	}
+
+	// 4. Valid credentials in USER_LOGIN mutation should return accessToken, refreshToken, and set cookie
+	validLoginJSON := `{"query":"mutation USER_LOGIN($username: String!, $password: String!) { login(input: { username: $username, password: $password }) { accessToken refreshToken } }","variables":{"username":"devil","password":"mypassword123"}}`
+	reqValidLogin := httptest.NewRequest("POST", "/api/graphql", strings.NewReader(validLoginJSON))
+	reqValidLogin.Header.Set("Content-Type", "application/json")
+	respValidLogin, err := app.Test(reqValidLogin)
+	if err != nil {
+		t.Fatalf("Failed to execute valid login: %v", err)
+	}
+	if respValidLogin.StatusCode != fiber.StatusOK {
+		t.Fatalf("Expected 200 OK for valid login, got %d", respValidLogin.StatusCode)
+	}
+	bodyValidBytes, _ := io.ReadAll(respValidLogin.Body)
+
+	var loginResp struct {
+		Data struct {
+			Login struct {
+				AccessToken  string `json:"accessToken"`
+				RefreshToken string `json:"refreshToken"`
+			} `json:"login"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(bodyValidBytes, &loginResp); err != nil {
+		t.Fatalf("Failed to parse login response JSON: %v, raw: %s", err, string(bodyValidBytes))
+	}
+	if loginResp.Data.Login.AccessToken == "" || loginResp.Data.Login.RefreshToken == "" {
+		t.Fatalf("Expected non-empty accessToken and refreshToken, got: %s", string(bodyValidBytes))
+	}
+
+	// Verify session cookie was set
+	setCookie := respValidLogin.Header.Get("Set-Cookie")
+	if !strings.Contains(setCookie, auth.SessionCookieName) {
+		t.Errorf("Expected Set-Cookie header with session cookie, got: %s", setCookie)
+	}
+
+	// 5. Query GraphQL using Bearer <accessToken> should succeed
+	reqAuthGQL := httptest.NewRequest("POST", "/api/graphql", strings.NewReader(`{"query":"query GET_ABOUT { aboutServer { name } }"}`))
+	reqAuthGQL.Header.Set("Content-Type", "application/json")
+	reqAuthGQL.Header.Set("Authorization", "Bearer "+loginResp.Data.Login.AccessToken)
+	respAuthGQL, err := app.Test(reqAuthGQL)
+	if err != nil {
+		t.Fatalf("Failed to execute authenticated GQL: %v", err)
+	}
+	bodyAuthBytes, _ := io.ReadAll(respAuthGQL.Body)
+	if !strings.Contains(string(bodyAuthBytes), `"name":"Tsuruyomi"`) {
+		t.Errorf("Expected 'name':'Tsuruyomi' in authenticated GQL response, got: %s", string(bodyAuthBytes))
+	}
+
+	// 6. Refresh token mutation should issue a new accessToken
+	refreshJSON := fmt.Sprintf(`{"query":"mutation REFRESH_ACCESS_TOKEN($refreshToken: String!) { refreshToken(input: { refreshToken: $refreshToken }) { accessToken } }","variables":{"refreshToken":%q}}`, loginResp.Data.Login.RefreshToken)
+	reqRefresh := httptest.NewRequest("POST", "/api/graphql", strings.NewReader(refreshJSON))
+	reqRefresh.Header.Set("Content-Type", "application/json")
+	respRefresh, err := app.Test(reqRefresh)
+	if err != nil {
+		t.Fatalf("Failed to execute refresh mutation: %v", err)
+	}
+	bodyRefreshBytes, _ := io.ReadAll(respRefresh.Body)
+	var refreshResp struct {
+		Data struct {
+			RefreshToken struct {
+				AccessToken string `json:"accessToken"`
+			} `json:"refreshToken"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(bodyRefreshBytes, &refreshResp); err != nil {
+		t.Fatalf("Failed to parse refresh response JSON: %v, raw: %s", err, string(bodyRefreshBytes))
+	}
+	if refreshResp.Data.RefreshToken.AccessToken == "" {
+		t.Errorf("Expected new accessToken in refresh response, got: %s", string(bodyRefreshBytes))
+	}
+
+	// 7. External clients using HTTP Basic Auth header still succeed (backwards compatibility)
+	reqBasicAuth := httptest.NewRequest("GET", "/api/v1/meta", nil)
+	cred := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", cfg.Auth.Username, cfg.Auth.Password)))
+	reqBasicAuth.Header.Set("Authorization", "Basic "+cred)
+	respBasicAuth, err := app.Test(reqBasicAuth)
+	if err != nil {
+		t.Fatalf("Failed to execute basic auth in simple_login mode: %v", err)
+	}
+	if respBasicAuth.StatusCode == fiber.StatusUnauthorized {
+		t.Errorf("Expected HTTP Basic Auth to still be accepted in simple_login mode, got 401")
 	}
 }
