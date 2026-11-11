@@ -1,6 +1,7 @@
 package router
 
 import (
+	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -104,10 +105,15 @@ func Setup(cfg *config.Config) *fiber.App {
 		}
 
 		// 3. Not authenticated
-		// In simple_login mode: allow GraphQL requests to pass through to HandleGraphQL
-		// so USER_LOGIN and REFRESH_ACCESS_TOKEN can execute, and unauthorized queries return
-		// the GraphQL UnauthorizedException without showing the native browser dialog.
-		if strings.EqualFold(cfg.Auth.Mode, "simple_login") {
+		authMode := strings.ToLower(strings.TrimSpace(cfg.Auth.Mode))
+		isModernAuth := authMode == "simple_login" || authMode == "ui_login"
+
+		// In modern login mode (simple_login or ui_login):
+		// - allow GraphQL requests to pass through to HandleGraphQL so USER_LOGIN and REFRESH_ACCESS_TOKEN
+		//   can execute, and unauthorized queries return the GraphQL UnauthorizedException without native browser popups.
+		// - allow browser page requests (e.g. /, /history, /library, /settings, /login) to serve index.html (SPA).
+		// - return 401 JSON for REST API/feed endpoints without WWW-Authenticate header.
+		if isModernAuth {
 			if path == "/api/graphql" || path == "/graphql" {
 				return c.Next()
 			}
@@ -135,17 +141,32 @@ func Setup(cfg *config.Config) *fiber.App {
 			})
 		}
 
-		// Browser request: if basic mode, challenge via WWW-Authenticate; otherwise redirect to login.html
+		// Browser request: if basic mode, challenge via WWW-Authenticate; otherwise redirect cleanly to /login
 		if cfg.Auth.Mode == "basic" || cfg.Auth.Mode == "basic_auth" {
 			c.Set(fiber.HeaderWWWAuthenticate, `Basic realm="Suwayomi"`)
 			return c.Status(fiber.StatusUnauthorized).SendString("Unauthorized")
 		}
 
-		return c.Redirect(prefix + "/login.html?redirect=" + path)
+		cleanPrefix := strings.TrimRight(cfg.Server.Subpath, "/")
+		redirectTarget := cleanPrefix + "/login?redirect=" + url.QueryEscape(path)
+		if !strings.HasPrefix(redirectTarget, "/") {
+			redirectTarget = "/" + redirectTarget
+		}
+		for strings.HasPrefix(redirectTarget, "//") {
+			redirectTarget = redirectTarget[1:]
+		}
+		return c.Redirect(redirectTarget)
 	})
 
 	// Login & Logout routes
-	root.Get("/login.html", handlers.GetLogin)
+	root.Get("/login.html", func(c *fiber.Ctx) error {
+		authMode := strings.ToLower(strings.TrimSpace(cfg.Auth.Mode))
+		if authMode == "simple_login" || authMode == "ui_login" {
+			redirect := c.Query("redirect", "/")
+			return c.Redirect("/login?redirect=" + url.QueryEscape(redirect))
+		}
+		return handlers.GetLogin(c)
+	})
 	root.Post("/login.html", handlers.PostLogin)
 	root.Get("/logout", handlers.GetLogout)
 	root.Get("/update-server", handlers.UpdateServer)

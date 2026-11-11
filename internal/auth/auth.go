@@ -190,7 +190,7 @@ func ValidateSessionToken(token, expectedUsername, expectedPassword string) bool
 // IsPublicAsset determines if an incoming request path should be accessible without authentication.
 func IsPublicAsset(path string) bool {
 	// Exact public paths
-	if path == "/login.html" || path == "/logout" || path == "/robots.txt" || path == "/favicon.ico" || path == "/favicon.svg" {
+	if path == "/login" || path == "/login.html" || path == "/logout" || path == "/robots.txt" || path == "/favicon.ico" || path == "/favicon.svg" {
 		return true
 	}
 

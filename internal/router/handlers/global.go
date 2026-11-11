@@ -148,7 +148,7 @@ func GetLogout(c *fiber.Ctx) error {
 		Expires:  time.Unix(0, 0),
 		HTTPOnly: true,
 	})
-	return c.Redirect("/login.html")
+	return c.Redirect("/login")
 }
 
 // GetGlobalMeta retrieves the global metadata.
