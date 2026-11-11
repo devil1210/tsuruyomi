@@ -36,6 +36,34 @@
         <link rel="manifest" href="./site.webmanifest" crossorigin="anonymous" />
       <script type="module" crossorigin src="./assets/index-B15kT_vM.js"></script>
       <link rel="stylesheet" crossorigin href="./assets/index-TZrNw7dA.css">
+      <style id="tsuruyomi-seamless-horizontal">
+        /* Tsuruyomi: Eliminar líneas divisorias y separación entre páginas en Modo Horizontal Continuo */
+        div[style*="flex-direction: row"],
+        div[style*="flex-direction: row-reverse"] {
+          gap: 0px !important;
+          column-gap: 0px !important;
+        }
+        div[style*="flex-direction: row"] > div,
+        div[style*="flex-direction: row-reverse"] > div {
+          margin-left: 0px !important;
+          margin-right: 0px !important;
+          padding-left: 0px !important;
+          padding-right: 0px !important;
+          border-left: none !important;
+          border-right: none !important;
+        }
+        div[style*="flex-direction: row"] img,
+        div[style*="flex-direction: row-reverse"] img {
+          margin-left: 0px !important;
+          margin-right: 0px !important;
+          padding-left: 0px !important;
+          padding-right: 0px !important;
+          border: none !important;
+          outline: none !important;
+          box-shadow: none !important;
+          display: block !important;
+        }
+      </style>
       <script type="module">import'data:text/javascript,if(!import.meta.resolve)throw Error("import.meta.resolve not supported")';import.meta.url;import("_").catch(()=>1);(async function*(){})().next();window.__vite_is_modern_browser=true</script>
       <script type="module">!function(){if(window.__vite_is_modern_browser)return;console.warn("vite: loading legacy chunks, syntax error above and the same error below should be ignored");var e=document.getElementById("vite-legacy-polyfill"),n=document.createElement("script");n.src=e.src,n.onload=function(){System.import(document.getElementById('vite-legacy-entry').getAttribute('data-src'))},document.body.appendChild(n)}();</script>
     <script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script>
