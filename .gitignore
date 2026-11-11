@@ -56,3 +56,4 @@ scratch/
 
 # Local build outputs
 bin/
+internal/service/real_backup_validation_test.go

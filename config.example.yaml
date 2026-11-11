@@ -34,6 +34,8 @@ extensions:
 logging:
   # Log level: "debug", "info", "warn", "error"
   level: "info"
+  # Log output format: "text" (human readable console) or "json" (structured observability)
+  format: "text"
 
 sidecar:
   # Optional JVM Sidecar proxy fallback for unported Java-only extensions
