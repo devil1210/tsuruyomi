@@ -400,13 +400,32 @@ func FetchAndSaveChapterPages(ctx context.Context, sourceID int64, mangaID int, 
 	log.Printf("[SOURCES] Fetching pages for chapter %d (manga %d) via native handler %q...", chapterID, mangaID, handler.Name())
 	imageURLs, err := handler.GetPageList(ctx, chapterURL, mangaURL)
 	if err != nil {
+		if database.DB != nil {
+			log.Printf("[SOURCES] Primary handler %s failed for chapter %d (%v). Attempting smart source fallback...", handler.Name(), chapterID, err)
+			fallbackPages, fbErr := tryFallbackFetch(ctx, mangaID, chapterID, chapterIndex)
+			if fbErr == nil && len(fallbackPages) > 0 {
+				return fallbackPages, nil
+			}
+			log.Printf("[SOURCES] Fallback failed for chapter %d: %v", chapterID, fbErr)
+		}
 		return nil, fmt.Errorf("handler %s failed: %w", handler.Name(), err)
 	}
 
 	if len(imageURLs) == 0 {
+		if database.DB != nil {
+			log.Printf("[SOURCES] Primary handler %s returned 0 pages for chapter %d. Attempting smart source fallback...", handler.Name(), chapterID)
+			fallbackPages, fbErr := tryFallbackFetch(ctx, mangaID, chapterID, chapterIndex)
+			if fbErr == nil && len(fallbackPages) > 0 {
+				return fallbackPages, nil
+			}
+		}
 		return nil, fmt.Errorf("handler %s returned 0 pages for chapter %d", handler.Name(), chapterID)
 	}
 
+	return savePagesForChapter(ctx, mangaID, chapterID, chapterIndex, imageURLs)
+}
+
+func savePagesForChapter(ctx context.Context, mangaID int, chapterID int64, chapterIndex int, imageURLs []string) ([]string, error) {
 	// Persist to suwayomi.page in PostgreSQL
 	if database.DB != nil {
 		tx, err := database.DB.Begin(ctx)
@@ -440,6 +459,107 @@ func FetchAndSaveChapterPages(ctx context.Context, sourceID int64, mangaID int, 
 	}
 
 	return pages, nil
+}
+
+// tryFallbackFetch searches for matching chapters in alternative sources when the primary source fails.
+func tryFallbackFetch(ctx context.Context, mangaID int, chapterID int64, chapterIndex int) ([]string, error) {
+	if database.DB == nil {
+		return nil, fmt.Errorf("no database connection")
+	}
+
+	var chNum float32
+	var chName string
+	var mangaTitle string
+	query := `
+		SELECT c.chapter_number, c.name, m.title
+		FROM suwayomi.chapter c
+		JOIN suwayomi.manga m ON c.manga = m.id
+		WHERE c.id = $1
+	`
+	err := database.DB.QueryRow(ctx, query, chapterID).Scan(&chNum, &chName, &mangaTitle)
+	if err != nil {
+		return nil, fmt.Errorf("reading chapter metadata: %w", err)
+	}
+
+	// Clean title for searching alternatives: e.g. "¡Kirara Hoshikita quiere brillar!" -> "Kirara Hoshikita"
+	cleanTitle := strings.Trim(mangaTitle, "¡!¿? ")
+	titleWords := strings.Fields(cleanTitle)
+	searchKeyword := cleanTitle
+	if len(titleWords) >= 2 {
+		searchKeyword = "%" + titleWords[0] + "%" + titleWords[1] + "%"
+	} else if len(titleWords) == 1 {
+		searchKeyword = "%" + titleWords[0] + "%"
+	}
+
+	// Search other manga entries with matching title in DB
+	rows, err := database.DB.Query(ctx, `
+		SELECT m.id, m.source, m.url
+		FROM suwayomi.manga m
+		WHERE m.id != $1 AND (m.title ILIKE $2 OR m.title ILIKE $3)
+		LIMIT 10
+	`, mangaID, "%"+cleanTitle+"%", searchKeyword)
+	if err != nil {
+		return nil, fmt.Errorf("querying alternative manga: %w", err)
+	}
+	defer rows.Close()
+
+	type altManga struct {
+		id     int
+		source int64
+		url    string
+	}
+	var alts []altManga
+	for rows.Next() {
+		var am altManga
+		if errScan := rows.Scan(&am.id, &am.source, &am.url); errScan == nil {
+			alts = append(alts, am)
+		}
+	}
+
+	for _, alt := range alts {
+		altHandler, ok := Get(alt.source)
+		if !ok {
+			continue
+		}
+
+		// First, check if alternative manga already has a chapter with the same number in DB
+		var altChURL string
+		var altChID int64
+		chRow := database.DB.QueryRow(ctx, `
+			SELECT id, url FROM suwayomi.chapter
+			WHERE manga = $1 AND (chapter_number = $2 OR (chapter_number = 0 AND name = $3))
+			LIMIT 1
+		`, alt.id, chNum, chName)
+		if chErr := chRow.Scan(&altChID, &altChURL); chErr == nil && altChURL != "" {
+			log.Printf("[SOURCES] Fallback: Found existing chapter in alternative source %s (manga %d, chapter %d). Fetching pages...", altHandler.Name(), alt.id, altChID)
+			imgs, imgErr := altHandler.GetPageList(ctx, altChURL, alt.url)
+			if imgErr == nil && len(imgs) > 0 {
+				log.Printf("[SOURCES] Fallback SUCCESS: Retrieved %d pages from %s", len(imgs), altHandler.Name())
+				return savePagesForChapter(ctx, mangaID, chapterID, chapterIndex, imgs)
+			}
+		}
+
+		// Second, if alternative manga has a ChapterLister, fetch chapter list on the fly
+		if lister, ok := altHandler.(ChapterLister); ok {
+			log.Printf("[SOURCES] Fallback: Listing chapters from %s for manga %d (%s)...", altHandler.Name(), alt.id, alt.url)
+			chList, listerErr := lister.GetChapterList(ctx, alt.url)
+			if listerErr == nil {
+				for _, chItem := range chList {
+					if (chNum > 0 && chItem.ChapterNumber == chNum) || (chNum == 0 && chItem.Name == chName) {
+						log.Printf("[SOURCES] Fallback: Matched chapter %.1f in %s. Fetching pages...", chItem.ChapterNumber, altHandler.Name())
+						imgs, imgErr := altHandler.GetPageList(ctx, chItem.URL, alt.url)
+						if imgErr == nil && len(imgs) > 0 {
+							log.Printf("[SOURCES] Fallback SUCCESS: Retrieved %d pages from %s", len(imgs), altHandler.Name())
+							return savePagesForChapter(ctx, mangaID, chapterID, chapterIndex, imgs)
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("no matching chapter found in fallback sources")
 }
 
 // FetchAndSaveMangaChapters fetches chapters via a registered native Go source handler and persists them to the PostgreSQL database.

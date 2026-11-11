@@ -77,7 +77,7 @@ func getCDNReferer(imgURL string) string {
 	if strings.Contains(imgURL, "shademanga.com") {
 		return "https://shademanga.com/"
 	}
-	if strings.Contains(imgURL, "submanhwa.com") {
+	if strings.Contains(imgURL, "submanhwa") {
 		return "https://submanhwa.com/"
 	}
 	imgDomain := util.ExtractDomain(imgURL)
