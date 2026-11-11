@@ -24,6 +24,7 @@ import (
 	"tsuruyomi/internal/auth"
 	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
+	apperrors "tsuruyomi/internal/errors"
 	"tsuruyomi/internal/models"
 	"tsuruyomi/internal/service"
 	"tsuruyomi/internal/sources"
@@ -6378,12 +6379,12 @@ func proxyToJava(c *fiber.Ctx, req GraphQLRequest, cfg *config.Config) error {
 	url := strings.TrimSuffix(baseURL, "/") + "/api/graphql"
 	bodyBytes, err := json.Marshal(req)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("GRAPHQL_MARSHAL_ERROR", "Failed to marshal proxy request", err)
 	}
 
 	reqJava, err := http.NewRequestWithContext(c.Context(), "POST", url, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("GRAPHQL_PROXY_REQUEST_FAILED", "Failed to create proxy request", err)
 	}
 	reqJava.Header.Set("Content-Type", "application/json")
 
@@ -6391,17 +6392,17 @@ func proxyToJava(c *fiber.Ctx, req GraphQLRequest, cfg *config.Config) error {
 	respJava, err := client.Do(reqJava)
 	if err != nil {
 		log.Printf("[ERROR] Java proxy failed: %v", err)
-		return fmt.Errorf("java proxy unreachable: %w", err)
+		return apperrors.UpstreamFailed("SIDECAR_UNREACHABLE", "Sidecar proxy unreachable", err)
 	}
 	defer respJava.Body.Close()
 
 	if respJava.StatusCode >= 400 {
-		return fmt.Errorf("java proxy returned status %d", respJava.StatusCode)
+		return apperrors.UpstreamFailed("SIDECAR_ERROR", fmt.Sprintf("Sidecar proxy returned status %d", respJava.StatusCode), nil)
 	}
 
 	var respMap map[string]interface{}
 	if err := json.NewDecoder(respJava.Body).Decode(&respMap); err != nil {
-		return fmt.Errorf("decoding java proxy response: %w", err)
+		return apperrors.Internal("GRAPHQL_PROXY_DECODE_FAILED", "Failed to decode proxy response", err)
 	}
 
 	return c.Status(respJava.StatusCode).JSON(respMap)

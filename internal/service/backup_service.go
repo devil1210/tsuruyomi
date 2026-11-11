@@ -2,23 +2,25 @@ package service
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
-	"sort"
-	"tsuruyomi/internal/config"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/models"
+	"tsuruyomi/internal/util"
 	"tsuruyomi/internal/websocket"
 )
 
@@ -102,10 +104,9 @@ func (rm *RestoreManager) StartAsyncRestore(data []byte) (string, int, error) {
 
 	log.Printf("[BACKUP] Starting async restore %s with %d mangas...", jobID, totalManga)
 
-	// Launch background restoration
-	go func() {
-		ctx := context.Background()
-		errRestore := RestoreFromProtoBackupWithProgress(ctx, pb, func(current int, total int) {
+	// Launch background restoration via SafeGo
+	util.SafeGo(context.Background(), "backup-async-restore", func(taskCtx context.Context) {
+		errRestore := RestoreFromProtoBackupWithProgress(taskCtx, pb, func(current int, total int) {
 			rm.mu.Lock()
 			if st, ok := rm.jobs[jobID]; ok {
 				st.MangaProgress = current
@@ -134,11 +135,11 @@ func (rm *RestoreManager) StartAsyncRestore(data []byte) (string, int, error) {
 			if errRestore != nil {
 				st.State = "FAILED"
 				st.ErrorMessage = errRestore.Error()
-				log.Printf("[BACKUP] Restore %s failed: %v", jobID, errRestore)
+				slog.Error("Restore failed", slog.String("job_id", jobID), slog.Any("err", errRestore))
 			} else {
 				st.State = "COMPLETED"
 				st.MangaProgress = totalManga
-				log.Printf("[BACKUP] Restore %s completed successfully (%d mangas)", jobID, totalManga)
+				slog.Info("Restore completed successfully", slog.String("job_id", jobID), slog.Int("total_manga", totalManga))
 			}
 		}
 
@@ -158,7 +159,26 @@ func (rm *RestoreManager) StartAsyncRestore(data []byte) (string, int, error) {
 			})
 			websocket.GlobalHub.Broadcast(msg)
 		}
-	}()
+	}, func(panicCtx context.Context, worker string, r any, stack []byte) {
+		rm.mu.Lock()
+		defer rm.mu.Unlock()
+		if st, ok := rm.jobs[jobID]; ok {
+			st.State = "FAILED"
+			st.ErrorMessage = fmt.Sprintf("Panic during restore: %v", r)
+		}
+		if websocket.GlobalHub != nil {
+			msg, _ := json.Marshal(map[string]interface{}{
+				"event": "BACKUP_RESTORE_FINISHED",
+				"data": map[string]interface{}{
+					"id":            jobID,
+					"state":         "FAILED",
+					"mangaProgress": 0,
+					"totalManga":    totalManga,
+				},
+			})
+			websocket.GlobalHub.Broadcast(msg)
+		}
+	})
 
 	return jobID, totalManga, nil
 }
@@ -530,7 +550,9 @@ func restartBackupSchedulerLocked(ctx context.Context, cfg *config.Config) {
 				timer.Stop()
 				return
 			case <-timer.C:
-				runScheduledBackup(cfg, bPath, ttl)
+				util.SafeGo(context.Background(), "scheduled-backup-task", func(taskCtx context.Context) {
+					runScheduledBackup(cfg, bPath, ttl)
+				}, nil)
 				time.Sleep(2 * time.Second)
 			}
 		}

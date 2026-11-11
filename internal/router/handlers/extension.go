@@ -13,6 +13,7 @@ import (
 
 	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
+	apperrors "tsuruyomi/internal/errors"
 	"tsuruyomi/internal/models"
 	"tsuruyomi/internal/service"
 	"tsuruyomi/internal/sources"
@@ -215,11 +216,11 @@ func ListExtensions(c *fiber.Ctx) error {
 func InstallExtension(c *fiber.Ctx) error {
 	pkgName := c.Params("pkgName")
 	if pkgName == "" {
-		return c.Status(fiber.StatusBadRequest).SendString("missing pkgName")
+		return apperrors.InvalidInput("MISSING_PKG_NAME", "missing pkgName", nil)
 	}
 	cfg, _ := c.Locals("config").(*config.Config)
 	if err := service.InstallExtension(c.Context(), cfg, pkgName); err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("INSTALL_EXTENSION_FAILED", "Failed to install extension", err)
 	}
 	return c.SendStatus(fiber.StatusCreated)
 }
@@ -228,7 +229,7 @@ func InstallExtension(c *fiber.Ctx) error {
 func InstallExtensionFile(c *fiber.Ctx) error {
 	file, err := c.FormFile("file")
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+		return apperrors.InvalidInput("FILE_UPLOAD_ERROR", "Failed to get uploaded file", err)
 	}
 	_ = file // suppress unused warning
 	return c.SendStatus(fiber.StatusCreated)
@@ -240,7 +241,7 @@ func InstallMissingExtensions(c *fiber.Ctx) error {
 		SourceIDs []string `json:"sourceIds"`
 	}
 	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid json body"})
+		return apperrors.InvalidInput("INVALID_JSON_BODY", "invalid json body", err)
 	}
 
 	cfg, _ := c.Locals("config").(*config.Config)
@@ -262,11 +263,11 @@ func InstallMissingExtensions(c *fiber.Ctx) error {
 func UpdateExtension(c *fiber.Ctx) error {
 	pkgName := c.Params("pkgName")
 	if pkgName == "" {
-		return c.Status(fiber.StatusBadRequest).SendString("missing pkgName")
+		return apperrors.InvalidInput("MISSING_PKG_NAME", "missing pkgName", nil)
 	}
 	cfg, _ := c.Locals("config").(*config.Config)
 	if err := service.UpdateExtension(c.Context(), cfg, pkgName); err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("UPDATE_EXTENSION_FAILED", "Failed to update extension", err)
 	}
 	return c.SendStatus(fiber.StatusCreated)
 }
@@ -275,11 +276,11 @@ func UpdateExtension(c *fiber.Ctx) error {
 func UninstallExtension(c *fiber.Ctx) error {
 	pkgName := c.Params("pkgName")
 	if pkgName == "" {
-		return c.Status(fiber.StatusBadRequest).SendString("missing pkgName")
+		return apperrors.InvalidInput("MISSING_PKG_NAME", "missing pkgName", nil)
 	}
 	cfg, _ := c.Locals("config").(*config.Config)
 	if err := service.UninstallExtension(c.Context(), cfg, pkgName); err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("UNINSTALL_EXTENSION_FAILED", "Failed to uninstall extension", err)
 	}
 	return c.SendStatus(fiber.StatusOK)
 }

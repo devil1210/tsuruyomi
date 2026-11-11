@@ -2,7 +2,7 @@
   <img src="docs/assets/tsuruyomi-icon.png" width="160" height="160" alt="Tsuruyomi Logo">
 </p>
 
-<h1 align="center">鶴読み Tsuruyomi</h1>
+# Tsuruyomi Blueprint
 
 <p align="center">
   <b>Ultra-fast, lightweight native Go backend replacement for Suwayomi-Server (Tachidesk) with OPDS 1.2</b>
@@ -15,6 +15,60 @@
   <img src="https://img.shields.io/badge/OPDS-1.2%20%2B%20PSE-emerald?style=flat-square" alt="OPDS 1.2">
   <img src="https://img.shields.io/badge/RAM-~45MB-crimson?style=flat-square" alt="RAM ~45MB">
 </p>
+
+---
+
+## System Overview
+Tsuruyomi is an ultra-fast, lightweight native Go replacement for the Java/JVM-based Suwayomi-Server (Tachidesk). Built with [Fiber](https://gofiber.io/) and [pgx](https://github.com/jackc/pgx), it provides complete API parity with Suwayomi (`/api/v1/...` REST and `/api/graphql`), native OPDS 1.2 and OPDS 2.0 catalogs with page streaming (PSE) for e-readers, native Go scrapers with FlareSolverr Cloudflare bypass, Tachiyomi `.tachibk` Protobuf backup synchronization, in-memory WebSocket hubs for real-time progress events, and automated library maintenance schedulers.
+
+---
+
+## Local Interface & Invariants
+
+### Local Interface
+- `[docker-entrypoint.sh:CONFIG_FILE]`: Environment variable `CONFIG_PATH` determining configuration path (default: `/config/config.yaml`).
+- `[docker-entrypoint.sh:DEFAULT_DSN]`: Synthesized PostgreSQL connection string constructed from `DBUSER`, `DBPASS`, `DBHOST`, `DBPORT`, and `DBNAME`.
+
+### Local Invariants
+- `[docker-entrypoint.sh:set -e]`: Container initialization halts immediately upon command failure.
+- `[docker-entrypoint.sh:config.yaml]`: If `$CONFIG_FILE` does not exist on startup, synthesizes a default YAML template configured from environment variables.
+- `[docker-entrypoint.sh:webUI]`: If `/data/webUI` is absent, creates a symbolic link from `/app/data/webUI` to `/data/webUI`.
+- `[docker-entrypoint.sh:exec]`: Replaces container shell process by executing `/usr/local/bin/tsuruyomi -config "$CONFIG_FILE"`.
+
+### Local Side Effects
+- `[docker-entrypoint.sh:mkdir]`: Creates persistent directories `/config` and `/data`.
+- `[docker-entrypoint.sh:cat]`: Writes default YAML configuration to `$CONFIG_FILE`.
+- `[docker-entrypoint.sh:ln]`: Creates filesystem symlink `/data/webUI`.
+
+---
+
+## Subdirectories & System Boundaries
+- [Command Line Executables (cmd)](./cmd/README.md): Primary server daemon (`cmd/server`) and manga migration utility (`cmd/migrate`).
+- [Deployment Configurations (deploy)](./deploy/README.md): Official ProxMenux OCI container templates (`deploy/proxmenux`) and multi-LXC stack definitions.
+- [Internal Subsystems (internal)](./internal/README.md): Core private architecture including authentication, configuration, database persistence, domain models, HTTP routing and handlers, background services, native sources, and WebSocket managers.
+- [Maintenance Scripts (scripts)](./scripts/README.md): Administrative automation scripts (`tsuruyomi-heal.sh`) for source integrity audits and repairs.
+
+---
+
+## Global Invariants
+- **Database Relational Contract**: All persistence relies on PostgreSQL via `pgx/v5`, enforcing schema ownership under `suwayomi.*` (`category`, `manga`, `chapter`, `page`, `mangauser`, `chapteruser`, `serversetting`, `extension`, `source`).
+- **Sequential Chronological Chapter Ordering**: Chapter ordering strictly maintains 1-based chronological ordering (`oldest = 1`, `newest = total`), enforced through `EnsureCleanChapterSourceOrders`.
+- **Authentication Bypass & Protection**: Authentication behavior is dictated by `config.Auth.Mode` (`none`, `basic`, `simple_login`, `ui_login`). Whitelisted public assets (`auth.IsPublicAsset`), login endpoints, and pre-flight HTTP `OPTIONS` bypass authentication across all routes.
+- **Concurrency Serialization**: Chapter CBZ packaging is serialized per chapter ID using `inFlightDownloads` `sync.Map`; library update sweeps are bounded to a single active runner via `um.running`; self-healing routines are serialized via `healerMu`.
+- **HTTP Transport Bounds**: Fiber application enforces a 64MB request body ceiling (`BodyLimit = 64 * 1024 * 1024`) and sets read/write timeouts to 0 to support indefinite WebSocket streaming connections.
+
+---
+
+## Global Side Effects
+- **Database Mutations**: Executes SQL transactions mutating `suwayomi.*` tables during source scraping, reading progress tracking, category assignments, and backup restorations.
+- **Filesystem Storage**: Stores persistent assets under `cfg.Data.RootDir`: downloaded chapter archives (`.cbz`), temporary reader page caches (`cache/pages/`), cover thumbnails (`downloads/thumbnails/`), dynamic JS extensions, and automated `.tachibk` Protobuf backups.
+- **Network Invocations**: Dispatches outbound HTTP requests to scrape external manga providers, connects to FlareSolverr for Cloudflare anti-bot clearance, and establishes optional SOCKS5 proxy tunnels.
+- **Real-Time Client Broadcasting**: Emits state transitions over WebSockets to connected browsers and applications for download queue tracking, updater progress, and restore status.
+
+---
+
+## System Verification
+- Run: `go test ./...`
 
 ---
 

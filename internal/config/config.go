@@ -72,9 +72,10 @@ type FlareSolverrConfig struct {
 	Timeout int    `mapstructure:"timeout"`
 }
 
-// LoggingConfig defines log verbosity.
+// LoggingConfig defines log verbosity and output format.
 type LoggingConfig struct {
-	Level string `mapstructure:"level"`
+	Level  string `mapstructure:"level"`
+	Format string `mapstructure:"format"`
 }
 
 // Load reads configuration from the given file path.
@@ -95,6 +96,7 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("auth.mode", "none")
 	v.SetDefault("extensions.repo_url", "")
 	v.SetDefault("logging.level", "info")
+	v.SetDefault("logging.format", "text")
 	v.SetDefault("sidecar.enabled", false)
 	v.SetDefault("sidecar.base_url", "http://127.0.0.1:4568")
 	v.SetDefault("flaresolverr.enabled", false)
@@ -181,6 +183,12 @@ func Load(cfgFile string) (*Config, error) {
 	if envFlareURL := os.Getenv("FLARESOLVERR_URL"); envFlareURL != "" {
 		cfg.FlareSolverr.URL = envFlareURL
 	}
+	if envLogFormat := os.Getenv("LOGGING_FORMAT"); envLogFormat != "" {
+		cfg.Logging.Format = envLogFormat
+	}
+	if cfg.Logging.Format == "" {
+		cfg.Logging.Format = "text"
+	}
 
 	// Normalize subpath
 	if cfg.Server.Subpath != "" && !strings.HasPrefix(cfg.Server.Subpath, "/") {
@@ -256,6 +264,7 @@ extensions:
 
 logging:
   level: "%s"
+  format: "%s"
 
 sidecar:
   enabled: %t
@@ -271,7 +280,7 @@ flaresolverr:
 		c.Data.RootDir,
 		c.Auth.Mode, c.Auth.Username, c.Auth.Password,
 		c.Extensions.RepoURL,
-		c.Logging.Level,
+		c.Logging.Level, c.Logging.Format,
 		c.Sidecar.Enabled, c.Sidecar.BaseURL,
 		c.FlareSolverr.Enabled, c.FlareSolverr.URL, c.FlareSolverr.Timeout,
 	)

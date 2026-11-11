@@ -22,6 +22,7 @@ import (
 
 	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
+	apperrors "tsuruyomi/internal/errors"
 	"tsuruyomi/internal/models"
 	"tsuruyomi/internal/service"
 	"tsuruyomi/internal/sources"
@@ -32,15 +33,15 @@ import (
 func GetManga(c *fiber.Ctx) error {
 	mangaId, err := strconv.Atoi(c.Params("mangaId"))
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid manga ID")
+		return apperrors.InvalidInput("INVALID_MANGA_ID", "Invalid manga ID", err)
 	}
 
 	manga, err := database.GetMangaByID(c.Context(), mangaId)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("MANGA_QUERY_FAILED", "Failed to retrieve manga", err)
 	}
 	if manga == nil {
-		return c.Status(fiber.StatusNotFound).SendString("Manga not found")
+		return apperrors.NotFound("MANGA_NOT_FOUND", "Manga not found", nil)
 	}
 
 	return c.JSON(manga)
@@ -920,15 +921,15 @@ func ModifyChapterMeta(c *fiber.Ctx) error {
 func GetPageImage(c *fiber.Ctx) error {
 	mangaId, err := strconv.Atoi(c.Params("mangaId"))
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid manga ID")
+		return apperrors.InvalidInput("INVALID_MANGA_ID", "Invalid manga ID", err)
 	}
 	chapterIndex, err := strconv.Atoi(c.Params("chapterIndex"))
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid chapter index")
+		return apperrors.InvalidInput("INVALID_CHAPTER_INDEX", "Invalid chapter index", err)
 	}
 	index, err := strconv.Atoi(c.Params("index"))
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid page index")
+		return apperrors.InvalidInput("INVALID_PAGE_INDEX", "Invalid page index", err)
 	}
 
 	cfg := c.Locals("config").(*config.Config)
@@ -1110,13 +1111,13 @@ func GetPageImage(c *fiber.Ctx) error {
 						return c.Send(respBody)
 					}
 				} else {
-					return c.Status(resp.StatusCode).SendString(fmt.Sprintf("Sidecar page error: %d", resp.StatusCode))
+					return apperrors.UpstreamFailed("SIDECAR_PAGE_ERROR", fmt.Sprintf("Sidecar page error: %d", resp.StatusCode), nil)
 				}
 			}
 		}
 	}
 
-	return c.Status(fiber.StatusNotFound).SendString("Page not found")
+	return apperrors.NotFound("PAGE_IMAGE_NOT_FOUND", "Page not found", nil)
 }
 
 // applyChapterBatchChanges applies batch edits (isRead, isBookmarked, lastPageRead, delete) to chapteruser.

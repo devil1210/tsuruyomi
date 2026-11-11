@@ -1,20 +1,25 @@
 package router
 
 import (
+	"context"
+	"log/slog"
 	"net/url"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/gofiber/fiber/v2/middleware/requestid"
 	"github.com/gofiber/websocket/v2"
 
 	"tsuruyomi/internal/auth"
 	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/extensions"
 	"tsuruyomi/internal/router/handlers"
+	"tsuruyomi/internal/util"
 )
 
 // Setup creates and configures the Fiber application router.
@@ -24,12 +29,61 @@ func Setup(cfg *config.Config) *fiber.App {
 		BodyLimit:    64 * 1024 * 1024, // 64MB limit for backups/APKs
 		ReadTimeout:  0,                // No timeout to support long WS connections
 		WriteTimeout: 0,
+		ErrorHandler: CentralErrorHandler,
 	})
 
 	// Global Middlewares
-	app.Use(recover.New())
-	app.Use(logger.New(logger.Config{
-		Format: "[${time}] ${status} - ${latency} ${method} ${path}\n",
+	app.Use(requestid.New(requestid.Config{
+		Header:     "X-Request-ID",
+		ContextKey: "requestid",
+	}))
+
+	app.Use(func(c *fiber.Ctx) error {
+		reqID := c.Locals("requestid")
+		reqIDStr, _ := reqID.(string)
+		if reqIDStr == "" {
+			reqIDStr = c.Get("X-Request-ID")
+		}
+
+		reqLogger := slog.Default().With(
+			slog.String("request_id", reqIDStr),
+			slog.String("method", c.Method()),
+			slog.String("path", c.Path()),
+		)
+		ctx := context.WithValue(c.UserContext(), util.ContextLoggerKey, reqLogger)
+		c.SetUserContext(ctx)
+
+		start := time.Now()
+		err := c.Next()
+		latency := time.Since(start)
+		status := c.Response().StatusCode()
+
+		if strings.HasPrefix(c.Path(), "/assets") || strings.HasPrefix(c.Path(), "/favicon") {
+			reqLogger.Debug("HTTP asset request completed",
+				slog.Int("status", status),
+				slog.Duration("latency", latency),
+			)
+		} else {
+			reqLogger.Info("HTTP request completed",
+				slog.Int("status", status),
+				slog.Duration("latency", latency),
+			)
+		}
+		return err
+	})
+
+	app.Use(recover.New(recover.Config{
+		EnableStackTrace: true,
+		StackTraceHandler: func(c *fiber.Ctx, e any) {
+			reqID := c.Get("X-Request-ID")
+			slog.Error("Unhandled panic intercepted in HTTP request",
+				slog.String("request_id", reqID),
+				slog.String("method", c.Method()),
+				slog.String("path", c.Path()),
+				slog.Any("panic", e),
+				slog.String("stack", string(debug.Stack())),
+			)
+		},
 	}))
 
 	// Security Headers Middleware

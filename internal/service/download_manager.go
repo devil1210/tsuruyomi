@@ -3,7 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"tsuruyomi/internal/config"
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/models"
+	"tsuruyomi/internal/util"
 	"tsuruyomi/internal/websocket"
 )
 
@@ -121,7 +123,9 @@ func (dm *DownloadManager) Start() {
 	dm.status = "Started"
 	if !dm.workerRunning {
 		dm.workerRunning = true
-		go dm.workerLoop()
+		util.SafeGo(context.Background(), "download-manager-loop", func(ctx context.Context) {
+			dm.workerLoop()
+		}, nil)
 	}
 	dm.mu.Unlock()
 	dm.BroadcastStatus()
@@ -167,44 +171,68 @@ func (dm *DownloadManager) workerLoop() {
 		dm.mu.Unlock()
 		dm.BroadcastStatus()
 
-		log.Printf("[DOWNLOAD_MANAGER] Starting download for chapter %d...", chID)
+		slog.Info("Starting download for chapter", slog.Int("chapter_id", chID))
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		cbzPath, err := EnsureChapterCBZ(ctx, cfg, chID)
-		cancel()
 
-		dm.mu.Lock()
-		// Re-find item
-		currIdx := -1
-		for i := range dm.queue {
-			if dm.queue[i].ChapterID == chID {
-				currIdx = i
-				break
+		doneCh := make(chan struct{})
+		util.SafeGo(ctx, "download-item-task", func(taskCtx context.Context) {
+			defer close(doneCh)
+			cbzPath, err := EnsureChapterCBZ(taskCtx, cfg, chID)
+
+			dm.mu.Lock()
+			defer dm.mu.Unlock()
+
+			currIdx := -1
+			for i := range dm.queue {
+				if dm.queue[i].ChapterID == chID {
+					currIdx = i
+					break
+				}
 			}
-		}
 
-		if err != nil {
-			log.Printf("[DOWNLOAD_MANAGER] Download error for chapter %d: %v", chID, err)
+			if err != nil {
+				slog.Error("Download error for chapter", slog.Int("chapter_id", chID), slog.Any("err", err))
+				if currIdx != -1 {
+					dm.queue[currIdx].Tries++
+					errMsg := err.Error()
+					dm.queue[currIdx].ErrorMessage = &errMsg
+					if dm.queue[currIdx].Tries >= 3 {
+						dm.queue[currIdx].State = models.DownloadStateError
+					} else {
+						dm.queue[currIdx].State = models.DownloadStateQueued
+					}
+				}
+			} else {
+				slog.Info("Successfully downloaded chapter", slog.Int("chapter_id", chID), slog.String("path", cbzPath))
+				if currIdx != -1 {
+					// Remove finished item from queue
+					dm.queue = append(dm.queue[:currIdx], dm.queue[currIdx+1:]...)
+					for i := range dm.queue {
+						dm.queue[i].Position = i
+					}
+				}
+			}
+		}, func(panicCtx context.Context, worker string, r any, stack []byte) {
+			defer close(doneCh)
+			dm.mu.Lock()
+			defer dm.mu.Unlock()
+
+			currIdx := -1
+			for i := range dm.queue {
+				if dm.queue[i].ChapterID == chID {
+					currIdx = i
+					break
+				}
+			}
 			if currIdx != -1 {
-				dm.queue[currIdx].Tries++
-				errMsg := err.Error()
+				dm.queue[currIdx].State = models.DownloadStateError
+				errMsg := fmt.Sprintf("Panic during download: %v", r)
 				dm.queue[currIdx].ErrorMessage = &errMsg
-				if dm.queue[currIdx].Tries >= 3 {
-					dm.queue[currIdx].State = models.DownloadStateError
-				} else {
-					dm.queue[currIdx].State = models.DownloadStateQueued
-				}
 			}
-		} else {
-			log.Printf("[DOWNLOAD_MANAGER] Successfully downloaded chapter %d to %s", chID, cbzPath)
-			if currIdx != -1 {
-				// Remove finished item from queue
-				dm.queue = append(dm.queue[:currIdx], dm.queue[currIdx+1:]...)
-				for i := range dm.queue {
-					dm.queue[i].Position = i
-				}
-			}
-		}
-		dm.mu.Unlock()
+		})
+
+		<-doneCh
+		cancel()
 		dm.BroadcastStatus()
 	}
 }

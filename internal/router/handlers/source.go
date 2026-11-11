@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"tsuruyomi/internal/database"
+	apperrors "tsuruyomi/internal/errors"
 	"tsuruyomi/internal/extensions"
 	"tsuruyomi/internal/models"
 	"tsuruyomi/internal/sources"
@@ -18,7 +19,7 @@ import (
 func ListSources(c *fiber.Ctx) error {
 	list, err := database.GetSourceList(c.Context())
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("SOURCE_LIST_FAILED", "Failed to retrieve source list", err)
 	}
 	return c.JSON(list)
 }
@@ -27,15 +28,15 @@ func ListSources(c *fiber.Ctx) error {
 func GetSource(c *fiber.Ctx) error {
 	sourceIdVal, err := strconv.ParseInt(c.Params("sourceId"), 10, 64)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid source ID")
+		return apperrors.InvalidInput("INVALID_SOURCE_ID", "Invalid source ID", err)
 	}
 
 	src, err := database.GetSourceByID(c.Context(), sourceIdVal)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("SOURCE_QUERY_FAILED", "Failed to query source", err)
 	}
 	if src == nil {
-		return c.Status(fiber.StatusNotFound).SendString("Source not found")
+		return apperrors.NotFound("SOURCE_NOT_FOUND", "Source not found", nil)
 	}
 
 	return c.JSON(src)
@@ -123,7 +124,7 @@ func GetPopularManga(c *fiber.Ctx) error {
 	sourceId := c.Params("sourceId")
 	pageNum, err := strconv.Atoi(c.Params("pageNum"))
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid page number")
+		return apperrors.InvalidInput("INVALID_PAGE_NUM", "Invalid page number", err)
 	}
 
 	if sid, err := strconv.ParseInt(sourceId, 10, 64); err == nil {
@@ -139,7 +140,7 @@ func GetPopularManga(c *fiber.Ctx) error {
 
 	resVal, err := extensions.GlobalEngine.RunExtensionMethod(sourceId, "getPopularManga", pageNum)
 	if err != nil {
-		return c.Status(fiber.StatusServiceUnavailable).SendString("JS Extension error: " + err.Error())
+		return apperrors.UpstreamFailed("JS_EXTENSION_ERROR", "JS Extension error: "+err.Error(), err)
 	}
 
 	return c.JSON(resVal.Export())
@@ -150,7 +151,7 @@ func GetLatestManga(c *fiber.Ctx) error {
 	sourceId := c.Params("sourceId")
 	pageNum, err := strconv.Atoi(c.Params("pageNum"))
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid page number")
+		return apperrors.InvalidInput("INVALID_PAGE_NUM", "Invalid page number", err)
 	}
 
 	if sid, err := strconv.ParseInt(sourceId, 10, 64); err == nil {
@@ -171,7 +172,7 @@ func GetLatestManga(c *fiber.Ctx) error {
 
 	resVal, err := extensions.GlobalEngine.RunExtensionMethod(sourceId, "getLatestManga", pageNum)
 	if err != nil {
-		return c.Status(fiber.StatusServiceUnavailable).SendString("JS Extension error: " + err.Error())
+		return apperrors.UpstreamFailed("JS_EXTENSION_ERROR", "JS Extension error: "+err.Error(), err)
 	}
 
 	return c.JSON(resVal.Export())
@@ -187,7 +188,7 @@ func GetSourcePreferences(c *fiber.Ctx) error {
 func SetSourcePreference(c *fiber.Ctx) error {
 	var body models.SourcePreferenceChange
 	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+		return apperrors.InvalidInput("INVALID_JSON_BODY", "Invalid request body", err)
 	}
 	return c.SendStatus(fiber.StatusOK)
 }
@@ -228,7 +229,7 @@ func SearchManga(c *fiber.Ctx) error {
 
 	resVal, err := extensions.GlobalEngine.RunExtensionMethod(sourceId, "searchManga", pageNum, searchTerm)
 	if err != nil {
-		return c.Status(fiber.StatusServiceUnavailable).SendString("JS Extension error: " + err.Error())
+		return apperrors.UpstreamFailed("JS_EXTENSION_ERROR", "JS Extension error: "+err.Error(), err)
 	}
 
 	return c.JSON(resVal.Export())
@@ -238,7 +239,7 @@ func SearchManga(c *fiber.Ctx) error {
 func QuickSearchManga(c *fiber.Ctx) error {
 	var body models.FilterData
 	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+		return apperrors.InvalidInput("INVALID_JSON_BODY", "Invalid request body", err)
 	}
 	return c.JSON(models.PagedMangaListDataClass{})
 }

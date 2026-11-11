@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -26,37 +26,46 @@ func main() {
 	// Load configuration
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		slog.Error("Failed to load configuration", slog.Any("err", err))
+		os.Exit(1)
 	}
+
+	// Initialize structured logger early
+	util.InitLogger(cfg.Logging)
+	defer util.FlushLogger()
 
 	sources.SetConfig(cfg)
 
-	log.Printf("Starting Tsuruyomi in log level: %s", cfg.Logging.Level)
+	slog.Info("Starting Tsuruyomi", slog.String("log_level", cfg.Logging.Level), slog.String("log_format", cfg.Logging.Format))
 
 	// Context for database connection check with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Initialize database pool
-	log.Printf("Connecting to database...")
+	slog.Info("Connecting to database...")
 	if err := database.Connect(ctx, cfg.Database); err != nil {
-		log.Printf("Warning: Could not connect to database: %v. Server running in offline stub mode.", err)
+		slog.Warn("Could not connect to database, running in offline stub mode", slog.Any("err", err))
 	} else {
-		log.Printf("Successfully connected to database.")
+		slog.Info("Successfully connected to database")
 		defer database.Close()
 
 		if err := database.EnsureSchema(ctx); err != nil {
-			log.Printf("Warning: Database schema initialization error: %v", err)
+			slog.Warn("Database schema initialization warning", slog.Any("err", err))
 		}
 
 		// Load persisted server settings from database and overlay on config
 		if dbSettings, err := database.GetAllServerSettings(ctx); err == nil && len(dbSettings) > 0 {
 			cfg.ApplyServerSettings(dbSettings)
 			sources.SetConfig(cfg)
-			log.Printf("Loaded %d persisted server settings from database.", len(dbSettings))
+			slog.Info("Loaded persisted server settings from database", slog.Int("count", len(dbSettings)))
 		}
 
-		log.Printf("[CONFIG] FlareSolverr enabled: %t, URL: %s, timeout: %ds", cfg.FlareSolverr.Enabled, cfg.FlareSolverr.URL, cfg.FlareSolverr.Timeout)
+		slog.Info("FlareSolverr configuration",
+			slog.Bool("enabled", cfg.FlareSolverr.Enabled),
+			slog.String("url", cfg.FlareSolverr.URL),
+			slog.Int("timeout_sec", cfg.FlareSolverr.Timeout),
+		)
 
 		// Run index optimization for library queries
 		_, _ = database.DB.Exec(context.Background(), "CREATE INDEX IF NOT EXISTS idx_chapter_manga_read ON suwayomi.chapter (manga, read);")
@@ -66,9 +75,9 @@ func main() {
 	}
 
 	// Initialize dynamic extension manifests and JS Extension Engine
-	log.Printf("Loading extensions from root dir: %s", cfg.Data.RootDir)
+	slog.Info("Loading extensions", slog.String("root_dir", cfg.Data.RootDir))
 	if err := extensions.LoadInstalledExtensions(cfg.Data.RootDir); err != nil {
-		log.Printf("Warning: failed to load installed extensions: %v", err)
+		slog.Warn("Failed to load installed extensions", slog.Any("err", err))
 	}
 
 	// Clean up any stale or orphaned temporary page cache on startup
@@ -86,13 +95,13 @@ func main() {
 	// Start background automated integrity audit and self-healing scheduler
 	service.StartHealerScheduler(context.Background())
 
-	// Run background download storage reconciliation
-	go func() {
+	// Run background download storage reconciliation via SafeGo
+	util.SafeGo(context.Background(), "startup-download-reconciler", func(ctx context.Context) {
 		time.Sleep(2 * time.Second)
-		if _, err := service.ReconcileDownloads(context.Background(), cfg); err != nil {
-			log.Printf("[RECONCILER] Startup reconciliation error: %v", err)
+		if _, err := service.ReconcileDownloads(ctx, cfg); err != nil {
+			slog.Error("Startup download reconciliation error", slog.Any("err", err))
 		}
-	}()
+	}, nil)
 
 	// Initialize Fiber app setup
 	app := router.Setup(cfg)
@@ -101,24 +110,24 @@ func main() {
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
 
-	go func() {
-		log.Printf("Server listening on %s%s", cfg.Server.Addr(), cfg.Server.Subpath)
+	util.SafeGo(context.Background(), "http-server-listener", func(ctx context.Context) {
+		slog.Info("Server listening", slog.String("addr", cfg.Server.Addr()), slog.String("subpath", cfg.Server.Subpath))
 		if err := app.Listen(cfg.Server.Addr()); err != nil {
-			log.Printf("Server shut down error: %v", err)
+			slog.Error("Server listener error", slog.Any("err", err))
 		}
-	}()
+	}, nil)
 
 	// Wait for termination signal
 	<-shutdown
-	log.Println("Gracefully shutting down...")
+	slog.Info("Gracefully shutting down...")
 
 	// Cancel any running library updates
 	service.GlobalUpdateManager.CancelUpdate()
 
 	// Shutdown fiber app with a timeout of 10s
 	if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {
-		log.Printf("Fiber shutdown error: %v", err)
+		slog.Error("Fiber shutdown error", slog.Any("err", err))
 	}
 
-	log.Println("Shutdown complete.")
+	slog.Info("Shutdown complete")
 }

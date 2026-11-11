@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"tsuruyomi/internal/database"
+	apperrors "tsuruyomi/internal/errors"
 	"tsuruyomi/internal/models"
 )
 
@@ -14,7 +15,7 @@ import (
 func ListCategories(c *fiber.Ctx) error {
 	list, err := database.GetCategoryList(c.Context())
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("CATEGORY_LIST_FAILED", "Failed to retrieve category list", err)
 	}
 	return c.JSON(list)
 }
@@ -23,12 +24,12 @@ func ListCategories(c *fiber.Ctx) error {
 func CreateCategory(c *fiber.Ctx) error {
 	name := c.FormValue("name")
 	if name == "" {
-		return c.Status(fiber.StatusBadRequest).SendString("Missing name parameter")
+		return apperrors.InvalidInput("MISSING_CATEGORY_NAME", "Missing name parameter", nil)
 	}
 
 	id, err := database.CreateCategory(c.Context(), name)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("CATEGORY_CREATE_FAILED", "Failed to create category", err)
 	}
 
 	_ = id // Success, return 200 StatusOK
@@ -40,18 +41,18 @@ func ReorderCategories(c *fiber.Ctx) error {
 	fromStr := c.FormValue("from")
 	toStr := c.FormValue("to")
 	if fromStr == "" || toStr == "" {
-		return c.Status(fiber.StatusBadRequest).SendString("Missing from/to parameters")
+		return apperrors.InvalidInput("MISSING_REORDER_PARAMS", "Missing from/to parameters", nil)
 	}
 
 	from, err1 := strconv.Atoi(fromStr)
 	to, err2 := strconv.Atoi(toStr)
 	if err1 != nil || err2 != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid from/to parameters")
+		return apperrors.InvalidInput("INVALID_REORDER_PARAMS", "Invalid from/to parameters", nil)
 	}
 
 	err := database.ReorderCategory(c.Context(), from, to)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("CATEGORY_REORDER_FAILED", "Failed to reorder category", err)
 	}
 
 	return c.SendStatus(fiber.StatusOK)
@@ -61,12 +62,12 @@ func ReorderCategories(c *fiber.Ctx) error {
 func GetCategoryMangas(c *fiber.Ctx) error {
 	categoryId, err := strconv.Atoi(c.Params("categoryId"))
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid category ID")
+		return apperrors.InvalidInput("INVALID_CATEGORY_ID", "Invalid category ID", err)
 	}
 
 	list, err := database.GetCategoryMangas(c.Context(), categoryId)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("CATEGORY_MANGAS_FAILED", "Failed to get category mangas", err)
 	}
 
 	return c.JSON(list)
@@ -76,7 +77,7 @@ func GetCategoryMangas(c *fiber.Ctx) error {
 func ModifyCategory(c *fiber.Ctx) error {
 	categoryId, err := strconv.Atoi(c.Params("categoryId"))
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid category ID")
+		return apperrors.InvalidInput("INVALID_CATEGORY_ID", "Invalid category ID", err)
 	}
 
 	var namePtr *string
@@ -123,7 +124,7 @@ func ModifyCategory(c *fiber.Ctx) error {
 
 	err = database.UpdateCategory(c.Context(), categoryId, namePtr, defaultPtr, includeInUpdatePtr, includeInDownloadPtr)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("CATEGORY_UPDATE_FAILED", "Failed to update category", err)
 	}
 
 	return c.SendStatus(fiber.StatusOK)
@@ -133,12 +134,12 @@ func ModifyCategory(c *fiber.Ctx) error {
 func DeleteCategory(c *fiber.Ctx) error {
 	categoryId, err := strconv.Atoi(c.Params("categoryId"))
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid category ID")
+		return apperrors.InvalidInput("INVALID_CATEGORY_ID", "Invalid category ID", err)
 	}
 
 	err = database.DeleteCategory(c.Context(), categoryId)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("CATEGORY_DELETE_FAILED", "Failed to delete category", err)
 	}
 
 	return c.SendStatus(fiber.StatusOK)
@@ -148,12 +149,12 @@ func DeleteCategory(c *fiber.Ctx) error {
 func ModifyCategoryMeta(c *fiber.Ctx) error {
 	categoryId, err := strconv.Atoi(c.Params("categoryId"))
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid category ID")
+		return apperrors.InvalidInput("INVALID_CATEGORY_ID", "Invalid category ID", err)
 	}
 
 	var body map[string]interface{}
 	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+		return apperrors.InvalidInput("INVALID_JSON_BODY", "Invalid request body", err)
 	}
 
 	if database.DB != nil {

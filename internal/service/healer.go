@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"sync"
 	"time"
 
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/sources"
+	"tsuruyomi/internal/util"
 )
 
 // AuditReport holds the health report across all sources and chapters.
@@ -201,25 +203,30 @@ func Heal(ctx context.Context) (*HealReport, error) {
 
 // StartHealerScheduler launches background scheduled health checks and healing.
 func StartHealerScheduler(ctx context.Context) {
-	go func() {
+	util.SafeGo(ctx, "healer-scheduler-loop", func(loopCtx context.Context) {
 		// Wait 8 seconds after server startup for database and network readiness
 		select {
 		case <-time.After(8 * time.Second):
-		case <-ctx.Done():
+		case <-loopCtx.Done():
 			return
 		}
 
-		log.Printf("[AUTO-HEALER] Running initial background audit & healing...")
-		if report, err := Heal(context.Background()); err == nil {
-			if report.DatesRepaired > 0 || report.NamesRepaired > 0 || report.NativeMangasResynced > 0 {
-				log.Printf("[AUTO-HEALER] Startup healing repaired %d dates, %d names (native resynced: %d)",
-					report.DatesRepaired, report.NamesRepaired, report.NativeMangasResynced)
+		slog.Info("Running initial background audit & healing...")
+		util.SafeGo(loopCtx, "healer-initial-pass", func(passCtx context.Context) {
+			if report, err := Heal(passCtx); err == nil {
+				if report.DatesRepaired > 0 || report.NamesRepaired > 0 || report.NativeMangasResynced > 0 {
+					slog.Info("Startup healing completed",
+						slog.Int64("dates_repaired", report.DatesRepaired),
+						slog.Int64("names_repaired", report.NamesRepaired),
+						slog.Int("native_resynced", report.NativeMangasResynced),
+					)
+				} else {
+					slog.Info("All sources and chapters are healthy. No repairs needed.")
+				}
 			} else {
-				log.Printf("[AUTO-HEALER] All sources and chapters are healthy. No repairs needed.")
+				slog.Error("Startup healing error", slog.Any("err", err))
 			}
-		} else {
-			log.Printf("[AUTO-HEALER] Startup healing error: %v", err)
-		}
+		}, nil)
 
 		// Run periodic background audit and healing every 6 hours
 		ticker := time.NewTicker(6 * time.Hour)
@@ -228,16 +235,22 @@ func StartHealerScheduler(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				log.Printf("[AUTO-HEALER] Running periodic background audit & healing...")
-				if report, err := Heal(context.Background()); err == nil {
-					if report.DatesRepaired > 0 || report.NamesRepaired > 0 || report.NativeMangasResynced > 0 {
-						log.Printf("[AUTO-HEALER] Periodic healing repaired %d dates, %d names",
-							report.DatesRepaired, report.NamesRepaired)
+				slog.Info("Running periodic background audit & healing...")
+				util.SafeGo(loopCtx, "healer-periodic-pass", func(passCtx context.Context) {
+					if report, err := Heal(passCtx); err == nil {
+						if report.DatesRepaired > 0 || report.NamesRepaired > 0 || report.NativeMangasResynced > 0 {
+							slog.Info("Periodic healing completed",
+								slog.Int64("dates_repaired", report.DatesRepaired),
+								slog.Int64("names_repaired", report.NamesRepaired),
+							)
+						}
+					} else {
+						slog.Error("Periodic healing error", slog.Any("err", err))
 					}
-				}
-			case <-ctx.Done():
+				}, nil)
+			case <-loopCtx.Done():
 				return
 			}
 		}
-	}()
+	}, nil)
 }

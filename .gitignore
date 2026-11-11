@@ -53,3 +53,6 @@ icon_proposals/
 scratch/
 
 
+
+# Local build outputs
+bin/

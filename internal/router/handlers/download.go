@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/websocket/v2"
 
 	"tsuruyomi/internal/database"
+	apperrors "tsuruyomi/internal/errors"
 	"tsuruyomi/internal/models"
 	"tsuruyomi/internal/service"
 )
@@ -65,7 +66,7 @@ func QueueChapter(c *fiber.Ctx) error {
 	mangaId, err1 := strconv.Atoi(c.Params("mangaId"))
 	chapterIndex, err2 := strconv.Atoi(c.Params("chapterIndex"))
 	if err1 != nil || err2 != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid manga or chapter parameter")
+		return apperrors.InvalidInput("INVALID_CHAPTER_PARAMS", "Invalid manga or chapter parameter", nil)
 	}
 
 	// Retrieve chapter ID from DB
@@ -73,12 +74,12 @@ func QueueChapter(c *fiber.Ctx) error {
 	query := `SELECT id FROM suwayomi.chapter WHERE manga = $1 AND (source_order = $2 OR ($2 = 0 AND source_order = 1)) ORDER BY source_order ASC LIMIT 1`
 	err := database.DB.QueryRow(c.Context(), query, mangaId, chapterIndex).Scan(&chID)
 	if err != nil {
-		return c.Status(fiber.StatusNotFound).SendString("Chapter not found in database")
+		return apperrors.NotFound("CHAPTER_NOT_FOUND", "Chapter not found in database", err)
 	}
 
 	err = service.GlobalDownloadManager.Enqueue(c.Context(), []int{chID})
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("ENQUEUE_FAILED", "Failed to enqueue chapter", err)
 	}
 
 	return c.SendStatus(fiber.StatusOK)
@@ -89,7 +90,7 @@ func UnqueueChapter(c *fiber.Ctx) error {
 	mangaId, err1 := strconv.Atoi(c.Params("mangaId"))
 	chapterIndex, err2 := strconv.Atoi(c.Params("chapterIndex"))
 	if err1 != nil || err2 != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid manga or chapter parameter")
+		return apperrors.InvalidInput("INVALID_CHAPTER_PARAMS", "Invalid manga or chapter parameter", nil)
 	}
 
 	service.GlobalDownloadManager.DequeueByIndex(c.Context(), mangaId, chapterIndex)
@@ -102,7 +103,7 @@ func ReorderChapterInQueue(c *fiber.Ctx) error {
 	chapterIndex, err2 := strconv.Atoi(c.Params("chapterIndex"))
 	to, err3 := strconv.Atoi(c.Params("to"))
 	if err1 != nil || err2 != nil || err3 != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid parameter values")
+		return apperrors.InvalidInput("INVALID_REORDER_PARAMS", "Invalid parameter values", nil)
 	}
 
 	service.GlobalDownloadManager.Reorder(mangaId, chapterIndex, to)
@@ -113,12 +114,12 @@ func ReorderChapterInQueue(c *fiber.Ctx) error {
 func QueueChaptersBatch(c *fiber.Ctx) error {
 	var body models.EnqueueInput
 	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+		return apperrors.InvalidInput("INVALID_JSON_BODY", "Invalid request body", err)
 	}
 
 	err := service.GlobalDownloadManager.Enqueue(c.Context(), body.ChapterIds)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("ENQUEUE_BATCH_FAILED", "Failed to enqueue chapter batch", err)
 	}
 
 	return c.SendStatus(fiber.StatusOK)
@@ -128,7 +129,7 @@ func QueueChaptersBatch(c *fiber.Ctx) error {
 func UnqueueChaptersBatch(c *fiber.Ctx) error {
 	var body models.EnqueueInput
 	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+		return apperrors.InvalidInput("INVALID_JSON_BODY", "Invalid request body", err)
 	}
 
 	service.GlobalDownloadManager.Dequeue(body.ChapterIds)

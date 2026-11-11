@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"github.com/gofiber/fiber/v2"
+
+	apperrors "tsuruyomi/internal/errors"
 	"tsuruyomi/internal/service"
 )
 
@@ -9,9 +11,7 @@ import (
 func SystemAuditHandler(c *fiber.Ctx) error {
 	report, err := service.Audit(c.Context())
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": err.Error(),
-		})
+		return apperrors.Internal("SYSTEM_AUDIT_FAILED", "Failed to run system audit", err)
 	}
 	return c.JSON(report)
 }
@@ -20,9 +20,7 @@ func SystemAuditHandler(c *fiber.Ctx) error {
 func SystemHealHandler(c *fiber.Ctx) error {
 	report, err := service.Heal(c.Context())
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": err.Error(),
-		})
+		return apperrors.Internal("SYSTEM_HEAL_FAILED", "Failed to run system heal", err)
 	}
 	return c.JSON(report)
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"tsuruyomi/internal/database"
 	"tsuruyomi/internal/models"
 	"tsuruyomi/internal/sources"
+	"tsuruyomi/internal/util"
 	"tsuruyomi/internal/websocket"
 )
 
@@ -363,7 +365,7 @@ func (um *UpdateManager) StartUpdate() {
 		for _, m := range eligibleMangas {
 			select {
 			case <-ctx.Done():
-				log.Printf("[UPDATER] Library update canceled by user")
+				slog.Info("Library update canceled by user")
 				return
 			default:
 			}
@@ -376,62 +378,78 @@ func (um *UpdateManager) StartUpdate() {
 			prog := float32(currentFinished) / float32(currentTotal)
 			um.broadcastProgress(m.ID, m.Title, "Updating", prog)
 
-			var countBefore int
-			_ = database.DB.QueryRow(ctx, "SELECT COUNT(*) FROM suwayomi.chapter WHERE manga = $1", m.ID).Scan(&countBefore)
+			mangaDone := make(chan struct{})
+			mCopy := m
+			util.SafeGo(ctx, "update-manga-task", func(taskCtx context.Context) {
+				defer close(mangaDone)
+				var countBefore int
+				_ = database.DB.QueryRow(taskCtx, "SELECT COUNT(*) FROM suwayomi.chapter WHERE manga = $1", mCopy.ID).Scan(&countBefore)
 
-			handler, _ := sources.Get(m.SourceID)
-			if updateMangas && handler != nil {
-				if fetcher, ok := handler.(sources.MangaDetailsFetcher); ok {
-					if details, err := fetcher.GetMangaDetails(ctx, m.URL); err == nil && details != nil {
-						_, _ = database.DB.Exec(ctx, `
-							UPDATE suwayomi.manga SET
-								description = COALESCE(NULLIF($1, ''), description),
-								status = CASE WHEN $2 > 0 THEN $2 ELSE status END,
-								thumbnail_url = COALESCE(NULLIF($3, ''), thumbnail_url),
-								artist = COALESCE(NULLIF($4, ''), artist),
-								author = COALESCE(NULLIF($5, ''), author),
-								last_modified_at = $6
-							WHERE id = $7
-						`, details.Description, details.Status, details.ThumbnailURL, details.Artist, details.Author, time.Now().UnixMilli(), m.ID)
+				handler, _ := sources.Get(mCopy.SourceID)
+				if updateMangas && handler != nil {
+					if fetcher, ok := handler.(sources.MangaDetailsFetcher); ok {
+						if details, err := fetcher.GetMangaDetails(taskCtx, mCopy.URL); err == nil && details != nil {
+							_, _ = database.DB.Exec(taskCtx, `
+								UPDATE suwayomi.manga SET
+									description = COALESCE(NULLIF($1, ''), description),
+									status = CASE WHEN $2 > 0 THEN $2 ELSE status END,
+									thumbnail_url = COALESCE(NULLIF($3, ''), thumbnail_url),
+									artist = COALESCE(NULLIF($4, ''), artist),
+									author = COALESCE(NULLIF($5, ''), author),
+									last_modified_at = $6
+								WHERE id = $7
+							`, details.Description, details.Status, details.ThumbnailURL, details.Artist, details.Author, time.Now().UnixMilli(), mCopy.ID)
+						}
 					}
 				}
-			}
-			log.Printf("[UPDATER] [%d/%d] Fetching chapters for %q (manga %d, source %d)...", currentFinished+1, currentTotal, m.Title, m.ID, m.SourceID)
-			_, fetchErr := sources.FetchAndSaveMangaChapters(ctx, m.SourceID, int64(m.ID), m.URL)
-			if fetchErr != nil {
-				log.Printf("[UPDATER] Warning: failed to fetch chapters for %q: %v", m.Title, fetchErr)
-			} else {
-				var countAfter int
-				_ = database.DB.QueryRow(ctx, "SELECT COUNT(*) FROM suwayomi.chapter WHERE manga = $1", m.ID).Scan(&countAfter)
-				if countAfter > countBefore {
-					newChapters := countAfter - countBefore
-					log.Printf("[UPDATER] New chapters found for %q: +%d chapters! (Total: %d)", m.Title, newChapters, countAfter)
+				slog.Info("Fetching chapters for manga",
+					slog.Int("progress", currentFinished+1),
+					slog.Int("total", currentTotal),
+					slog.String("title", mCopy.Title),
+					slog.Int("manga_id", mCopy.ID),
+					slog.Int64("source_id", mCopy.SourceID),
+				)
+				_, fetchErr := sources.FetchAndSaveMangaChapters(taskCtx, mCopy.SourceID, int64(mCopy.ID), mCopy.URL)
+				if fetchErr != nil {
+					slog.Warn("Failed to fetch chapters for manga", slog.String("title", mCopy.Title), slog.Any("err", fetchErr))
+				} else {
+					var countAfter int
+					_ = database.DB.QueryRow(taskCtx, "SELECT COUNT(*) FROM suwayomi.chapter WHERE manga = $1", mCopy.ID).Scan(&countAfter)
+					if countAfter > countBefore {
+						newChapters := countAfter - countBefore
+						slog.Info("New chapters found for manga", slog.String("title", mCopy.Title), slog.Int("new_chapters", newChapters), slog.Int("total", countAfter))
 
-					// Auto-download new chapters if enabled
-					if autoDownload && newChapters > 0 {
-						if excludeEntryWithUnread && m.UnreadCount > 0 {
-							log.Printf("[UPDATER] Auto-download skipped for %q (entry has %d unread chapters)", m.Title, m.UnreadCount)
-						} else {
-						limit := min(newChapters, autoDownloadLimit)
-						chRows, err := database.DB.Query(ctx, "SELECT id FROM suwayomi.chapter WHERE manga = $1 ORDER BY source_order DESC LIMIT $2", m.ID, limit)
-						if err == nil {
-							var chIDs []int
-							for chRows.Next() {
-								var cid int
-								if err := chRows.Scan(&cid); err == nil {
-									chIDs = append(chIDs, cid)
+						// Auto-download new chapters if enabled
+						if autoDownload && newChapters > 0 {
+							if excludeEntryWithUnread && mCopy.UnreadCount > 0 {
+								slog.Debug("Auto-download skipped", slog.String("title", mCopy.Title), slog.Int("unread", mCopy.UnreadCount))
+							} else {
+								limit := min(newChapters, autoDownloadLimit)
+								chRows, err := database.DB.Query(taskCtx, "SELECT id FROM suwayomi.chapter WHERE manga = $1 ORDER BY source_order DESC LIMIT $2", mCopy.ID, limit)
+								if err == nil {
+									var chIDs []int
+									for chRows.Next() {
+										var cid int
+										if err := chRows.Scan(&cid); err == nil {
+											chIDs = append(chIDs, cid)
+										}
+									}
+									chRows.Close()
+									if len(chIDs) > 0 {
+										_ = GlobalDownloadManager.Enqueue(taskCtx, chIDs)
+										slog.Info("Auto-download: Enqueued new chapter(s)", slog.Int("count", len(chIDs)), slog.String("title", mCopy.Title))
+									}
 								}
 							}
-							chRows.Close()
-							if len(chIDs) > 0 {
-								_ = GlobalDownloadManager.Enqueue(ctx, chIDs)
-								log.Printf("[UPDATER] Auto-download: Enqueued %d new chapter(s) for %q", len(chIDs), m.Title)
-							}
-						}
 						}
 					}
 				}
-			}
+			}, func(panicCtx context.Context, worker string, r any, stack []byte) {
+				defer close(mangaDone)
+				slog.Error("Panic during manga update iteration", slog.Int("manga_id", mCopy.ID), slog.String("title", mCopy.Title), slog.Any("panic", r))
+			})
+
+			<-mangaDone
 
 			um.mu.Lock()
 			um.finishedJobs++
@@ -589,8 +607,10 @@ func (um *UpdateManager) restartSchedulerLocked(ctx context.Context) {
 				timer.Stop()
 				return
 			case <-timer.C:
-				log.Printf("[UPDATER] Wall-clock scheduled library update triggered at %s", time.Now().Format("15:04:05 MST"))
-				um.StartUpdate()
+				slog.Info("Wall-clock scheduled library update triggered", slog.String("time", time.Now().Format("15:04:05 MST")))
+				util.SafeGo(ctx, "scheduled-library-update-trigger", func(triggerCtx context.Context) {
+					um.StartUpdate()
+				}, nil)
 				// Sleep briefly to ensure time.Now() moves past the trigger second
 				time.Sleep(2 * time.Second)
 			}

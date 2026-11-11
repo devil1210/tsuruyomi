@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/websocket/v2"
 
 	"tsuruyomi/internal/database"
+	apperrors "tsuruyomi/internal/errors"
 	"tsuruyomi/internal/service"
 )
 
@@ -14,12 +15,12 @@ import (
 func GetRecentChapters(c *fiber.Ctx) error {
 	pageNum, err := strconv.Atoi(c.Params("pageNum"))
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid page number")
+		return apperrors.InvalidInput("INVALID_PAGE_NUM", "Invalid page number", err)
 	}
 
 	list, err := database.GetRecentChapters(c.Context(), pageNum)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("RECENT_CHAPTERS_FAILED", "Failed to retrieve recent chapters", err)
 	}
 
 	return c.JSON(list)

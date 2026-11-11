@@ -8,6 +8,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"tsuruyomi/internal/config"
+	apperrors "tsuruyomi/internal/errors"
 	"tsuruyomi/internal/service"
 )
 
@@ -15,12 +16,12 @@ import (
 func ImportBackup(c *fiber.Ctx) error {
 	body := c.Body()
 	if len(body) == 0 {
-		return c.Status(fiber.StatusBadRequest).SendString("Empty backup payload")
+		return apperrors.InvalidInput("EMPTY_BACKUP_PAYLOAD", "Empty backup payload", nil)
 	}
 
 	jobID, totalManga, err := service.GlobalRestoreManager.StartAsyncRestore(body)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("RESTORE_INIT_FAILED", "Failed to start backup restoration", err)
 	}
 
 	return c.JSON(fiber.Map{
@@ -34,23 +35,23 @@ func ImportBackup(c *fiber.Ctx) error {
 func ImportBackupFile(c *fiber.Ctx) error {
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Failed to get file: " + err.Error())
+		return apperrors.InvalidInput("FILE_UPLOAD_ERROR", "Failed to get file: "+err.Error(), err)
 	}
 
 	file, err := fileHeader.Open()
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString("Failed to open file: " + err.Error())
+		return apperrors.Internal("FILE_OPEN_ERROR", "Failed to open file: "+err.Error(), err)
 	}
 	defer file.Close()
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString("Failed to read file: " + err.Error())
+		return apperrors.Internal("FILE_READ_ERROR", "Failed to read file: "+err.Error(), err)
 	}
 
 	jobID, totalManga, err := service.GlobalRestoreManager.StartAsyncRestore(data)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("RESTORE_INIT_FAILED", "Failed to start backup restoration", err)
 	}
 
 	return c.JSON(fiber.Map{
@@ -71,7 +72,7 @@ func GetRestoreStatus(c *fiber.Ctx) error {
 func ValidateBackup(c *fiber.Ctx) error {
 	res, err := service.ValidateBackup(c.Context(), c.Body())
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		return apperrors.InvalidInput("INVALID_BACKUP", err.Error(), err)
 	}
 	return c.JSON(res)
 }
@@ -80,23 +81,23 @@ func ValidateBackup(c *fiber.Ctx) error {
 func ValidateBackupFile(c *fiber.Ctx) error {
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to get file: " + err.Error()})
+		return apperrors.InvalidInput("FILE_UPLOAD_ERROR", "Failed to get file: "+err.Error(), err)
 	}
 
 	file, err := fileHeader.Open()
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to open file: " + err.Error()})
+		return apperrors.Internal("FILE_OPEN_ERROR", "Failed to open file: "+err.Error(), err)
 	}
 	defer file.Close()
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file: " + err.Error()})
+		return apperrors.Internal("FILE_READ_ERROR", "Failed to read file: "+err.Error(), err)
 	}
 
 	res, err := service.ValidateBackup(c.Context(), data)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		return apperrors.InvalidInput("INVALID_BACKUP", err.Error(), err)
 	}
 	return c.JSON(res)
 }
@@ -105,7 +106,7 @@ func ValidateBackupFile(c *fiber.Ctx) error {
 func ExportBackup(c *fiber.Ctx) error {
 	data, err := service.ExportBackup(c.Context())
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("EXPORT_BACKUP_FAILED", "Failed to export backup", err)
 	}
 
 	c.Set(fiber.HeaderContentType, "application/gzip")
@@ -116,7 +117,7 @@ func ExportBackup(c *fiber.Ctx) error {
 func ExportBackupFile(c *fiber.Ctx) error {
 	data, err := service.ExportBackup(c.Context())
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		return apperrors.Internal("EXPORT_BACKUP_FAILED", "Failed to export backup", err)
 	}
 
 	filename := fmt.Sprintf("tsuruyomi_backup_%s.tachibk", time.Now().Format("2006-01-02_150405"))
@@ -147,10 +148,7 @@ func ReconcileDownloadsHandler(c *fiber.Ctx) error {
 	cfg := c.Locals("config").(*config.Config)
 	result, err := service.ReconcileDownloads(c.Context(), cfg)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error":   "Reconciliation failed",
-			"message": err.Error(),
-		})
+		return apperrors.Internal("RECONCILIATION_FAILED", "Reconciliation failed: "+err.Error(), err)
 	}
 	return c.JSON(fiber.Map{
 		"success": true,
