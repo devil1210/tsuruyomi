@@ -6,7 +6,7 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
     const K="tsuruyomi_smart_orientation_v1";
     const getCfg=()=>{
       try{let raw=localStorage.getItem(K);if(raw)return JSON.parse(raw)}catch(e){}
-      return{enabled:!0,mode:"double_page",direction:"auto",protectWebtoon:!0}
+      return{enabled:!0,mode:"double_page",direction:"auto",protectWebtoon:!0,lockWebtoonPortrait:!0}
     };
     const isLandscape=()=>{
       if(window.screen&&window.screen.orientation&&window.screen.orientation.type){
@@ -15,15 +15,45 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
       if(window.matchMedia&&window.matchMedia("(orientation: landscape)").matches)return!0;
       return(window.innerWidth||document.documentElement.clientWidth||0)>(window.innerHeight||document.documentElement.clientHeight||0);
     };
+    const enforcePortraitLock=()=>{
+      try{
+        if(window.screen&&window.screen.orientation&&typeof window.screen.orientation.lock==="function"){
+          window.screen.orientation.lock("portrait-primary").catch(()=>{
+            try{window.screen.orientation.lock("portrait").catch(()=>{})}catch(e){}
+          });
+        }
+      }catch(e){}
+    };
+    const releasePortraitLock=()=>{
+      try{
+        if(window.screen&&window.screen.orientation&&typeof window.screen.orientation.unlock==="function"){
+          window.screen.orientation.unlock();
+        }
+      }catch(e){}
+    };
     const checkOrientation=()=>{
       const cfg=getCfg();
-      if(!cfg.enabled||cfg.mode==="disabled")return;
       const curMode=W()?.readingMode?.value??rmObj?.value;
       const genreStr=Array.isArray(mangaObj?.genre)?mangaObj.genre.join(" "):typeof mangaObj?.genre==="string"?mangaObj.genre:"";
       const isWebtoon=mangaObj?.viewer===4||(genreStr&&/webtoon|manhwa/i.test(genreStr))||curMode===4;
-      if(isWebtoon&&cfg.protectWebtoon!==!1){
-        return;
+
+      if(isWebtoon){
+        if(cfg.lockWebtoonPortrait!==!1){
+          enforcePortraitLock();
+          document.documentElement.setAttribute("data-tsuruyomi-webtoon-lock","true");
+        }else{
+          releasePortraitLock();
+          document.documentElement.removeAttribute("data-tsuruyomi-webtoon-lock");
+        }
+        if(cfg.protectWebtoon!==!1){
+          return;
+        }
+      }else{
+        releasePortraitLock();
+        document.documentElement.removeAttribute("data-tsuruyomi-webtoon-lock");
       }
+
+      if(!cfg.enabled||cfg.mode==="disabled")return;
       const landscape=isLandscape();
       if(landscape){
         if(cfg.mode==="double_page"){
@@ -57,6 +87,16 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
       timer=setTimeout(checkOrientation,60);
       timer2=setTimeout(checkOrientation,250);
     };
+    const onUserInteraction=()=>{
+      const cfg=getCfg();
+      const curMode=W()?.readingMode?.value??rmObj?.value;
+      const genreStr=Array.isArray(mangaObj?.genre)?mangaObj.genre.join(" "):typeof mangaObj?.genre==="string"?mangaObj.genre:"";
+      const isWebtoon=mangaObj?.viewer===4||(genreStr&&/webtoon|manhwa/i.test(genreStr))||curMode===4;
+      if(isWebtoon&&cfg.lockWebtoonPortrait!==!1){
+        enforcePortraitLock();
+      }
+    };
+    window.addEventListener("pointerdown",onUserInteraction);
     window.addEventListener("resize",onRotate);
     window.addEventListener("orientationchange",onRotate);
     if(window.screen&&window.screen.orientation){
@@ -69,6 +109,7 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
     }catch(e){}
     window.addEventListener("tsuruyomi:orientation-config-changed",checkOrientation);
     return()=>{
+      window.removeEventListener("pointerdown",onUserInteraction);
       window.removeEventListener("resize",onRotate);
       window.removeEventListener("orientationchange",onRotate);
       if(window.screen&&window.screen.orientation){
@@ -78,6 +119,8 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
         try{mql.removeEventListener("change",onRotate)}catch(e){}
       }
       window.removeEventListener("tsuruyomi:orientation-config-changed",checkOrientation);
+      releasePortraitLock();
+      document.documentElement.removeAttribute("data-tsuruyomi-webtoon-lock");
       clearTimeout(timer);
       clearTimeout(timer2);
     };

@@ -2,7 +2,7 @@ import{t as e}from"./Slider-BwytRD0-.js";import{$i as t,Ai as n,Bo as r,Di as i,
   let K="tsuruyomi_smart_orientation_v1",
       [c,sc]=(0,W.useState)(()=>{
         try{let raw=localStorage.getItem(K);if(raw)return JSON.parse(raw)}catch(e){}
-        return{enabled:!0,mode:"double_page",direction:"auto",protectWebtoon:!0}
+        return{enabled:!0,mode:"double_page",direction:"auto",protectWebtoon:!0,lockWebtoonPortrait:!0}
       }),
       up=nc=>{
         sc(nc);
@@ -30,6 +30,12 @@ import{t as e}from"./Slider-BwytRD0-.js";import{$i as t,Ai as n,Bo as r,Di as i,
         (0,q.jsx)(s,{variant:c.direction==="ltr"?"contained":"outlined",onClick:()=>up({...c,direction:"ltr"}),sx:{textTransform:"none"},children:"\u27A1\uFE0F De izquierda a derecha"})
       ]})
     ]}),
+    (0,q.jsx)(R,{
+      primaryText:"Bloqueo Vertical Estricto (Portrait Lock) en Webtoon",
+      secondaryText:"Bloquea r\xedgidamente la pantalla en vertical durante la lectura de Webtoons para impedir que la webapp rote a horizontal al inclinar o girar la tablet.",
+      checked:c.lockWebtoonPortrait!==!1,
+      onChange:(e,v)=>up({...c,lockWebtoonPortrait:v})
+    }),
     (0,q.jsx)(R,{
       primaryText:"Protecci\xf3n Webtoon & Manhwa",
       secondaryText:"Al leer tiras verticales (Webtoons/Manhwas), el lector se mantendr\xe1 siempre en cascada vertical continua al girar para apreciar el arte sin cortes.",

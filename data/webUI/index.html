@@ -36,7 +36,17 @@
         <link rel="manifest" href="./site.webmanifest" crossorigin="anonymous" />
       <script type="module" crossorigin src="./assets/index-B15kT_vM.js"></script>
       <link rel="stylesheet" crossorigin href="./assets/index-TZrNw7dA.css">
-      <style id="tsuruyomi-seamless-horizontal">
+            <style id="tsuruyomi-webtoon-lock-style">
+        /* Tsuruyomi: Portrait Lock & Safeguard para Webtoon */
+        @media (orientation: landscape) {
+          html[data-tsuruyomi-webtoon-lock="true"] img[src*="/api/v1/chapter/"] {
+            max-width: min(720px, 85vh) !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
+          }
+        }
+      </style>
+<style id="tsuruyomi-seamless-horizontal">
         /* Tsuruyomi: Eliminar líneas divisorias y separación entre páginas en Modo Horizontal Continuo */
         div[style*="flex-direction: row"],
         div[style*="flex-direction: row-reverse"] {
