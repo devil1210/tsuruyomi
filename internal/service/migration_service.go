@@ -393,6 +393,14 @@ var KnownTmoUUIDs = map[string]string{
 	"the dark maid dominates!":                                        "cf8c6030-6190-4dd3-a5b5-aedbab086bea",
 	"the dark maid dominates":                                         "cf8c6030-6190-4dd3-a5b5-aedbab086bea",
 	"yami maid ga shihai suru":                                        "cf8c6030-6190-4dd3-a5b5-aedbab086bea",
+	"the-impregnable-demon-king-s-castle-and-the-expelled-black-mage-of-the-hero-s-party-official": "c26a8a56-7fa6-4efd-93a1-5289c36c3634",
+	"the impregnable demon king’s castle and the expelled black mage of the hero’s party (official)": "c26a8a56-7fa6-4efd-93a1-5289c36c3634",
+	"the impregnable demon king's castle and the expelled black mage of the hero's party (official)": "c26a8a56-7fa6-4efd-93a1-5289c36c3634",
+	"the impregnable demon king's castle":                             "c26a8a56-7fa6-4efd-93a1-5289c36c3634",
+	"nankoufuraku no maou-jou e youkoso":                              "c26a8a56-7fa6-4efd-93a1-5289c36c3634",
+	"i-m-in-love-with-the-older-girl-next-door":                        "90be0dde-350d-4f0e-ba83-da4ba05dbc37",
+	"i'm in love with the older girl next door":                        "90be0dde-350d-4f0e-ba83-da4ba05dbc37",
+	"恋上邻家的大姐姐 -- i'm in love with the older girl next door":       "90be0dde-350d-4f0e-ba83-da4ba05dbc37",
 }
 
 var KnownTmoAliases = map[string]string{
