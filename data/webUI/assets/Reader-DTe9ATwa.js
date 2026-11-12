@@ -9,15 +9,8 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
       try{
         let raw=localStorage.getItem(K);
         if(raw)return JSON.parse(raw);
-        let old=localStorage.getItem("tsuruyomi_smart_orientation_v1");
-        if(old){
-          let p=JSON.parse(old);
-          if(p.mode==="disabled"||p.enabled===!1){
-            return{enabled:!1,mode:"disabled",direction:p.direction||"auto",protectWebtoon:!0,lockWebtoonPortrait:!0}
-          }
-        }
       }catch(e){}
-      return{enabled:!1,mode:"disabled",direction:"auto",protectWebtoon:!0,lockWebtoonPortrait:!0}
+      return{enabled:!1,mode:"disabled",direction:"auto",protectWebtoon:!0}
     };
     const isLandscape=()=>{
       if(window.screen&&window.screen.orientation&&window.screen.orientation.type){
@@ -26,73 +19,38 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
       if(window.matchMedia&&window.matchMedia("(orientation: landscape)").matches)return!0;
       return(window.innerWidth||document.documentElement.clientWidth||0)>(window.innerHeight||document.documentElement.clientHeight||0);
     };
-    const enforcePortraitLock=()=>{
-      try{
-        if(window.screen&&window.screen.orientation&&typeof window.screen.orientation.lock==="function"){
-          window.screen.orientation.lock("portrait-primary").catch(()=>{
-            try{window.screen.orientation.lock("portrait").catch(()=>{})}catch(e){}
-          });
-        }
-      }catch(e){}
-    };
-    const releasePortraitLock=()=>{
-      try{
-        if(window.screen&&window.screen.orientation&&typeof window.screen.orientation.unlock==="function"){
-          window.screen.orientation.unlock();
-        }
-      }catch(e){}
-    };
     const checkOrientation=()=>{
       const cfg=getCfg();
       const curMode=W()?.readingMode?.value??rmObj?.value;
+      
+      // INVARIANT 1: Si el usuario esta en Webtoon (4) o Vertical Continuo (2), NUNCA cambiar readingMode al girar
+      if(curMode===4||curMode===2){
+        return;
+      }
+
+      // INVARIANT 2: Si el manga es identificado como Webtoon/Manhwa/Manhua por metadatos, NUNCA cambiar modo
+      const isWebtoonViewer=(mangaObj?.viewer===4||mangaObj?.viewer===2||mangaObj?.viewer===5);
       const genreStr=Array.isArray(mangaObj?.genre)?mangaObj.genre.join(" "):typeof mangaObj?.genre==="string"?mangaObj.genre:"";
       const titleStr=mangaObj?.title||"";
       const urlStr=mangaObj?.url||"";
-      
-      // Modes: 0=SINGLE_PAGE, 1=DOUBLE_PAGE, 2=CONTINUOUS_VERTICAL, 3=CONTINUOUS_HORIZONTAL, 4=WEBTOON
-      const isVerticalMode=(curMode===2||curMode===4);
-      const isWebtoonViewer=(mangaObj?.viewer===4||mangaObj?.viewer===2||mangaObj?.viewer===5);
       const isWebtoonMeta=(
         (genreStr&&/(webtoon|manhwa|manhua|comic\s*web|tira\s*vertical)/i.test(genreStr))||
         /(manhwa|manhua|webtoon)/i.test(titleStr)||
         /(manhwa|manhua|webtoon)/i.test(urlStr)
       );
-      const isWebtoon=isVerticalMode||isWebtoonViewer||isWebtoonMeta;
-
-      if(isWebtoon){
-        if(cfg.lockWebtoonPortrait!==!1){
-          enforcePortraitLock();
-          document.documentElement.setAttribute("data-tsuruyomi-webtoon-lock","true");
-        }else{
-          releasePortraitLock();
-          document.documentElement.removeAttribute("data-tsuruyomi-webtoon-lock");
-        }
-        // STRICT: Never auto-rotate or overwrite readingMode in webtoon / manhwa / vertical reading
+      if(isWebtoonViewer||isWebtoonMeta){
         return;
-      }else{
-        releasePortraitLock();
-        document.documentElement.removeAttribute("data-tsuruyomi-webtoon-lock");
       }
 
-      // If smart orientation is not enabled by user, DO NOTHING
+      // Si la rotacion inteligente para manga no esta activada explicitamente en ajustes, NO HACER NADA
       if(!cfg.enabled||cfg.mode==="disabled")return;
-      if(isVerticalMode)return;
 
+      // Solo para mangas tradicionales paginados (0 = Single Page, 1 = Double Page)
       const landscape=isLandscape();
       if(landscape){
-        if(cfg.mode==="double_page"){
-          if(curMode!==1){
-            prevModeBeforeAutoSwitch=curMode;
-            q.updateSetting("readingMode",1);
-          }
-          if(cfg.direction==="rtl"&&W()?.readingDirection?.value!==1){
-            q.updateSetting("readingDirection",1);
-          }else if(cfg.direction==="ltr"&&W()?.readingDirection?.value!==0){
-            q.updateSetting("readingDirection",0);
-          }
-        }else if(cfg.mode==="continuous_horizontal"&&curMode!==3){
-          prevModeBeforeAutoSwitch=curMode;
-          q.updateSetting("readingMode",3);
+        if(cfg.mode==="double_page"&&curMode===0){
+          prevModeBeforeAutoSwitch=0;
+          q.updateSetting("readingMode",1);
           if(cfg.direction==="rtl"&&W()?.readingDirection?.value!==1){
             q.updateSetting("readingDirection",1);
           }else if(cfg.direction==="ltr"&&W()?.readingDirection?.value!==0){
@@ -100,13 +58,14 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
           }
         }
       }else{
-        if(prevModeBeforeAutoSwitch!==null&&(curMode===1||curMode===3)){
-          const target=prevModeBeforeAutoSwitch;
+        // Al volver a vertical, solo restaurar si provino de un auto-switch desde modo simple
+        if(prevModeBeforeAutoSwitch===0&&curMode===1){
           prevModeBeforeAutoSwitch=null;
-          q.updateSetting("readingMode",target);
+          q.updateSetting("readingMode",0);
         }
       }
     };
+
     checkOrientation();
     let timer,timer2;
     const onRotate=()=>{
@@ -115,17 +74,7 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
       timer=setTimeout(checkOrientation,60);
       timer2=setTimeout(checkOrientation,250);
     };
-    const onUserInteraction=()=>{
-      const cfg=getCfg();
-      const curMode=W()?.readingMode?.value??rmObj?.value;
-      const genreStr=Array.isArray(mangaObj?.genre)?mangaObj.genre.join(" "):typeof mangaObj?.genre==="string"?mangaObj.genre:"";
-      const titleStr=mangaObj?.title||"";
-      const isWebtoon=(curMode===2||curMode===4)||mangaObj?.viewer===4||/(webtoon|manhwa|manhua)/i.test(genreStr+" "+titleStr);
-      if(isWebtoon&&cfg.lockWebtoonPortrait!==!1){
-        enforcePortraitLock();
-      }
-    };
-    window.addEventListener("pointerdown",onUserInteraction);
+
     window.addEventListener("resize",onRotate);
     window.addEventListener("orientationchange",onRotate);
     if(window.screen&&window.screen.orientation){
@@ -137,8 +86,8 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
       mql.addEventListener("change",onRotate);
     }catch(e){}
     window.addEventListener("tsuruyomi:orientation-config-changed",checkOrientation);
+
     return()=>{
-      window.removeEventListener("pointerdown",onUserInteraction);
       window.removeEventListener("resize",onRotate);
       window.removeEventListener("orientationchange",onRotate);
       if(window.screen&&window.screen.orientation){
@@ -148,8 +97,6 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
         try{mql.removeEventListener("change",onRotate)}catch(e){}
       }
       window.removeEventListener("tsuruyomi:orientation-config-changed",checkOrientation);
-      releasePortraitLock();
-      document.documentElement.removeAttribute("data-tsuruyomi-webtoon-lock");
       clearTimeout(timer);
       clearTimeout(timer2);
     };
