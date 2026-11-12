@@ -22,44 +22,60 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
     const checkOrientation=()=>{
       const cfg=getCfg();
       const curMode=W()?.readingMode?.value??rmObj?.value;
-      
-      // INVARIANT 1: Si el usuario esta en Webtoon (4) o Vertical Continuo (2), NUNCA cambiar readingMode al girar
+
+      // REGLA DE ORO 1: Si el modo actual del lector es Webtoon (4) o Vertical Continuo (2),
+      // queda ESTRICTAMENTE PROHIBIDO ejecutar q.updateSetting("readingMode", ...)
       if(curMode===4||curMode===2){
         return;
       }
 
-      // INVARIANT 2: Si el manga es identificado como Webtoon/Manhwa/Manhua por metadatos, NUNCA cambiar modo
+      // REGLA DE ORO 2: Deteccion exhaustiva de Webtoon / Manhwa / Manhua
+      // (por viewer, por meta guardado, por fuente, por URL o por titulo)
       const isWebtoonViewer=(mangaObj?.viewer===4||mangaObj?.viewer===2||mangaObj?.viewer===5);
       const genreStr=Array.isArray(mangaObj?.genre)?mangaObj.genre.join(" "):typeof mangaObj?.genre==="string"?mangaObj.genre:"";
       const titleStr=mangaObj?.title||"";
-      const urlStr=mangaObj?.url||"";
+      const urlStr=(mangaObj?.url||"")+" "+(mangaObj?.realUrl||"");
+      const sourceStr=(mangaObj?.source?.name||"")+" "+(mangaObj?.source?.displayName||"");
+      let hasWebtoonMetaSaved=false;
+      if(Array.isArray(mangaObj?.meta)){
+        hasWebtoonMetaSaved=mangaObj.meta.some(m=>m?.key?.includes("readingMode")&&(m?.value==="4"||m?.value==="2"));
+      }
       const isWebtoonMeta=(
-        (genreStr&&/(webtoon|manhwa|manhua|comic\s*web|tira\s*vertical)/i.test(genreStr))||
+        hasWebtoonMetaSaved||
+        isWebtoonViewer||
+        /(manhwa|manhua|webtoon)/i.test(sourceStr)||
+        /(manhwa|manhua|webtoon)/i.test(urlStr)||
         /(manhwa|manhua|webtoon)/i.test(titleStr)||
-        /(manhwa|manhua|webtoon)/i.test(urlStr)
+        /(webtoon|manhwa|manhua|comic\s*web|tira\s*vertical)/i.test(genreStr)
       );
-      if(isWebtoonViewer||isWebtoonMeta){
+      if(isWebtoonMeta){
         return;
       }
 
-      // Si la rotacion inteligente para manga no esta activada explicitamente en ajustes, NO HACER NADA
+      // Si la rotacion inteligente para manga no esta activada, no hacer nada
       if(!cfg.enabled||cfg.mode==="disabled")return;
 
-      // Solo para mangas tradicionales paginados (0 = Single Page, 1 = Double Page)
       const landscape=isLandscape();
       if(landscape){
-        if(cfg.mode==="double_page"&&curMode===0){
-          prevModeBeforeAutoSwitch=0;
-          q.updateSetting("readingMode",1);
-          if(cfg.direction==="rtl"&&W()?.readingDirection?.value!==1){
-            q.updateSetting("readingDirection",1);
-          }else if(cfg.direction==="ltr"&&W()?.readingDirection?.value!==0){
-            q.updateSetting("readingDirection",0);
+        // REGLA DE ORO 3: Solo se debe aplicar la rotacion automatica
+        // si la obra esta explicitamente en modo paginado simple (readingMode === 0)
+        if(curMode===0){
+          if(cfg.mode==="double_page"){
+            prevModeBeforeAutoSwitch=0;
+            q.updateSetting("readingMode",1);
+            if(cfg.direction==="rtl"&&W()?.readingDirection?.value!==1){
+              q.updateSetting("readingDirection",1);
+            }else if(cfg.direction==="ltr"&&W()?.readingDirection?.value!==0){
+              q.updateSetting("readingDirection",0);
+            }
+          }else if(cfg.mode==="continuous_horizontal"){
+            prevModeBeforeAutoSwitch=0;
+            q.updateSetting("readingMode",3);
           }
         }
       }else{
-        // Al volver a vertical, solo restaurar si provino de un auto-switch desde modo simple
-        if(prevModeBeforeAutoSwitch===0&&curMode===1){
+        // Al volver a vertical, solo restaurar a simple (0) si el modo actual provino de un auto-switch
+        if(prevModeBeforeAutoSwitch===0&&(curMode===1||curMode===3)){
           prevModeBeforeAutoSwitch=null;
           q.updateSetting("readingMode",0);
         }

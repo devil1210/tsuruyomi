@@ -16,13 +16,14 @@ import{t as e}from"./Slider-BwytRD0-.js";import{$i as t,Ai as n,Bo as r,Di as i,
       (0,q.jsx)(y,{children:"Modo al pasar a Horizontal (Manga)"}),
       (0,q.jsx)(y,{variant:"body2",color:"textDisabled",children:"Comportamiento cuando el dispositivo gira a posici\xf3n horizontal al leer mangas paginados."}),
       (0,q.jsxs)(M,{sx:{flexDirection:"row",flexWrap:"wrap",gap:1},children:[
-        (0,q.jsx)(s,{variant:c.mode==="double_page"?"contained":"outlined",onClick:()=>up({...c,mode:"double_page",enabled:!0}),sx:{textTransform:"none"},children:"\uD83D\uDCD6 P\xe1gina doble"}),
+        (0,q.jsx)(s,{variant:(c.enabled&&c.mode==="double_page")?"contained":"outlined",onClick:()=>up({...c,mode:"double_page",enabled:!0}),sx:{textTransform:"none"},children:"\uD83D\uDCD6 P\xe1gina doble"}),
+        (0,q.jsx)(s,{variant:(c.enabled&&c.mode==="continuous_horizontal")?"contained":"outlined",onClick:()=>up({...c,mode:"continuous_horizontal",enabled:!0}),sx:{textTransform:"none"},children:"\u2194\uFE0F Horizontal continuo"}),
         (0,q.jsx)(s,{variant:(c.mode==="disabled"||!c.enabled)?"contained":"outlined",onClick:()=>up({...c,mode:"disabled",enabled:!1}),sx:{textTransform:"none"},children:"\uD83D\uDEAB Desactivado"})
       ]})
     ]}),
     (0,q.jsxs)(M,{sx:{gap:1},children:[
       (0,q.jsx)(y,{children:"Direcci\xf3n de lectura en Horizontal"}),
-      (0,q.jsx)(y,{variant:"body2",color:"textDisabled",children:"Sentido al desplegar p\xe1ginas enfrentadas en manga."}),
+      (0,q.jsx)(y,{variant:"body2",color:"textDisabled",children:"Sentido al desplegar p\xe1ginas enfrentadas o desplazamiento continuo en manga."}),
       (0,q.jsxs)(M,{sx:{flexDirection:"row",flexWrap:"wrap",gap:1},children:[
         (0,q.jsx)(s,{variant:c.direction==="auto"?"contained":"outlined",onClick:()=>up({...c,direction:"auto"}),sx:{textTransform:"none"},children:"\uD83D\uDD04 Por defecto / Auto"}),
         (0,q.jsx)(s,{variant:c.direction==="rtl"?"contained":"outlined",onClick:()=>up({...c,direction:"rtl"}),sx:{textTransform:"none"},children:"\u2B05\uFE0F De derecha a izquierda"}),
