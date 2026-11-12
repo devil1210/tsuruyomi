@@ -2,7 +2,7 @@ import{t as e}from"./Slider-BwytRD0-.js";import{$i as t,Ai as n,Bo as r,Di as i,
   let K="tsuruyomi_smart_orientation_v2",
       [c,sc]=(0,W.useState)(()=>{
         try{let raw=localStorage.getItem(K);if(raw)return JSON.parse(raw)}catch(e){}
-        return{enabled:!1,mode:"disabled",direction:"auto",protectWebtoon:!0}
+        return{enabled:!1,mode:"disabled",direction:"auto",protectWebtoon:!0,rotateWebtoonLandscape:!0}
       }),
       up=nc=>{
         sc(nc);
@@ -23,7 +23,7 @@ import{t as e}from"./Slider-BwytRD0-.js";import{$i as t,Ai as n,Bo as r,Di as i,
     ]}),
     (0,q.jsxs)(M,{sx:{gap:1},children:[
       (0,q.jsx)(y,{children:"Direcci\xf3n de lectura en Horizontal"}),
-      (0,q.jsx)(y,{variant:"body2",color:"textDisabled",children:"Sentido al desplegar p\xe1ginas enfrentadas o desplazamiento continuo en manga."}),
+      (0,q.jsx)(y,{variant:"body2",color:"textDisabled",children:"Sentido al desplegar p\xe1ginas enfrentadas o desplazamiento continuo."}),
       (0,q.jsxs)(M,{sx:{flexDirection:"row",flexWrap:"wrap",gap:1},children:[
         (0,q.jsx)(s,{variant:c.direction==="auto"?"contained":"outlined",onClick:()=>up({...c,direction:"auto"}),sx:{textTransform:"none"},children:"\uD83D\uDD04 Por defecto / Auto"}),
         (0,q.jsx)(s,{variant:c.direction==="rtl"?"contained":"outlined",onClick:()=>up({...c,direction:"rtl"}),sx:{textTransform:"none"},children:"\u2B05\uFE0F De derecha a izquierda"}),
@@ -31,10 +31,10 @@ import{t as e}from"./Slider-BwytRD0-.js";import{$i as t,Ai as n,Bo as r,Di as i,
       ]})
     ]}),
     (0,q.jsx)(R,{
-      primaryText:"Protecci\xf3n Webtoon & Manhwa",
-      secondaryText:"Al leer tiras verticales (Webtoons/Manhwas), el lector se mantiene siempre en cascada vertical continua al girar la tablet sin cambiar a modo p\xe1gina.",
-      checked:c.protectWebtoon!==!1,
-      onChange:(e,v)=>up({...c,protectWebtoon:v})
+      primaryText:"Webtoon Horizontal: Rotado 90\xb0 con Scroll Lateral",
+      secondaryText:"Al poner la tablet en horizontal durante la lectura de Webtoons/Manhwas, la tira se acuesta rotando 90\xb0 y avanza con deslizamiento horizontal aprovechando el 100% del alto.",
+      checked:c.rotateWebtoonLandscape!==!1,
+      onChange:(e,v)=>up({...c,rotateWebtoonLandscape:v})
     })
   ]});
 };
