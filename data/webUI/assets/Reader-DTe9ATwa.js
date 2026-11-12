@@ -105,27 +105,40 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
       timer2=setTimeout(checkOrientation,250);
     };
 
-    // GESTOS TACTILES Y EVENTOS PARA WEBTOON HORIZONTAL ROTADO
-    let touchStartX=0,touchStartY=0,initialScrollTop=0,isTouchActive=!1,isHorizGesture=!1;
-    const onTouchStart=e=>{
-      if(document.documentElement.getAttribute("data-tsuruyomi-webtoon-horizontal")&&e.touches&&e.touches.length===1){
-        const scroller=document.querySelector('[data-tsuruyomi-webtoon-scroller="true"]');
-        if(scroller){
-          touchStartX=e.touches[0].clientX;
-          touchStartY=e.touches[0].clientY;
-          initialScrollTop=scroller.scrollTop;
-          isTouchActive=!0;
-          isHorizGesture=!1;
-        }
-      }
+    // GESTOS TACTILES Y EVENTOS PARA WEBTOON HORIZONTAL ROTADO (KINETIC MOMENTUM ENGINE - SILKY SMOOTH)
+    let touchStartX=0,touchStartY=0,initialScrollTop=0;
+    let isTouchActive=!1,isHorizGesture=!1;
+    let touchHistory=[];
+    let momentumRafId=null;
+
+    const stopMomentum=()=>{
+      if(momentumRafId){cancelAnimationFrame(momentumRafId);momentumRafId=null}
     };
+
+    const onTouchStart=e=>{
+      if(!document.documentElement.getAttribute("data-tsuruyomi-webtoon-horizontal"))return;
+      if(!e.touches||e.touches.length!==1)return;
+      const scroller=document.querySelector('[data-tsuruyomi-webtoon-scroller="true"]');
+      if(!scroller)return;
+
+      stopMomentum();
+      touchStartX=e.touches[0].clientX;
+      touchStartY=e.touches[0].clientY;
+      initialScrollTop=scroller.scrollTop;
+      isTouchActive=!0;
+      isHorizGesture=!1;
+      touchHistory=[{x:touchStartX,t:performance.now()}];
+    };
+
     const onTouchMove=e=>{
       if(!isTouchActive||!e.touches||e.touches.length!==1)return;
       const currentX=e.touches[0].clientX;
       const currentY=e.touches[0].clientY;
+      const now=performance.now();
       const deltaX=currentX-touchStartX;
       const deltaY=currentY-touchStartY;
-      if(!isHorizGesture&&(Math.abs(deltaX)>5||Math.abs(deltaY)>5)){
+
+      if(!isHorizGesture&&(Math.abs(deltaX)>4||Math.abs(deltaY)>4)){
         if(Math.abs(deltaX)>=Math.abs(deltaY)){
           isHorizGesture=!0;
         }else{
@@ -133,37 +146,98 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
           return;
         }
       }
+
       if(isHorizGesture){
+        touchHistory.push({x:currentX,t:now});
+        // Mantener solo muestras de los ultimos 120ms para calculo de velocidad fidedigno
+        touchHistory=touchHistory.filter(p=>(now-p.t)<=120);
+
         const scroller=document.querySelector('[data-tsuruyomi-webtoon-scroller="true"]');
         if(scroller){
           const dir=document.documentElement.getAttribute("data-tsuruyomi-webtoon-horizontal");
+          // Seguimiento 1:1 directo sin latencia de frames
           if(dir==="ltr"){
             scroller.scrollTop=initialScrollTop-deltaX;
-          }else if(dir==="rtl"){
+          }else{
             scroller.scrollTop=initialScrollTop+deltaX;
           }
         }
       }
     };
+
     const onTouchEnd=()=>{
+      if(!isTouchActive||!isHorizGesture){
+        isTouchActive=!1;
+        isHorizGesture=!1;
+        return;
+      }
       isTouchActive=!1;
       isHorizGesture=!1;
+
+      const scroller=document.querySelector('[data-tsuruyomi-webtoon-scroller="true"]');
+      if(!scroller||touchHistory.length<2)return;
+
+      const dir=document.documentElement.getAttribute("data-tsuruyomi-webtoon-horizontal");
+      if(!dir)return;
+
+      const now=performance.now();
+      const lastPoint=touchHistory[touchHistory.length-1];
+      const firstPoint=touchHistory[0];
+      const dt=lastPoint.t-firstPoint.t;
+
+      // Si el usuario detuvo el dedo antes de soltar (>75ms), no hay inercia
+      if(dt<=10||(now-lastPoint.t)>75)return;
+
+      const dx=lastPoint.x-firstPoint.x;
+      const vx=dx/dt; // px por milisegundo
+      // Factor de impulso cinetico (1.18x) para igualar la sensacion nativa de Android/iOS
+      let scrollVel=((dir==="ltr")?-vx:vx)*1.18;
+
+      if(Math.abs(scrollVel)<0.12)return;
+
+      // Friccion suave calibrada (0.965 por cada 16.6ms) para un deslizamiento sedoso y prolongado
+      const friction=0.965;
+      let lastFrameTime=performance.now();
+
+      const momentumStep=frameTime=>{
+        const frameDt=Math.min(Math.max(frameTime-lastFrameTime,1),32);
+        lastFrameTime=frameTime;
+
+        if(Math.abs(scrollVel)<0.015){
+          momentumRafId=null;
+          return;
+        }
+
+        scroller.scrollTop+=scrollVel*frameDt;
+
+        if(scroller.scrollTop<=0||scroller.scrollTop>=(scroller.scrollHeight-scroller.clientHeight)){
+          momentumRafId=null;
+          return;
+        }
+
+        scrollVel*=Math.pow(friction,frameDt/16.666);
+        momentumRafId=requestAnimationFrame(momentumStep);
+      };
+
+      momentumRafId=requestAnimationFrame(momentumStep);
     };
+
     const onWheel=e=>{
       const dir=document.documentElement.getAttribute("data-tsuruyomi-webtoon-horizontal");
       if(dir){
         const scroller=document.querySelector('[data-tsuruyomi-webtoon-scroller="true"]');
         if(scroller){
           const delta=Math.abs(e.deltaX)>Math.abs(e.deltaY)?e.deltaX:e.deltaY;
+          const mult=e.deltaMode===1?40:e.deltaMode===2?800:1;
+          const scrollDelta=delta*mult;
           if(dir==="ltr"){
-            scroller.scrollTop+=delta;
+            scroller.scrollTop+=scrollDelta;
           }else{
-            scroller.scrollTop-=delta;
+            scroller.scrollTop-=scrollDelta;
           }
         }
       }
     };
-
     window.addEventListener("touchstart",onTouchStart,{passive:!0});
     window.addEventListener("touchmove",onTouchMove,{passive:!0});
     window.addEventListener("touchend",onTouchEnd,{passive:!0});
