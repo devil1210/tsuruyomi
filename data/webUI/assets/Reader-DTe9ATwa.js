@@ -14,11 +14,14 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
       return{enabled:!1,mode:"disabled",direction:"auto",protectWebtoon:!0,rotateWebtoonLandscape:!0}
     };
     const isLandscape=()=>{
+      const w=window.innerWidth||document.documentElement.clientWidth||0;
+      const h=window.innerHeight||document.documentElement.clientHeight||0;
+      if(w>h)return!0;
+      if(window.matchMedia&&window.matchMedia("(orientation: landscape)").matches)return!0;
       if(window.screen&&window.screen.orientation&&window.screen.orientation.type){
         return window.screen.orientation.type.startsWith("landscape");
       }
-      if(window.matchMedia&&window.matchMedia("(orientation: landscape)").matches)return!0;
-      return(window.innerWidth||document.documentElement.clientWidth||0)>(window.innerHeight||document.documentElement.clientHeight||0);
+      return!1;
     };
 
     const checkOrientation=()=>{
@@ -165,6 +168,7 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
       }
 
       if(isHorizGesture){
+        if(e.cancelable)e.preventDefault();
         touchHistory.push({x:currentX,t:now});
         // Mantener solo muestras de los ultimos 120ms para calculo de velocidad fidedigno
         touchHistory=touchHistory.filter(p=>(now-p.t)<=120);
@@ -256,7 +260,7 @@ var useSmartOrientation=(rmObj,rdObj,mangaObj)=>{
       }
     };
     window.addEventListener("touchstart",onTouchStart,{passive:!0});
-    window.addEventListener("touchmove",onTouchMove,{passive:!0});
+    window.addEventListener("touchmove",onTouchMove,{passive:!1});
     window.addEventListener("touchend",onTouchEnd,{passive:!0});
     window.addEventListener("wheel",onWheel,{passive:!0});
     window.addEventListener("resize",onRotate);
