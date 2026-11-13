@@ -245,7 +245,7 @@ func (um *UpdateManager) StartUpdate() {
 				SELECT 
 					c.manga,
 					COUNT(CASE WHEN cu.read = false OR cu.read IS NULL THEN 1 END) as unread_count,
-					COUNT(CASE WHEN cu.read = true THEN 1 END) as read_count
+					COUNT(CASE WHEN cu.read = true OR cu.last_read_at > 0 OR cu.last_page_read > 0 THEN 1 END) as read_count
 				FROM suwayomi.chapter c
 				LEFT JOIN suwayomi.chapteruser cu ON c.id = cu.chapter AND cu.user_id = 1
 				GROUP BY c.manga
