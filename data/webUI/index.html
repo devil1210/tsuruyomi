@@ -37,7 +37,36 @@
       <script type="module" crossorigin src="./assets/index-B15kT_vM.js"></script>
       <link rel="stylesheet" crossorigin href="./assets/index-TZrNw7dA.css">
             <style id="tsuruyomi-webtoon-horizontal-rotated">
-  /* Tsuruyomi: Webtoon Rotado 90° con Scroll Horizontal de Alta Suavidad en Landscape */
+  /* Tsuruyomi: Ajuste al 100% del Ancho en Webtoon / Cascada Vertical en Móviles y Tablets */
+  html:not([data-tsuruyomi-webtoon-horizontal]) [data-tsuruyomi-webtoon-scroller="true"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 100% !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    align-items: stretch !important;
+  }
+
+  html:not([data-tsuruyomi-webtoon-horizontal]) [data-tsuruyomi-webtoon-scroller="true"] > div,
+  html:not([data-tsuruyomi-webtoon-horizontal]) [data-tsuruyomi-webtoon-scroller="true"] div[style*="fit-content"],
+  html:not([data-tsuruyomi-webtoon-horizontal]) [data-tsuruyomi-webtoon-scroller="true"] div:has(img) {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  html:not([data-tsuruyomi-webtoon-horizontal]) [data-tsuruyomi-webtoon-scroller="true"] img {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 100% !important;
+    height: auto !important;
+    margin: 0 auto !important;
+    display: block !important;
+    box-sizing: border-box !important;
+  }
+
+  /* Tsuruyomi: Webtoon Rotado 90° con Scroll Horizontal de Alta Suavidad en Landscape (Solo Tablets) */
   @media (orientation: landscape) {
     html[data-tsuruyomi-webtoon-horizontal] [data-tsuruyomi-webtoon-scroller="true"] {
       position: absolute !important;
@@ -64,10 +93,11 @@
       transform: translateX(100vw) rotate(90deg) translateZ(0) !important;
     }
 
-    /* Cada imagen de la tira continua llena el ancho de 100vh */
-    html[data-tsuruyomi-webtoon-horizontal] [data-tsuruyomi-webtoon-scroller="true"] img[src*="/api/v1/chapter/"] {
+    /* Cada imagen de la tira continua llena el ancho de 100vh en modo rotado (Tablet) */
+    html[data-tsuruyomi-webtoon-horizontal] [data-tsuruyomi-webtoon-scroller="true"] img {
       width: 100vh !important;
       max-width: 100vh !important;
+      min-width: 100vh !important;
       height: auto !important;
       margin: 0 auto !important;
       display: block !important;
@@ -77,6 +107,7 @@
     html[data-tsuruyomi-webtoon-horizontal] [data-tsuruyomi-webtoon-scroller="true"] > div {
       width: 100vh !important;
       max-width: 100vh !important;
+      min-width: 100vh !important;
       margin: 0 auto !important;
     }
   }
